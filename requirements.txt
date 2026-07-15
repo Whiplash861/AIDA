@@ -1,0 +1,7 @@
+openai
+python-dotenv
+psutil
+PySide6
+requests
+playsound==1.2.2
+simpleaudio
