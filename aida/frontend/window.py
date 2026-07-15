@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from html import escape
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, Signal, Slot
@@ -12,19 +11,19 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSplitter,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
-from aida.frontend.models import ChatMessage, MessageSender
+from aida.frontend.message_feed import MessageFeed
+from aida.frontend.models import ChatMessage
 from aida.frontend.status import AIDAStatus
 from aida.frontend.widgets import (
     StatusDashboard,
     apply_status_tone,
 )
 
-from PySide6.QtGui import QTextCursor
+
 
 class AIDAWindow(QMainWindow):
     """
@@ -51,7 +50,10 @@ class AIDAWindow(QMainWindow):
         self.app_title.setObjectName("appTitle")
 
         self.app_subtitle = QLabel(
-            "ANALYTICAL INTELLIGENT DIAGNOSTIC AGENT"
+            "SYSTEMS DIAGNOSTIC CORE"
+        )
+        self.app_subtitle.setObjectName(
+            "appSubtitle"
         )
         self.app_subtitle.setObjectName("appSubtitle")
 
@@ -62,8 +64,7 @@ class AIDAWindow(QMainWindow):
         )
         self.status_label.setMinimumWidth(110)
 
-        self.transcript = QTextBrowser()
-        self.transcript.setObjectName("transcript")
+        self.transcript = MessageFeed()
         self.transcript.setMinimumWidth(420)
 
         self.dashboard = StatusDashboard()
@@ -174,8 +175,6 @@ class AIDAWindow(QMainWindow):
             workspace_layout
         )
 
-        workspace.setLayout(workspace_layout)
-
         composer = QFrame()
         composer.setObjectName("composer")
 
@@ -280,95 +279,10 @@ class AIDAWindow(QMainWindow):
         self,
         message: ChatMessage,
     ) -> None:
-        scroll_bar = self.transcript.verticalScrollBar()
-
-        distance_from_bottom = (
-            scroll_bar.maximum()
-            - scroll_bar.value()
+        self.transcript.add_message(
+            message,
+            animate=True,
         )
-
-        should_auto_scroll = (
-            distance_from_bottom <= 40
-        )
-
-        sender_name = {
-            MessageSender.USER: "YOU",
-            MessageSender.AIDA: "AIDA",
-            MessageSender.SYSTEM: "SYSTEM",
-        }[message.sender]
-
-        palette = {
-            MessageSender.USER: {
-                "accent": "#c084fc",
-                "background": "#1b1530",
-                "border": "#4e3471",
-            },
-            MessageSender.AIDA: {
-                "accent": "#67e8f9",
-                "background": "#0e2026",
-                "border": "#22535b",
-            },
-            MessageSender.SYSTEM: {
-                "accent": "#55c7ff",
-                "background": "#0f1c28",
-                "border": "#234965",
-            },
-        }[message.sender]
-
-        safe_text = escape(
-            message.text
-        ).replace("\n", "<br>")
-
-        safe_time = message.timestamp.strftime(
-            "%H:%M:%S"
-        )
-
-        accent = palette["accent"]
-        background = palette["background"]
-        border = palette["border"]
-
-        message_html = (
-            '<table width="100%" '
-            'cellspacing="0" cellpadding="0" '
-            'style="margin-bottom: 8px;">'
-            "<tr>"
-            "<td style=\""
-            f"background-color: {background}; "
-            f"border: 1px solid {border}; "
-            "padding: 10px 12px;"
-            "\">"
-            f'<span style="color: {accent}; '
-            'font-weight: 700;">'
-            f"{sender_name}"
-            "</span>"
-            '<span style="color: #7f8d99; '
-            'font-size: 8pt;">'
-            f"  {safe_time}"
-            "</span>"
-            "<br>"
-            '<span style="color: #e6edf3;">'
-            f"{safe_text}"
-            "</span>"
-            "</td>"
-            "</tr>"
-            "</table>"
-        )
-
-        cursor = self.transcript.textCursor()
-
-        cursor.movePosition(
-            QTextCursor.MoveOperation.End
-        )
-
-        cursor.insertHtml(message_html)
-        cursor.insertBlock()
-
-        self.transcript.setTextCursor(cursor)
-
-        if should_auto_scroll:
-            scroll_bar.setValue(
-                scroll_bar.maximum()
-            )
 
     def set_status(
         self,
