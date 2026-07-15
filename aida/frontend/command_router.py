@@ -7,6 +7,7 @@ from enum import Enum, auto
 
 class CommandType(Enum):
     QUICKSCAN = auto()
+    PERFORMANCE_SCAN = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,8 +30,18 @@ class CommandRouter:
         r"\bquickscan\b",
     )
 
+    _PERFORMANCE_SCAN_PATTERNS = (
+        r"\brun (?:a )?performance\s*scan\b",
+        r"\bperform (?:a )?performance\s*scan\b",
+        r"\bstart (?:a )?performance\s*scan\b",
+        r"\bscan (?:system )?performance\b",
+        r"\bperformance\s*scan\b",
+    )
+
     def route(self, text: str) -> RoutedCommand | None:
-        clean_text = " ".join(text.lower().split())
+        clean_text = " ".join(
+            text.lower().split()
+        )
 
         if not clean_text:
             return None
@@ -39,6 +50,13 @@ class CommandRouter:
             if re.search(pattern, clean_text):
                 return RoutedCommand(
                     command_type=CommandType.QUICKSCAN,
+                    original_text=text,
+                )
+
+        for pattern in self._PERFORMANCE_SCAN_PATTERNS:
+            if re.search(pattern, clean_text):
+                return RoutedCommand(
+                    command_type=CommandType.PERFORMANCE_SCAN,
                     original_text=text,
                 )
 

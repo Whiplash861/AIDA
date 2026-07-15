@@ -3,7 +3,12 @@ from __future__ import annotations
 from aida.config import AidaConfig
 from aida.frontend.command_router import CommandType
 from aida.frontend.commands.base import CommandExecutor
-from aida.frontend.commands.quickscan import QuickscanExecutor
+from aida.frontend.commands.performance import (
+    PerformanceScanExecutor,
+)
+from aida.frontend.commands.quickscan import (
+    QuickscanExecutor,
+)
 
 
 class CommandRegistry:
@@ -18,6 +23,9 @@ class CommandRegistry:
         ] = {
             CommandType.QUICKSCAN: QuickscanExecutor(
                 config=config
+            ),
+            CommandType.PERFORMANCE_SCAN: (
+                PerformanceScanExecutor()
             ),
         }
 
