@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from aida.frontend.command_router import RoutedCommand
 from aida.frontend.commands.base import (
+    CommandCategory,
     CommandExecutor,
     CommandResult,
 )
@@ -56,13 +57,15 @@ class CommandManager(QObject):
         return self._active_executor is not None
 
     def execute(self, command: RoutedCommand) -> bool:
-        executor = self._registry.get(
-            command.command_type
-        )
+        if command.local_only:
+            self._history.mark_latest_local_only()
+
+        executor = self._registry.resolve(command)
 
         if executor is None:
             self._history.add_system(
-                "Recognized command has no registered executor."
+                "Recognized command has no registered executor.",
+                include_in_context=not command.local_only,
             )
 
             self._status_manager.set(
@@ -78,7 +81,8 @@ class CommandManager(QObject):
 
         if self.is_running:
             self._history.add_system(
-                "Another command is already running."
+                "Another command is already running.",
+                include_in_context=not command.local_only,
             )
             return False
 
@@ -86,18 +90,23 @@ class CommandManager(QObject):
             executor.task_name
         ):
             self._history.add_system(
-                f"{executor.task_name.upper()} is already running."
+                f"{executor.task_name.upper()} is already running.",
+                include_in_context=not command.local_only,
             )
             return False
 
         self._active_executor = executor
+        local_only = (
+            executor.category is CommandCategory.SECURITY
+        )
 
         self._status_manager.set(
             AIDAStatus.ANALYZING
         )
 
         self._history.add_system(
-            executor.start_message
+            executor.start_message,
+            include_in_context=not local_only,
         )
 
         started = self._task_manager.run_task(
@@ -110,7 +119,8 @@ class CommandManager(QObject):
 
         if not started:
             self._history.add_system(
-                f"{executor.task_name.upper()} could not be started."
+                f"{executor.task_name.upper()} could not be started.",
+                include_in_context=not local_only,
             )
 
             self._status_manager.set(
@@ -146,7 +156,8 @@ class CommandManager(QObject):
     def _handle_result(self, result: object) -> None:
         if not isinstance(result, CommandResult):
             self._history.add_system(
-                "Command returned an unexpected result type."
+                "Command returned an unexpected result type.",
+                include_in_context=not self._is_security_command(),
             )
 
             self._status_manager.set(
@@ -162,7 +173,8 @@ class CommandManager(QObject):
             return
 
         self._history.add_aida(
-            result.transcript_text
+            result.transcript_text,
+            include_in_context=not self._is_security_command(),
         )
 
         if result.speech_text:
@@ -184,7 +196,8 @@ class CommandManager(QObject):
         )
 
         self._history.add_system(
-            f"{task_name.upper()} failed: {error_message}"
+            f"{task_name.upper()} failed: {error_message}",
+            include_in_context=not self._is_security_command(),
         )
 
         self._status_manager.set(
@@ -233,3 +246,10 @@ class CommandManager(QObject):
         )
 
         self._active_executor = None
+
+    def _is_security_command(self) -> bool:
+        return (
+            self._active_executor is not None
+            and self._active_executor.category
+            is CommandCategory.SECURITY
+        )
