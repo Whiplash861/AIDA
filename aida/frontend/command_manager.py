@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import (
+    QElapsedTimer,
+    QObject,
+    QTimer,
+    Signal,
+    Slot,
+)
 
 from aida.frontend.command_router import RoutedCommand
 from aida.frontend.commands.base import (
@@ -20,6 +26,8 @@ class CommandManager(QObject):
 
     Command-specific behavior belongs in command executors.
     """
+
+    _SECURITY_HEARTBEAT_INTERVAL_MS = 60_000
 
     command_started = Signal(str)
     command_finished = Signal(str)
@@ -44,6 +52,14 @@ class CommandManager(QObject):
         self._status_manager = status_manager
 
         self._active_executor: CommandExecutor | None = None
+        self._security_elapsed = QElapsedTimer()
+        self._security_heartbeat_timer = QTimer(self)
+        self._security_heartbeat_timer.setInterval(
+            self._SECURITY_HEARTBEAT_INTERVAL_MS
+        )
+        self._security_heartbeat_timer.timeout.connect(
+            self._emit_security_heartbeat
+        )
 
     @property
     def active_command(self) -> str | None:
@@ -100,6 +116,9 @@ class CommandManager(QObject):
             executor.category is CommandCategory.SECURITY
         )
 
+        if local_only:
+            self._start_security_heartbeat()
+
         self._status_manager.set(
             AIDAStatus.ANALYZING
         )
@@ -118,6 +137,7 @@ class CommandManager(QObject):
         )
 
         if not started:
+            self._stop_security_heartbeat()
             self._history.add_system(
                 f"{executor.task_name.upper()} could not be started.",
                 include_in_context=not local_only,
@@ -225,6 +245,8 @@ class CommandManager(QObject):
             else "command"
         )
 
+        self._stop_security_heartbeat()
+
         if executor is not None:
             self.command_status_changed.emit(
                 executor.category.name,
@@ -252,4 +274,35 @@ class CommandManager(QObject):
             self._active_executor is not None
             and self._active_executor.category
             is CommandCategory.SECURITY
+        )
+
+    def _start_security_heartbeat(self) -> None:
+        self._security_elapsed.start()
+        self._security_heartbeat_timer.start()
+
+    def _stop_security_heartbeat(self) -> None:
+        self._security_heartbeat_timer.stop()
+        self._security_elapsed.invalidate()
+
+    @Slot()
+    def _emit_security_heartbeat(self) -> None:
+        if not self._is_security_command():
+            self._stop_security_heartbeat()
+            return
+
+        elapsed_minutes = 1
+        if self._security_elapsed.isValid():
+            elapsed_minutes = max(
+                1,
+                self._security_elapsed.elapsed() // 60_000,
+            )
+
+        unit = "minute" if elapsed_minutes == 1 else "minutes"
+        self._history.add_system(
+            (
+                "Security task is still running. "
+                f"Elapsed time: {elapsed_minutes} {unit}. "
+                "Waiting for the antivirus provider to report completion."
+            ),
+            include_in_context=False,
         )
