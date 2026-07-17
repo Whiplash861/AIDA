@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+
+# Running a script by path makes its containing directory (tools/) Python's
+# import root. Add the repository root explicitly so the sibling aida package
+# is importable without requiring PYTHONPATH or an editable installation.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
 from aida.security.windows.discovery import WindowsAntivirusDiscovery
 
 
