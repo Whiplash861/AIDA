@@ -35,24 +35,27 @@ class CommandRouter:
     )
 
     _FULL_SWEEP_PATTERNS = (
-        r"\b(?:run|perform|start)(?: a)? full(?:-system)? sweep\b",
-        r"\bfull(?:-system)? sweep\b",
-        r"\b(?:run|perform|start)(?: a)? full "
-        r"(?:security|antivirus|anti-virus) scan\b",
+        r"\b(?:run|perform|start|initiate)(?: a)? "
+        r"full(?:[\s-]+system)? sweep\b",
+        r"\bfull(?:[\s-]+system)? sweep\b",
+        r"\b(?:run|perform|start|initiate)(?: a)? full "
+        r"(?:security|antivirus|anti-virus|malware) scan\b",
     )
 
     _SURFACE_SCAN_PATTERNS = (
-        r"\b(?:run|perform|start)(?: a)? surface(?:-level)? "
-        r"(?:security|antivirus|anti-virus) scan\b",
-        r"\bsurface(?:-level)? (?:security|antivirus|anti-virus) scan\b",
-        r"\b(?:run|perform|start)(?: a)? "
-        r"(?:security|antivirus|anti-virus) scan\b",
+        r"\b(?:run|perform|start|initiate)(?: a)? "
+        r"surface(?:[\s-]+level)? "
+        r"(?:security|antivirus|anti-virus|malware) scan\b",
+        r"\bsurface(?:[\s-]+level)? "
+        r"(?:security|antivirus|anti-virus|malware) scan\b",
+        r"\b(?:run|perform|start|initiate)(?: a)? "
+        r"(?:security|antivirus|anti-virus|malware) scan\b",
         r"\bscan for malware\b",
     )
 
     _DEEP_SCAN_PATTERN = re.compile(
-        r"^\s*(?:(?:run|perform|start)\s+)?(?:a\s+)?"
-        r"deep(?:-level)?\s+"
+        r"^\s*(?:(?:run|perform|start|initiate)\s+)?(?:a\s+)?"
+        r"deep(?:[\s-]+level)?\s+"
         r"(?:(?:security|antivirus|anti-virus|malware)\s+)?"
         r"scan\b(?P<remainder>.*)$",
         re.IGNORECASE,
