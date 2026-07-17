@@ -48,6 +48,43 @@ def test_routes_deep_level_wording() -> None:
     assert command.target_path == r"C:\Temp"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "run a deep file scan",
+        "start a deep folder scan",
+        "perform a deep path scan",
+    ],
+)
+def test_routes_deep_resource_scan_without_target(
+    text: str,
+) -> None:
+    command = CommandRouter().route(text)
+    assert command is not None
+    assert command.command_type is CommandType.SECURITY_DEEP_SCAN
+    assert command.target_path is None
+    assert command.local_only is True
+
+
+def test_routes_deep_file_scan_with_explicit_target() -> None:
+    command = CommandRouter().route(
+        r'run a deep file scan "C:\Temp\sample.exe"'
+    )
+    assert command is not None
+    assert command.command_type is CommandType.SECURITY_DEEP_SCAN
+    assert command.target_path == r"C:\Temp\sample.exe"
+    assert command.local_only is True
+
+
+def test_routes_deep_folder_scan_with_of_target() -> None:
+    command = CommandRouter().route(
+        r'run a deep folder scan of "C:\Temp"'
+    )
+    assert command is not None
+    assert command.command_type is CommandType.SECURITY_DEEP_SCAN
+    assert command.target_path == r"C:\Temp"
+
+
 def test_deep_scan_placeholder_requires_explicit_path() -> None:
     command = CommandRouter().route("Deep scan this folder")
     assert command is not None
