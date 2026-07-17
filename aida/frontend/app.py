@@ -20,6 +20,9 @@ from aida.frontend.task_manager import TaskManager
 from aida.frontend.theme import apply_theme
 from aida.frontend.window import AIDAWindow
 from aida.ui.cli import aida_say_text
+from PySide6.QtCore import Qt
+from aida.frontend.models import MessageSender, ChatMessage
+from PySide6.QtCore import QTimer, Qt
 
 
 def _get_application() -> QApplication:
@@ -59,6 +62,44 @@ def main() -> int:
 
     window = AIDAWindow()
     overlay = AIDAOverlay()
+
+    def activate_main_window() -> None:
+        current_state = window.windowState()
+
+        restored_state = (
+            current_state
+            & ~Qt.WindowState.WindowMinimized
+        )
+
+        restored_state |= (
+            Qt.WindowState.WindowActive
+        )
+
+        window.setWindowState(
+            restored_state
+        )
+
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+        native_window = window.windowHandle()
+
+        if native_window is not None:
+            native_window.requestActivate()
+
+
+    def restore_main_window() -> None:
+        activate_main_window()
+
+        QTimer.singleShot(
+            60,
+            activate_main_window,
+        )
+
+        overlay.clicked.connect(
+    restore_main_window
+)
 
     session_store = SessionStore()
 
@@ -116,6 +157,22 @@ def main() -> int:
         update_overlay
     )
 
+    def handle_message_displayed(
+        message: object,
+    ) -> None:
+        if not isinstance(message, ChatMessage):
+            return
+
+        if message.sender == MessageSender.USER:
+            return
+
+        if window.isMinimized():
+            overlay.notify_message()
+
+            window.message_displayed.connect(
+    handle_message_displayed
+)
+
     window.show()
 
     overlay.set_status(
@@ -130,6 +187,14 @@ def main() -> int:
     finally:
         status_manager.unsubscribe(
             update_overlay
+        )
+
+        window.message_displayed.disconnect(
+            handle_message_displayed
+        )
+
+        overlay.clicked.disconnect(
+            restore_main_window
         )
 
         overlay.close()

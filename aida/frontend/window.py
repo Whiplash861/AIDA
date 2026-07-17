@@ -34,6 +34,7 @@ class AIDAWindow(QMainWindow):
     """
 
     message_submitted = Signal(str)
+    message_displayed = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -283,6 +284,7 @@ class AIDAWindow(QMainWindow):
             message,
             animate=True,
         )
+        self.message_displayed.emit(message)
 
     def set_status(
         self,

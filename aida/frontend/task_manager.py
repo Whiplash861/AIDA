@@ -55,7 +55,6 @@ class ManagedTask(QRunnable):
         finally:
             self.signals.finished.emit(self.name)
 
-
 class TaskManager(QObject):
     """
     Central execution manager for AIDA's background operations.
