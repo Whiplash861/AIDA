@@ -22,14 +22,15 @@ from aida.security.providers.defender import (
 class CompletionAwareMicrosoftDefenderProvider(MicrosoftDefenderProvider):
     """Microsoft Defender adapter with provider-native completion tracking.
 
-    The Start-MpScan PowerShell host can remain alive after Defender records
-    completion. Surface and full scans therefore use Get-MpComputerStatus scan
-    timestamps as the authoritative terminal-state signal while retaining the
-    process result as the failure/fallback path.
+    Surface and full scans use Get-MpComputerStatus timestamps as an optional
+    provider-native completion signal. Targeted scans can correlate Defender
+    Operational events 1000, 1001, and 1002 when those records are available.
+    The continuously drained PowerShell process remains the universal fallback
+    on systems where the Operational log contains no matching scan events.
 
     Targeted custom scans decode each local target directly into an explicitly
-    typed PowerShell string. Their lifecycle is correlated through Defender
-    Operational events 1000, 1001, and 1002 by scan ID and target resource.
+    typed PowerShell string so Windows PowerShell cannot convert a single path
+    into a PSCustomObject.
     """
 
     _PROVIDER_CHECK_INTERVAL_SECONDS = 5.0
@@ -41,14 +42,21 @@ class CompletionAwareMicrosoftDefenderProvider(MicrosoftDefenderProvider):
     @staticmethod
     def _scan_script(request: SecurityScanRequest) -> str:
         if request.mode is not SecurityScanMode.DEEP:
-            return MicrosoftDefenderProvider._scan_script(request)
+            base_script = MicrosoftDefenderProvider._scan_script(request)
+            return (
+                "$ProgressPreference = 'SilentlyContinue'\n"
+                f"{base_script}"
+            )
 
         if not request.scope.paths:
             raise MicrosoftDefenderError(
                 "Microsoft Defender custom scans require at least one path"
             )
 
-        lines = ["$ErrorActionPreference = 'Stop'"]
+        lines = [
+            "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
+        ]
         for index, path in enumerate(request.scope.paths):
             encoded_path = base64.b64encode(
                 str(path).encode("utf-8")
@@ -301,7 +309,7 @@ $events = @(
         LogName = 'Microsoft-Windows-Windows Defender/Operational'
         Id = 1000, 1001, 1002
         StartTime = $requested.AddMinutes(-1)
-    }} -ErrorAction Stop |
+    }} -ErrorAction SilentlyContinue |
         Sort-Object TimeCreated |
         ForEach-Object {{ Convert-DefenderScanEvent $_ }}
 )
@@ -370,7 +378,7 @@ $state = if ($null -eq $start) {{
     StartTime = if ($null -ne $start) {{ $start.TimeCreated.ToString('o') }} else {{ $null }}
     EndTime = if ($null -ne $terminal) {{ $terminal.TimeCreated.ToString('o') }} else {{ $null }}
     Detail = if ($state -eq 'PENDING') {{
-        'Waiting for Microsoft Defender to publish the targeted scan start event.'
+        'No matching Defender scan event is available yet. Waiting on the scan process.'
     }} elseif ($state -eq 'RUNNING') {{
         'Microsoft Defender targeted scan is running. Percentage progress is unavailable.'
     }} else {{
