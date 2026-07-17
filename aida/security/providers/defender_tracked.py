@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import timezone
 
 from aida.security.models import (
@@ -20,6 +21,12 @@ class CompletionAwareMicrosoftDefenderProvider(MicrosoftDefenderProvider):
     process result as the failure/fallback path.
     """
 
+    _TIMING_CHECK_INTERVAL_SECONDS = 5.0
+
+    def __init__(self, runner=None) -> None:
+        super().__init__(runner=runner)
+        self._last_timing_checks: dict[str, float] = {}
+
     def get_scan_status(self, handle: SecurityScanHandle) -> SecurityScanStatus:
         record = self._get_record(handle)
 
@@ -33,7 +40,7 @@ class CompletionAwareMicrosoftDefenderProvider(MicrosoftDefenderProvider):
             if record.request.mode in {
                 SecurityScanMode.SURFACE,
                 SecurityScanMode.FULL_SWEEP,
-            }:
+            } and self._timing_check_due(handle.scan_id):
                 try:
                     payload = self._runner.run_json(
                         _scan_timing_script(
@@ -58,6 +65,7 @@ class CompletionAwareMicrosoftDefenderProvider(MicrosoftDefenderProvider):
                         ),
                     )
                     record.terminal_status = status
+                    self._last_timing_checks.pop(handle.scan_id, None)
                     _terminate_completed_host(record.command)
                     return status
 
@@ -68,6 +76,17 @@ class CompletionAwareMicrosoftDefenderProvider(MicrosoftDefenderProvider):
                     "The provider does not expose percentage progress."
                 ),
             )
+
+    def _timing_check_due(self, scan_id: str) -> bool:
+        now = time.monotonic()
+        last_check = self._last_timing_checks.get(scan_id)
+        if (
+            last_check is not None
+            and now - last_check < self._TIMING_CHECK_INTERVAL_SECONDS
+        ):
+            return False
+        self._last_timing_checks[scan_id] = now
+        return True
 
 
 def _scan_timing_script(mode: SecurityScanMode, requested_at: str) -> str:
