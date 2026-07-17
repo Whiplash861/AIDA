@@ -25,6 +25,7 @@ class FakeCommand:
     def __init__(self, return_code: int | None = None, stderr: str = "") -> None:
         self.return_code = return_code
         self.stderr = stderr
+        self.terminated = False
 
     def poll(self) -> int | None:
         return self.return_code
@@ -35,6 +36,10 @@ class FakeCommand:
             return_code=self.return_code,
             stderr=self.stderr,
         )
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.return_code = 0
 
 
 class FakeRunner:
