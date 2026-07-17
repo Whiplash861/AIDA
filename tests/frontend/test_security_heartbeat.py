@@ -26,22 +26,76 @@ class FakeSecurityExecutor(CommandExecutor):
         return CommandResult("complete")
 
 
-def test_security_heartbeat_is_visible_but_excluded_from_context() -> None:
-    history = ChatHistory()
+class FakeClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+
+    def __call__(self) -> float:
+        return self.current
+
+    def advance(self, seconds: float) -> None:
+        self.current += seconds
+
+
+def manager_with_clock(
+    history: ChatHistory,
+    clock: FakeClock,
+) -> CommandManager:
     manager = CommandManager(
         registry=object(),  # type: ignore[arg-type]
         task_manager=object(),  # type: ignore[arg-type]
         history=history,
         status_manager=object(),  # type: ignore[arg-type]
+        monotonic_clock=clock,
     )
     manager._active_executor = FakeSecurityExecutor()
-    manager._security_elapsed.start()
+    manager._start_security_heartbeat()
+    return manager
 
+
+def test_security_heartbeat_is_visible_but_excluded_from_context() -> None:
+    history = ChatHistory()
+    clock = FakeClock()
+    manager = manager_with_clock(history, clock)
+
+    clock.advance(60.0)
     manager._emit_security_heartbeat()
 
     message = history.messages[-1]
     assert message.sender is MessageSender.SYSTEM
     assert "still running" in message.text.lower()
-    assert "Elapsed time" in message.text
+    assert "Elapsed time: 1 minute." in message.text
     assert message.include_in_context is False
     assert history.recent_context() == []
+
+
+def test_security_heartbeat_suppresses_duplicate_interval_events() -> None:
+    history = ChatHistory()
+    clock = FakeClock()
+    manager = manager_with_clock(history, clock)
+
+    clock.advance(60.0)
+    manager._emit_security_heartbeat()
+    clock.advance(5.0)
+    manager._emit_security_heartbeat()
+
+    assert len(history.messages) == 1
+    assert "Elapsed time: 1 minute." in history.messages[0].text
+
+
+def test_security_heartbeat_reports_exact_increasing_duration() -> None:
+    history = ChatHistory()
+    clock = FakeClock()
+    manager = manager_with_clock(history, clock)
+
+    clock.advance(60.0)
+    manager._emit_security_heartbeat()
+    clock.advance(60.0)
+    manager._emit_security_heartbeat()
+    clock.advance(65.0)
+    manager._emit_security_heartbeat()
+
+    elapsed_lines = [message.text for message in history.messages]
+    assert "Elapsed time: 1 minute." in elapsed_lines[0]
+    assert "Elapsed time: 2 minutes." in elapsed_lines[1]
+    assert "Elapsed time: 3 minutes, 5 seconds." in elapsed_lines[2]
