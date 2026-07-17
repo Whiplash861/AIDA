@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 from PySide6.QtCore import (
-    QElapsedTimer,
     QObject,
     QTimer,
+    Qt,
     Signal,
     Slot,
 )
@@ -28,6 +31,7 @@ class CommandManager(QObject):
     """
 
     _SECURITY_HEARTBEAT_INTERVAL_MS = 60_000
+    _SECURITY_HEARTBEAT_MINIMUM_SPACING_SECONDS = 45.0
 
     command_started = Signal(str)
     command_finished = Signal(str)
@@ -43,6 +47,7 @@ class CommandManager(QObject):
         task_manager: TaskManager,
         history: ChatHistory,
         status_manager: StatusManager,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__()
 
@@ -50,12 +55,19 @@ class CommandManager(QObject):
         self._task_manager = task_manager
         self._history = history
         self._status_manager = status_manager
+        self._monotonic_clock = monotonic_clock
 
         self._active_executor: CommandExecutor | None = None
-        self._security_elapsed = QElapsedTimer()
+        self._security_started_at: float | None = None
+        self._security_last_heartbeat_at: float | None = None
+        self._security_last_elapsed_seconds = 0
+
         self._security_heartbeat_timer = QTimer(self)
         self._security_heartbeat_timer.setInterval(
             self._SECURITY_HEARTBEAT_INTERVAL_MS
+        )
+        self._security_heartbeat_timer.setTimerType(
+            Qt.TimerType.PreciseTimer
         )
         self._security_heartbeat_timer.timeout.connect(
             self._emit_security_heartbeat
@@ -277,12 +289,17 @@ class CommandManager(QObject):
         )
 
     def _start_security_heartbeat(self) -> None:
-        self._security_elapsed.start()
+        now = self._monotonic_clock()
+        self._security_started_at = now
+        self._security_last_heartbeat_at = None
+        self._security_last_elapsed_seconds = 0
         self._security_heartbeat_timer.start()
 
     def _stop_security_heartbeat(self) -> None:
         self._security_heartbeat_timer.stop()
-        self._security_elapsed.invalidate()
+        self._security_started_at = None
+        self._security_last_heartbeat_at = None
+        self._security_last_elapsed_seconds = 0
 
     @Slot()
     def _emit_security_heartbeat(self) -> None:
@@ -290,19 +307,50 @@ class CommandManager(QObject):
             self._stop_security_heartbeat()
             return
 
-        elapsed_minutes = 1
-        if self._security_elapsed.isValid():
-            elapsed_minutes = max(
-                1,
-                self._security_elapsed.elapsed() // 60_000,
-            )
+        started_at = self._security_started_at
+        if started_at is None:
+            self._start_security_heartbeat()
+            return
 
-        unit = "minute" if elapsed_minutes == 1 else "minutes"
+        now = self._monotonic_clock()
+        last_heartbeat_at = self._security_last_heartbeat_at
+        if (
+            last_heartbeat_at is not None
+            and now - last_heartbeat_at
+            < self._SECURITY_HEARTBEAT_MINIMUM_SPACING_SECONDS
+        ):
+            return
+
+        elapsed_seconds = max(
+            1,
+            int(round(now - started_at)),
+        )
+        if elapsed_seconds <= self._security_last_elapsed_seconds:
+            return
+
+        self._security_last_heartbeat_at = now
+        self._security_last_elapsed_seconds = elapsed_seconds
+
         self._history.add_system(
             (
                 "Security task is still running. "
-                f"Elapsed time: {elapsed_minutes} {unit}. "
+                f"Elapsed time: {_format_elapsed(elapsed_seconds)}. "
                 "Waiting for the antivirus provider to report completion."
             ),
             include_in_context=False,
         )
+
+
+def _format_elapsed(total_seconds: int) -> str:
+    minutes, seconds = divmod(max(0, total_seconds), 60)
+
+    parts: list[str] = []
+    if minutes:
+        minute_unit = "minute" if minutes == 1 else "minutes"
+        parts.append(f"{minutes} {minute_unit}")
+
+    if seconds or not parts:
+        second_unit = "second" if seconds == 1 else "seconds"
+        parts.append(f"{seconds} {second_unit}")
+
+    return ", ".join(parts)
