@@ -59,7 +59,7 @@ class CommandRouter:
     _DEEP_SCAN_PATTERN = re.compile(
         r"^\s*(?:(?:run|perform|start|initiate)\s+)?(?:a\s+)?"
         r"deep(?:[\s-]+level)?\s+"
-        r"(?:(?:security|antivirus|anti-virus|malware)\s+)?"
+        r"(?:(?:security|antivirus|anti-virus|malware|file|folder|path)\s+)?"
         r"scan\b(?P<remainder>.*)$",
         re.IGNORECASE,
     )
