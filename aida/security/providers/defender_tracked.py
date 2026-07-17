@@ -263,7 +263,7 @@ function Convert-DefenderScanEvent {{
     foreach ($node in @($xml.Event.EventData.Data)) {{
         $value = [string]$node.'#text'
         $ordered += $value
-        $name = [string]$node.Name
+        $name = [string]$node.GetAttribute('Name')
         if ($name) {{
             $data[$name] = $value
         }}
