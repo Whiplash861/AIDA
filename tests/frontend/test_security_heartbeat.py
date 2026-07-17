@@ -49,7 +49,9 @@ def manager_with_clock(
         monotonic_clock=clock,
     )
     manager._active_executor = FakeSecurityExecutor()
-    manager._start_security_heartbeat()
+    manager._security_started_at = clock()
+    manager._security_last_heartbeat_at = None
+    manager._security_last_elapsed_seconds = 0
     return manager
 
 
