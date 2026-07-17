@@ -6,7 +6,9 @@ from aida.security.providers.base import (
     AntivirusProvider,
     UnsupportedAntivirusProvider,
 )
-from aida.security.providers.defender import MicrosoftDefenderProvider
+from aida.security.providers.defender_tracked import (
+    CompletionAwareMicrosoftDefenderProvider,
+)
 from aida.security.windows.powershell import PowerShellRunner
 from aida.security.windows.security_center import (
     AntivirusProductSource,
@@ -52,7 +54,7 @@ class WindowsAntivirusDiscovery:
             )
 
         if _is_microsoft_defender(selected):
-            provider = MicrosoftDefenderProvider(
+            provider = CompletionAwareMicrosoftDefenderProvider(
                 runner=self._powershell_runner
             )
             detail = (
