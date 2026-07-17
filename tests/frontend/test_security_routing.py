@@ -16,7 +16,7 @@ def test_routes_surface_security_scan_separately_from_quickscan() -> None:
 
 def test_routes_deep_scan_and_preserves_target_case() -> None:
     command = CommandRouter().route(
-        'Deep scan "C:\\Users\\Austin\\Downloads"'
+        r'Deep scan "C:\Users\Austin\Downloads"'
     )
     assert command is not None
     assert command.command_type is CommandType.SECURITY_DEEP_SCAN
