@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -27,6 +28,9 @@ class PowerShellCommand(Protocol):
     def result(self) -> PowerShellExecution:
         ...
 
+    def terminate(self) -> None:
+        ...
+
 
 class PowerShellRunner(Protocol):
     def run_json(self, script: str, timeout: float = 15.0) -> Any:
@@ -37,24 +41,78 @@ class PowerShellRunner(Protocol):
 
 
 class SubprocessPowerShellCommand:
+    """Owns a long-running PowerShell process and drains its output.
+
+    stdout and stderr must be consumed while Defender is scanning. Waiting to
+    call ``communicate`` only after process exit can fill an OS pipe buffer and
+    block the PowerShell host even after the provider operation has advanced.
+    A daemon collector therefore starts immediately and stores the terminal
+    result for later polling.
+    """
+
     def __init__(self, process: subprocess.Popen[str]) -> None:
         self._process = process
         self._result: PowerShellExecution | None = None
+        self._result_lock = threading.Lock()
+        self._result_ready = threading.Event()
+        self._collector = threading.Thread(
+            target=self._collect_output,
+            name="aida-powershell-output",
+            daemon=True,
+        )
+        self._collector.start()
 
     def poll(self) -> int | None:
-        if self._result is not None:
-            return self._result.return_code
+        with self._result_lock:
+            if self._result is not None:
+                return self._result.return_code
         return self._process.poll()
 
     def result(self) -> PowerShellExecution:
-        if self._result is None:
+        self._result_ready.wait()
+        with self._result_lock:
+            if self._result is None:
+                raise PowerShellInvocationError(
+                    "PowerShell process ended without a captured result"
+                )
+            return self._result
+
+    def terminate(self) -> None:
+        """Stops only the host after provider-confirmed completion."""
+
+        if self._process.poll() is not None:
+            self._result_ready.wait(timeout=2.0)
+            return
+
+        self._process.terminate()
+        if self._result_ready.wait(timeout=2.0):
+            return
+
+        self._process.kill()
+        self._result_ready.wait(timeout=2.0)
+
+    def _collect_output(self) -> None:
+        try:
             stdout, stderr = self._process.communicate()
-            self._result = PowerShellExecution(
-                return_code=self._process.returncode,
+            return_code = self._process.returncode
+            execution = PowerShellExecution(
+                return_code=-1 if return_code is None else return_code,
                 stdout=stdout or "",
                 stderr=stderr or "",
             )
-        return self._result
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            return_code = self._process.poll()
+            execution = PowerShellExecution(
+                return_code=-1 if return_code is None else return_code,
+                stderr=(
+                    "PowerShell output collection failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
+
+        with self._result_lock:
+            self._result = execution
+        self._result_ready.set()
 
 
 class SubprocessPowerShellRunner:

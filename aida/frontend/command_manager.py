@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal, Slot
+import time
+from collections.abc import Callable
+from datetime import datetime
+
+from PySide6.QtCore import (
+    QObject,
+    QTimer,
+    Qt,
+    Signal,
+    Slot,
+)
 
 from aida.frontend.command_router import RoutedCommand
 from aida.frontend.commands.base import (
+    CommandCategory,
     CommandExecutor,
     CommandResult,
 )
@@ -20,6 +31,9 @@ class CommandManager(QObject):
     Command-specific behavior belongs in command executors.
     """
 
+    _SECURITY_HEARTBEAT_INTERVAL_MS = 60_000
+    _SECURITY_HEARTBEAT_MINIMUM_SPACING_SECONDS = 45.0
+
     command_started = Signal(str)
     command_finished = Signal(str)
     command_failed = Signal(str, str)
@@ -34,6 +48,8 @@ class CommandManager(QObject):
         task_manager: TaskManager,
         history: ChatHistory,
         status_manager: StatusManager,
+        monotonic_clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = datetime.now,
     ) -> None:
         super().__init__()
 
@@ -41,8 +57,24 @@ class CommandManager(QObject):
         self._task_manager = task_manager
         self._history = history
         self._status_manager = status_manager
+        self._monotonic_clock = monotonic_clock
+        self._wall_clock = wall_clock
 
         self._active_executor: CommandExecutor | None = None
+        self._security_started_at_wall: datetime | None = None
+        self._security_last_heartbeat_at: float | None = None
+        self._security_last_elapsed_seconds = -1
+
+        self._security_heartbeat_timer = QTimer(self)
+        self._security_heartbeat_timer.setInterval(
+            self._SECURITY_HEARTBEAT_INTERVAL_MS
+        )
+        self._security_heartbeat_timer.setTimerType(
+            Qt.TimerType.PreciseTimer
+        )
+        self._security_heartbeat_timer.timeout.connect(
+            self._emit_security_heartbeat
+        )
 
     @property
     def active_command(self) -> str | None:
@@ -56,13 +88,15 @@ class CommandManager(QObject):
         return self._active_executor is not None
 
     def execute(self, command: RoutedCommand) -> bool:
-        executor = self._registry.get(
-            command.command_type
-        )
+        if command.local_only:
+            self._history.mark_latest_local_only()
+
+        executor = self._registry.resolve(command)
 
         if executor is None:
             self._history.add_system(
-                "Recognized command has no registered executor."
+                "Recognized command has no registered executor.",
+                include_in_context=not command.local_only,
             )
 
             self._status_manager.set(
@@ -78,7 +112,8 @@ class CommandManager(QObject):
 
         if self.is_running:
             self._history.add_system(
-                "Another command is already running."
+                "Another command is already running.",
+                include_in_context=not command.local_only,
             )
             return False
 
@@ -86,18 +121,26 @@ class CommandManager(QObject):
             executor.task_name
         ):
             self._history.add_system(
-                f"{executor.task_name.upper()} is already running."
+                f"{executor.task_name.upper()} is already running.",
+                include_in_context=not command.local_only,
             )
             return False
 
         self._active_executor = executor
+        local_only = (
+            executor.category is CommandCategory.SECURITY
+        )
+
+        if local_only:
+            self._start_security_heartbeat()
 
         self._status_manager.set(
             AIDAStatus.ANALYZING
         )
 
         self._history.add_system(
-            executor.start_message
+            executor.start_message,
+            include_in_context=not local_only,
         )
 
         started = self._task_manager.run_task(
@@ -109,8 +152,10 @@ class CommandManager(QObject):
         )
 
         if not started:
+            self._stop_security_heartbeat()
             self._history.add_system(
-                f"{executor.task_name.upper()} could not be started."
+                f"{executor.task_name.upper()} could not be started.",
+                include_in_context=not local_only,
             )
 
             self._status_manager.set(
@@ -146,7 +191,8 @@ class CommandManager(QObject):
     def _handle_result(self, result: object) -> None:
         if not isinstance(result, CommandResult):
             self._history.add_system(
-                "Command returned an unexpected result type."
+                "Command returned an unexpected result type.",
+                include_in_context=not self._is_security_command(),
             )
 
             self._status_manager.set(
@@ -162,7 +208,8 @@ class CommandManager(QObject):
             return
 
         self._history.add_aida(
-            result.transcript_text
+            result.transcript_text,
+            include_in_context=not self._is_security_command(),
         )
 
         if result.speech_text:
@@ -184,7 +231,8 @@ class CommandManager(QObject):
         )
 
         self._history.add_system(
-            f"{task_name.upper()} failed: {error_message}"
+            f"{task_name.upper()} failed: {error_message}",
+            include_in_context=not self._is_security_command(),
         )
 
         self._status_manager.set(
@@ -212,6 +260,8 @@ class CommandManager(QObject):
             else "command"
         )
 
+        self._stop_security_heartbeat()
+
         if executor is not None:
             self.command_status_changed.emit(
                 executor.category.name,
@@ -233,3 +283,69 @@ class CommandManager(QObject):
         )
 
         self._active_executor = None
+
+    def _is_security_command(self) -> bool:
+        return (
+            self._active_executor is not None
+            and self._active_executor.category
+            is CommandCategory.SECURITY
+        )
+
+    def _start_security_heartbeat(self) -> None:
+        self._security_started_at_wall = self._wall_clock()
+        self._security_last_heartbeat_at = None
+        self._security_last_elapsed_seconds = -1
+        self._security_heartbeat_timer.start()
+
+    def _stop_security_heartbeat(self) -> None:
+        self._security_heartbeat_timer.stop()
+        self._security_started_at_wall = None
+        self._security_last_heartbeat_at = None
+        self._security_last_elapsed_seconds = -1
+
+    @Slot()
+    def _emit_security_heartbeat(self) -> None:
+        if not self._is_security_command():
+            self._stop_security_heartbeat()
+            return
+
+        started_at = self._security_started_at_wall
+        if started_at is None:
+            self._start_security_heartbeat()
+            return
+
+        monotonic_now = self._monotonic_clock()
+        last_heartbeat_at = self._security_last_heartbeat_at
+        if (
+            last_heartbeat_at is not None
+            and monotonic_now - last_heartbeat_at
+            < self._SECURITY_HEARTBEAT_MINIMUM_SPACING_SECONDS
+        ):
+            return
+
+        wall_now = self._wall_clock()
+        elapsed_seconds = max(
+            0,
+            int((wall_now - started_at).total_seconds()),
+        )
+        if elapsed_seconds <= self._security_last_elapsed_seconds:
+            return
+
+        self._security_last_heartbeat_at = monotonic_now
+        self._security_last_elapsed_seconds = elapsed_seconds
+
+        self._history.add_system(
+            (
+                "Security task is still running. "
+                f"Elapsed time: {_format_elapsed_clock(elapsed_seconds)}. "
+                "Waiting for the antivirus provider to report completion."
+            ),
+            include_in_context=False,
+        )
+
+
+def _format_elapsed_clock(total_seconds: int) -> str:
+    safe_seconds = max(0, total_seconds)
+    hours, remainder = divmod(safe_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
