@@ -27,6 +27,9 @@ class PowerShellCommand(Protocol):
     def result(self) -> PowerShellExecution:
         ...
 
+    def terminate(self) -> None:
+        ...
+
 
 class PowerShellRunner(Protocol):
     def run_json(self, script: str, timeout: float = 15.0) -> Any:
@@ -55,6 +58,19 @@ class SubprocessPowerShellCommand:
                 stderr=stderr or "",
             )
         return self._result
+
+    def terminate(self) -> None:
+        """Stops only the PowerShell host after provider-confirmed completion."""
+
+        if self._process.poll() is not None:
+            return
+
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=2.0)
 
 
 class SubprocessPowerShellRunner:
