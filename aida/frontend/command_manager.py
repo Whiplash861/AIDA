@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import datetime
 
 from PySide6.QtCore import (
     QObject,
@@ -48,6 +49,7 @@ class CommandManager(QObject):
         history: ChatHistory,
         status_manager: StatusManager,
         monotonic_clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = datetime.now,
     ) -> None:
         super().__init__()
 
@@ -56,11 +58,12 @@ class CommandManager(QObject):
         self._history = history
         self._status_manager = status_manager
         self._monotonic_clock = monotonic_clock
+        self._wall_clock = wall_clock
 
         self._active_executor: CommandExecutor | None = None
-        self._security_started_at: float | None = None
+        self._security_started_at_wall: datetime | None = None
         self._security_last_heartbeat_at: float | None = None
-        self._security_last_elapsed_seconds = 0
+        self._security_last_elapsed_seconds = -1
 
         self._security_heartbeat_timer = QTimer(self)
         self._security_heartbeat_timer.setInterval(
@@ -289,17 +292,16 @@ class CommandManager(QObject):
         )
 
     def _start_security_heartbeat(self) -> None:
-        now = self._monotonic_clock()
-        self._security_started_at = now
+        self._security_started_at_wall = self._wall_clock()
         self._security_last_heartbeat_at = None
-        self._security_last_elapsed_seconds = 0
+        self._security_last_elapsed_seconds = -1
         self._security_heartbeat_timer.start()
 
     def _stop_security_heartbeat(self) -> None:
         self._security_heartbeat_timer.stop()
-        self._security_started_at = None
+        self._security_started_at_wall = None
         self._security_last_heartbeat_at = None
-        self._security_last_elapsed_seconds = 0
+        self._security_last_elapsed_seconds = -1
 
     @Slot()
     def _emit_security_heartbeat(self) -> None:
@@ -307,50 +309,43 @@ class CommandManager(QObject):
             self._stop_security_heartbeat()
             return
 
-        started_at = self._security_started_at
+        started_at = self._security_started_at_wall
         if started_at is None:
             self._start_security_heartbeat()
             return
 
-        now = self._monotonic_clock()
+        monotonic_now = self._monotonic_clock()
         last_heartbeat_at = self._security_last_heartbeat_at
         if (
             last_heartbeat_at is not None
-            and now - last_heartbeat_at
+            and monotonic_now - last_heartbeat_at
             < self._SECURITY_HEARTBEAT_MINIMUM_SPACING_SECONDS
         ):
             return
 
+        wall_now = self._wall_clock()
         elapsed_seconds = max(
-            1,
-            int(round(now - started_at)),
+            0,
+            int((wall_now - started_at).total_seconds()),
         )
         if elapsed_seconds <= self._security_last_elapsed_seconds:
             return
 
-        self._security_last_heartbeat_at = now
+        self._security_last_heartbeat_at = monotonic_now
         self._security_last_elapsed_seconds = elapsed_seconds
 
         self._history.add_system(
             (
                 "Security task is still running. "
-                f"Elapsed time: {_format_elapsed(elapsed_seconds)}. "
+                f"Elapsed time: {_format_elapsed_clock(elapsed_seconds)}. "
                 "Waiting for the antivirus provider to report completion."
             ),
             include_in_context=False,
         )
 
 
-def _format_elapsed(total_seconds: int) -> str:
-    minutes, seconds = divmod(max(0, total_seconds), 60)
-
-    parts: list[str] = []
-    if minutes:
-        minute_unit = "minute" if minutes == 1 else "minutes"
-        parts.append(f"{minutes} {minute_unit}")
-
-    if seconds or not parts:
-        second_unit = "second" if seconds == 1 else "seconds"
-        parts.append(f"{seconds} {second_unit}")
-
-    return ", ".join(parts)
+def _format_elapsed_clock(total_seconds: int) -> str:
+    safe_seconds = max(0, total_seconds)
+    hours, remainder = divmod(safe_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
