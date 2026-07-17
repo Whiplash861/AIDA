@@ -26,6 +26,9 @@ class CommandRouter:
     """
     Identifies frontend commands that should be handled by
     AIDA's internal systems instead of the language model.
+
+    Security command patterns intentionally accept ordinary spaced and
+    hyphenated wording, such as "surface level" and "surface-level".
     """
 
     _SECURITY_STATUS_PATTERNS = (
