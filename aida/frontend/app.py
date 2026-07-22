@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
 
 from dotenv import load_dotenv
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
 from aida.brain.llm_client import AIDABrain
@@ -12,7 +12,7 @@ from aida.frontend.command_manager import CommandManager
 from aida.frontend.command_router import CommandRouter
 from aida.frontend.commands.registry import CommandRegistry
 from aida.frontend.controller import AIDAController
-from aida.frontend.models import ChatHistory
+from aida.frontend.models import ChatHistory, ChatMessage, MessageSender
 from aida.frontend.overlay import AIDAOverlay
 from aida.frontend.session_store import SessionStore
 from aida.frontend.status import AIDAStatus, StatusManager
@@ -20,9 +20,6 @@ from aida.frontend.task_manager import TaskManager
 from aida.frontend.theme import apply_theme
 from aida.frontend.window import AIDAWindow
 from aida.ui.cli import aida_say_text
-from PySide6.QtCore import Qt
-from aida.frontend.models import MessageSender, ChatMessage
-from PySide6.QtCore import QTimer, Qt
 
 
 def _get_application() -> QApplication:
@@ -84,10 +81,8 @@ def main() -> int:
         window.activateWindow()
 
         native_window = window.windowHandle()
-
         if native_window is not None:
             native_window.requestActivate()
-
 
     def restore_main_window() -> None:
         activate_main_window()
@@ -97,9 +92,9 @@ def main() -> int:
             activate_main_window,
         )
 
-        overlay.clicked.connect(
-    restore_main_window
-)
+    overlay.clicked.connect(
+        restore_main_window
+    )
 
     session_store = SessionStore()
 
@@ -169,9 +164,9 @@ def main() -> int:
         if window.isMinimized():
             overlay.notify_message()
 
-            window.message_displayed.connect(
-    handle_message_displayed
-)
+    window.message_displayed.connect(
+        handle_message_displayed
+    )
 
     window.show()
 
