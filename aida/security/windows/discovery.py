@@ -6,8 +6,8 @@ from aida.security.providers.base import (
     AntivirusProvider,
     UnsupportedAntivirusProvider,
 )
-from aida.security.providers.defender_tracked import (
-    CompletionAwareMicrosoftDefenderProvider,
+from aida.security.providers.defender_recovering import (
+    RecoveringMicrosoftDefenderProvider,
 )
 from aida.security.windows.powershell import PowerShellRunner
 from aida.security.windows.security_center import (
@@ -54,12 +54,12 @@ class WindowsAntivirusDiscovery:
             )
 
         if _is_microsoft_defender(selected):
-            provider = CompletionAwareMicrosoftDefenderProvider(
+            provider = RecoveringMicrosoftDefenderProvider(
                 runner=self._powershell_runner
             )
             detail = (
                 "Microsoft Defender is active and direct scan control "
-                "is available."
+                "with provider scan recovery is available."
             )
         else:
             provider = UnsupportedAntivirusProvider(
