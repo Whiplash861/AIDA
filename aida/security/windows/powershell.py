@@ -124,15 +124,22 @@ class SubprocessPowerShellRunner:
         return self._executable
 
     def run_json(self, script: str, timeout: float = 15.0) -> Any:
-        completed = subprocess.run(
-            self._arguments(script),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            startupinfo=self._startup_info(),
-            creationflags=self._creation_flags(),
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                self._arguments(script),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                startupinfo=self._startup_info(),
+                creationflags=self._creation_flags(),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PowerShellInvocationError(
+                "PowerShell JSON command timed out after "
+                f"{timeout:.1f} seconds"
+            ) from exc
+
         if completed.returncode != 0:
             raise PowerShellInvocationError(
                 self._format_error(completed.returncode, completed.stderr)
