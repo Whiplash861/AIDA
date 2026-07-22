@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import subprocess
 import threading
 
-from aida.security.windows.powershell import SubprocessPowerShellCommand
+import pytest
+
+from aida.security.windows.powershell import (
+    PowerShellInvocationError,
+    SubprocessPowerShellCommand,
+    SubprocessPowerShellRunner,
+)
 
 
 class FakeProcess:
@@ -53,3 +60,24 @@ def test_terminate_releases_output_collector() -> None:
     result = command.result()
 
     assert result.return_code == -15
+
+
+def test_run_json_converts_timeout_to_provider_error(monkeypatch) -> None:
+    def timeout_run(*args, **kwargs):
+        del args
+        raise subprocess.TimeoutExpired(
+            cmd="powershell.exe",
+            timeout=kwargs["timeout"],
+        )
+
+    monkeypatch.setattr(
+        "aida.security.windows.powershell.subprocess.run",
+        timeout_run,
+    )
+    runner = SubprocessPowerShellRunner(executable="powershell.exe")
+
+    with pytest.raises(
+        PowerShellInvocationError,
+        match=r"timed out after 15\.0 seconds",
+    ):
+        runner.run_json("$null")
