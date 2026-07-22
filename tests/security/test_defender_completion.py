@@ -13,7 +13,10 @@ from aida.security.models import (
 from aida.security.providers.defender_tracked import (
     CompletionAwareMicrosoftDefenderProvider,
 )
-from aida.security.windows.powershell import PowerShellExecution
+from aida.security.windows.powershell import (
+    PowerShellExecution,
+    PowerShellInvocationError,
+)
 
 
 class FakeCommand:
@@ -43,7 +46,10 @@ class FakeRunner:
     def run_json(self, script: str, timeout: float = 15.0) -> Any:
         del timeout
         self.json_scripts.append(script)
-        return self.json_results.pop(0)
+        result = self.json_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
     def start(self, script: str) -> FakeCommand:
         self.started_scripts.append(script)
@@ -122,6 +128,23 @@ def test_full_sweep_uses_full_scan_timestamps() -> None:
 
     assert "FullScanStartTime" in runner.json_scripts[0]
     assert "FullScanEndTime" in runner.json_scripts[0]
+
+
+def test_full_sweep_survives_transient_status_probe_timeout() -> None:
+    command = FakeCommand(return_code=None)
+    runner = FakeRunner(command)
+    runner.json_results.append(
+        PowerShellInvocationError(
+            "PowerShell JSON command timed out after 15.0 seconds"
+        )
+    )
+    provider = CompletionAwareMicrosoftDefenderProvider(runner)
+    handle = provider.start_scan(request(SecurityScanMode.FULL_SWEEP))
+
+    status = provider.get_scan_status(handle)
+
+    assert status.state is SecurityScanState.RUNNING
+    assert command.terminated is False
 
 
 def test_targeted_scan_event_completes_while_host_is_still_running() -> None:
