@@ -26,8 +26,9 @@ class BugCategory(StrEnum):
 
 
 class BugDeliveryStatus(StrEnum):
-    SENT = "sent"
+    DRAFT_READY = "draft_ready"
     QUEUED = "queued"
+    SENT = "sent"  # Legacy records only; AIDA no longer sends mail automatically.
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,3 +101,4 @@ class BugReportSubmissionResult:
     status: BugDeliveryStatus
     message: str
     local_record_path: str
+    draft_path: str = ""
