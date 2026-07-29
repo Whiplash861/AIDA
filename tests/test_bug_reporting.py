@@ -1,54 +1,24 @@
 from __future__ import annotations
 
 import json
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
-
-import pytest
 
 from aida.memory.database import MemoryDatabase
 from aida.memory.service import MemoryService
 from aida.support.models import (
     BugCategory,
     BugDeliveryStatus,
-    BugReport,
     BugReportDraft,
     BugSeverity,
 )
 from aida.support.reporting import (
-    BugReportDeliveryError,
     BugReportOutbox,
     BugReportService,
-    SendGridBugReportTransport,
-    SendGridMailConfig,
+    EmlBugReportTransport,
+    EmlDraftConfig,
 )
-
-
-class _SuccessfulTransport:
-    configured = True
-    destination_address = "AIDAdeveloper@outlook.com"
-
-    def __init__(self) -> None:
-        self.reports: list[BugReport] = []
-
-    def send(self, report: BugReport, *, authentication_prompt=None) -> None:
-        del authentication_prompt
-        self.reports.append(report)
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, text: str = "") -> None:
-        self.status_code = status_code
-        self.text = text
-
-
-class _FakeSession:
-    def __init__(self, response: _FakeResponse) -> None:
-        self.response = response
-        self.calls: list[dict] = []
-
-    def post(self, url: str, **kwargs):
-        self.calls.append({"url": url, **kwargs})
-        return self.response
 
 
 def _service(tmp_path: Path, transport=None) -> BugReportService:
@@ -78,19 +48,7 @@ def _draft(description: str = "The report button stopped responding.") -> BugRep
     )
 
 
-def _report() -> BugReport:
-    return BugReport(
-        title="Example failure",
-        category=BugCategory.FRONTEND,
-        severity=BugSeverity.LOW,
-        description="A harmless test report.",
-        expected_behavior="The test should send.",
-        reproduction_steps="Run the unit test.",
-        reporter_contact="",
-    )
-
-
-def test_unconfigured_delivery_preserves_report_in_local_outbox(tmp_path: Path) -> None:
+def test_unconfigured_handoff_preserves_report_in_local_outbox(tmp_path: Path) -> None:
     service = _service(tmp_path, transport=None)
 
     result = service.submit(_draft())
@@ -103,16 +61,36 @@ def test_unconfigured_delivery_preserves_report_in_local_outbox(tmp_path: Path) 
     assert payload["delivery_status"] == "queued"
 
 
-def test_successful_delivery_moves_report_to_sent_outbox(tmp_path: Path) -> None:
-    transport = _SuccessfulTransport()
+def test_successful_handoff_creates_editable_eml_and_draft_record(
+    tmp_path: Path,
+) -> None:
+    opened: list[Path] = []
+    mailbox = "AIDAdeveloper@outlook.com"
+    transport = EmlBugReportTransport(
+        EmlDraftConfig(
+            recipient_address=mailbox,
+            drafts_dir=tmp_path / "mail_drafts",
+        ),
+        launcher=opened.append,
+    )
     service = _service(tmp_path, transport=transport)
 
     result = service.submit(_draft())
 
-    assert result.status is BugDeliveryStatus.SENT
-    assert len(transport.reports) == 1
-    assert Path(result.local_record_path).parent.name == "sent"
+    assert result.status is BugDeliveryStatus.DRAFT_READY
+    assert len(opened) == 1
+    draft_path = Path(result.draft_path)
+    assert draft_path == opened[0]
+    assert draft_path.exists()
+    assert Path(result.local_record_path).parent.name == "drafts"
     assert not list((tmp_path / "outbox" / "pending").glob("*.json"))
+
+    message = BytesParser(policy=policy.default).parsebytes(draft_path.read_bytes())
+    assert message["To"] == mailbox
+    assert message["X-Unsent"] == "1"
+    assert message["X-AIDA-Report-ID"] == result.report_id
+    assert "Report button failure" in message["Subject"]
+    assert "The report button stopped responding." in message.get_content()
 
 
 def test_report_redacts_inline_secrets_before_persistence(tmp_path: Path) -> None:
@@ -127,49 +105,33 @@ def test_report_redacts_inline_secrets_before_persistence(tmp_path: Path) -> Non
     assert "[REDACTED]" in content
 
 
-def test_sendgrid_transport_uses_registered_sender_and_mailbox() -> None:
-    mailbox = "AIDAdeveloper@outlook.com"
-    session = _FakeSession(_FakeResponse(202))
-    transport = SendGridBugReportTransport(
-        SendGridMailConfig(
-            api_key="SG.test-key",
-            sender_address=mailbox,
-            recipient_address=mailbox,
-        ),
-        session=session,
-    )
+def test_draft_open_failure_keeps_report_and_eml_available(tmp_path: Path) -> None:
+    def fail_to_open(path: Path) -> None:
+        assert path.exists()
+        raise OSError("no default mail application")
 
-    transport.send(_report())
-
-    call = session.calls[0]
-    assert call["url"] == "https://api.sendgrid.com/v3/mail/send"
-    assert call["headers"]["Authorization"] == "Bearer SG.test-key"
-    assert call["json"]["from"]["email"] == mailbox
-    recipients = call["json"]["personalizations"][0]["to"]
-    assert recipients[0]["email"] == mailbox
-
-
-def test_sendgrid_transport_requires_http_202() -> None:
-    mailbox = "AIDAdeveloper@outlook.com"
-    transport = SendGridBugReportTransport(
-        SendGridMailConfig(
-            api_key="SG.test-key",
-            sender_address=mailbox,
-            recipient_address=mailbox,
-        ),
-        session=_FakeSession(_FakeResponse(401, "invalid API key")),
-    )
-
-    with pytest.raises(BugReportDeliveryError):
-        transport.send(_report())
-
-
-def test_sendgrid_transport_is_unconfigured_without_api_key() -> None:
-    transport = SendGridBugReportTransport(
-        SendGridMailConfig(
-            api_key="",
-            sender_address="AIDAdeveloper@outlook.com",
+    transport = EmlBugReportTransport(
+        EmlDraftConfig(
             recipient_address="AIDAdeveloper@outlook.com",
+            drafts_dir=tmp_path / "mail_drafts",
+        ),
+        launcher=fail_to_open,
+    )
+    service = _service(tmp_path, transport=transport)
+
+    result = service.submit(_draft())
+
+    assert result.status is BugDeliveryStatus.QUEUED
+    assert Path(result.local_record_path).exists()
+    assert Path(result.draft_path).exists()
+    assert "could not be opened automatically" in result.message
+
+
+def test_eml_handoff_is_unconfigured_for_invalid_destination(tmp_path: Path) -> None:
+    transport = EmlBugReportTransport(
+        EmlDraftConfig(
+            recipient_address="not-an-email",
+            drafts_dir=tmp_path / "mail_drafts",
         )
     )
 
