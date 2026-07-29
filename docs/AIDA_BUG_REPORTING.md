@@ -4,44 +4,51 @@ AIDA's frontend includes a **REPORT BUG** button that opens a local-first suppor
 
 ## Registered mailbox
 
-The default sender and destination mailbox is:
+The default destination is:
 
 ```text
 AIDAdeveloper@outlook.com
 ```
 
-The mailbox address is not a secret. AIDA never stores the Outlook password.
+The address is not a secret. AIDA does not sign in to that mailbox and stores no mailbox password, API key, client secret, or service credential.
 
 ## Delivery architecture
 
 1. The report is validated and sanitized locally.
 2. A JSON copy is written atomically to AIDA's local bug-report outbox.
-3. When delivery is configured, AIDA sends the report through the SendGrid Mail Send API.
-4. The local report moves from `pending` to `sent` only after SendGrid returns `202 Accepted`.
-5. If configuration, network access, or delivery fails, the report remains in `pending` with the failure reason.
+3. AIDA creates an RFC 5322 `.eml` file addressed to the registered developer mailbox.
+4. AIDA marks the message as unsent so compatible desktop mail clients can open it as an editable draft.
+5. Windows opens the file through the user's default `.eml` application.
+6. The user reviews the complete draft and clicks **Send** in the mail application.
+7. AIDA records that the draft was prepared, but never claims that the message was delivered.
 
-The local outbox is stored below the current Windows user's AIDA application-data directory. Reports and delivery records are excluded from Git by the repository's existing database/runtime exclusions.
+No Entra tenant, Microsoft Graph registration, SendGrid account, SMTP password, paid subscription, or hosted backend is required.
 
-## SendGrid setup
+## Local storage
 
-The Outlook mailbox and SendGrid account are separate. The Outlook mailbox receives reports and is also used as the verified prototype sender. SendGrid provides the transactional delivery API.
-
-1. Create a Twilio SendGrid account.
-2. Open **Settings > Sender Authentication**.
-3. Use **Single Sender Verification** for `AIDAdeveloper@outlook.com`.
-4. Open the verification message received in that Outlook inbox and approve the sender.
-5. Create an API key with **Mail Send** permission only.
-6. Store the key only in AIDA's local `.env` file.
+Runtime files are stored below the current Windows user's AIDA application-data directory:
 
 ```text
-AIDA_BUG_REPORT_SENDER=AIDAdeveloper@outlook.com
-AIDA_BUG_REPORT_RECIPIENT=AIDAdeveloper@outlook.com
-AIDA_SENDGRID_API_KEY=<mail-send-api-key>
+%LOCALAPPDATA%\AIDA\support\bug_reports\
 ```
 
-The API key is revocable and does not grant access to the Outlook mailbox. Do not enter the Outlook password into AIDA.
+Subdirectories include:
 
-Single Sender Verification is appropriate for prototype and testing use. Large mailbox-provider addresses such as Outlook.com may encounter DMARC or deliverability limitations. Before public or broad early-alpha distribution, use a domain controlled by the AIDA project and configure domain authentication.
+- `pending` — JSON reports whose draft handoff did not complete.
+- `drafts` — JSON records for successfully prepared drafts.
+- `mail_drafts` — reviewable `.eml` files.
+
+A draft-opening failure does not discard the report. AIDA preserves both the JSON record and, when creation succeeded, the `.eml` file for manual opening.
+
+## Optional configuration
+
+The registered destination may be overridden locally:
+
+```text
+AIDA_BUG_REPORT_RECIPIENT=AIDAdeveloper@outlook.com
+```
+
+No sender address or credential is configured. The user's default mail client selects the sending account when the user sends the draft.
 
 ## Form contents
 
@@ -63,14 +70,16 @@ System information is limited to AIDA version, Windows version, architecture, an
 
 - Reports bypass the language model.
 - Reports are not added to Azure/OpenAI conversation context.
-- Password, API-key, access-token, bearer-token, client-secret, and JWT-like values are redacted before persistence or delivery.
+- Password, API-key, access-token, bearer-token, client-secret, and JWT-like values are redacted before persistence or draft creation.
 - Log inclusion is disabled by default.
-- The report is sent only to the registered developer mailbox.
+- The complete draft remains visible to the user before transmission.
+- The user retains final authority by clicking **Send**.
 - A report ID is generated for every submission and stored in AIDA's local Memory Bank event history.
-- The SendGrid API key is loaded from local configuration and is never written into the report or Memory Bank.
 
-## Delivery result meanings
+## Status meanings
 
-**Sent** means SendGrid returned `202 Accepted`. This confirms that SendGrid accepted the message for processing; it is not a guarantee that all downstream mail transport has completed.
+**Draft ready** means AIDA preserved the report, generated the `.eml` file, and asked the operating system to open it. The user must still review and send it.
 
-**Queued** means AIDA preserved the report locally because email delivery was not configured or did not complete. The report has not been lost.
+**Queued** means the report remains safely stored locally because the draft could not be prepared or opened automatically. It has not been lost.
+
+AIDA cannot confirm delivery because sending occurs in the user's external mail application.
