@@ -37,6 +37,10 @@ class BugReportTransport(Protocol):
     def configured(self) -> bool:
         ...
 
+    @property
+    def destination_address(self) -> str:
+        ...
+
     def send(
         self,
         report: BugReport,
@@ -47,32 +51,30 @@ class BugReportTransport(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class MicrosoftGraphMailConfig:
-    client_id: str
+class SendGridMailConfig:
+    api_key: str
+    sender_address: str
     recipient_address: str
-    expected_account: str
-    token_cache_path: str
-    authority: str = "https://login.microsoftonline.com/consumers"
+    sender_name: str = "AIDA Bug Reporter"
+    endpoint: str = "https://api.sendgrid.com/v3/mail/send"
 
     @property
     def configured(self) -> bool:
         values = (
-            self.client_id,
+            self.api_key,
+            self.sender_address,
             self.recipient_address,
-            self.expected_account,
-            self.token_cache_path,
+            self.endpoint,
         )
         return all(value.strip() for value in values)
 
 
-class MicrosoftGraphBugReportTransport:
-    """Delegated Microsoft Graph mail transport for a personal Outlook mailbox."""
-
-    _SCOPES = ("Mail.Send",)
+class SendGridBugReportTransport:
+    """Transactional mail transport using a verified SendGrid sender."""
 
     def __init__(
         self,
-        config: MicrosoftGraphMailConfig,
+        config: SendGridMailConfig,
         *,
         session: requests.Session | None = None,
         timeout_seconds: float = 20.0,
@@ -85,57 +87,52 @@ class MicrosoftGraphBugReportTransport:
     def configured(self) -> bool:
         return self.config.configured
 
+    @property
+    def destination_address(self) -> str:
+        return self.config.recipient_address.strip()
+
     def send(
         self,
         report: BugReport,
         *,
         authentication_prompt: AuthenticationPrompt | None = None,
     ) -> None:
+        del authentication_prompt
         if not self.configured:
             raise BugReportConfigurationError(
-                "Microsoft Graph bug-report delivery is not configured."
+                "SendGrid bug-report delivery is not configured."
             )
+        _validate_email(self.config.sender_address, "sender address")
         _validate_email(self.config.recipient_address, "recipient address")
-        _validate_email(self.config.expected_account, "connected mailbox")
 
-        app = self._build_client()
-        result = self._acquire_token(
-            app,
-            authentication_prompt=authentication_prompt,
-        )
-        access_token = str(result.get("access_token", "")).strip()
-        if not access_token:
-            description = sanitize_text(
-                str(result.get("error_description", "Authentication failed."))
-            )
-            raise BugReportDeliveryError(description[:800])
-
-        self._verify_account(result)
         payload = {
-            "message": {
-                "subject": (
-                    f"[{report.severity.value.upper()}] "
-                    f"{report.report_id}: {report.title}"
-                ),
-                "body": {
-                    "contentType": "Text",
-                    "content": render_bug_report_email(report),
-                },
-                "toRecipients": [
-                    {
-                        "emailAddress": {
-                            "address": self.config.recipient_address.strip()
-                        }
-                    }
-                ],
+            "personalizations": [
+                {
+                    "to": [
+                        {"email": self.config.recipient_address.strip()}
+                    ],
+                    "subject": (
+                        f"[{report.severity.value.upper()}] "
+                        f"{report.report_id}: {report.title}"
+                    ),
+                }
+            ],
+            "from": {
+                "email": self.config.sender_address.strip(),
+                "name": self.config.sender_name.strip() or "AIDA Bug Reporter",
             },
-            "saveToSentItems": True,
+            "content": [
+                {
+                    "type": "text/plain",
+                    "value": render_bug_report_email(report),
+                }
+            ],
         }
         try:
             response = self.session.post(
-                "https://graph.microsoft.com/v1.0/me/sendMail",
+                self.config.endpoint.strip(),
                 headers={
-                    "Authorization": f"Bearer {access_token}",
+                    "Authorization": f"Bearer {self.config.api_key.strip()}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
@@ -143,84 +140,14 @@ class MicrosoftGraphBugReportTransport:
             )
         except requests.RequestException as exc:
             raise BugReportDeliveryError(
-                "Microsoft Graph could not be reached."
+                "SendGrid could not be reached."
             ) from exc
         if response.status_code != 202:
             detail = sanitize_text((response.text or "").strip())[:500]
             suffix = f" Details: {detail}" if detail else ""
             raise BugReportDeliveryError(
-                f"Microsoft Graph rejected the report with HTTP "
+                f"SendGrid rejected the report with HTTP "
                 f"{response.status_code}.{suffix}"
-            )
-
-    def _build_client(self):
-        try:
-            import msal
-            from msal_extensions import (
-                PersistedTokenCache,
-                build_encrypted_persistence,
-            )
-        except ImportError as exc:
-            raise BugReportConfigurationError(
-                "Install the msal and msal-extensions packages to connect the "
-                "AIDA developer mailbox."
-            ) from exc
-
-        cache_path = Path(self.config.token_cache_path)
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            persistence = build_encrypted_persistence(str(cache_path))
-            cache = PersistedTokenCache(persistence)
-        except Exception as exc:
-            raise BugReportConfigurationError(
-                "AIDA could not create an encrypted Microsoft token cache. "
-                "Plaintext token storage is not permitted."
-            ) from exc
-
-        return msal.PublicClientApplication(
-            self.config.client_id.strip(),
-            authority=self.config.authority.strip(),
-            token_cache=cache,
-        )
-
-    def _acquire_token(
-        self,
-        app,
-        *,
-        authentication_prompt: AuthenticationPrompt | None,
-    ) -> dict:
-        accounts = app.get_accounts(username=self.config.expected_account.strip())
-        if accounts:
-            result = app.acquire_token_silent(
-                list(self._SCOPES),
-                account=accounts[0],
-            )
-            if result:
-                return result
-
-        flow = app.initiate_device_flow(scopes=list(self._SCOPES))
-        if "user_code" not in flow:
-            raise BugReportDeliveryError(
-                "Microsoft sign-in could not be started."
-            )
-        message = str(flow.get("message", "")).strip()
-        if authentication_prompt is not None and message:
-            authentication_prompt(message)
-        return app.acquire_token_by_device_flow(flow)
-
-    def _verify_account(self, result: dict) -> None:
-        claims = result.get("id_token_claims")
-        if not isinstance(claims, dict):
-            return
-        signed_in = str(
-            claims.get("preferred_username")
-            or claims.get("email")
-            or ""
-        ).strip()
-        if signed_in and signed_in.casefold() != self.config.expected_account.casefold():
-            raise BugReportDeliveryError(
-                "The connected Microsoft account does not match the registered "
-                f"AIDA mailbox ({self.config.expected_account})."
             )
 
 
@@ -329,8 +256,8 @@ class BugReportService:
 
         if not self.delivery_configured:
             message = (
-                "Bug report saved to AIDA's local outbox. Microsoft email "
-                "delivery is not connected yet."
+                "Bug report saved to AIDA's local outbox. Email delivery "
+                "is not configured yet."
             )
             self._record(
                 report,
@@ -373,9 +300,10 @@ class BugReportService:
             )
 
         sent_path = self.outbox.mark_sent(report)
+        destination = self.transport.destination_address
         message = (
-            f"Bug report {report.report_id} was accepted by Microsoft Graph for "
-            f"delivery to {self.transport.config.recipient_address}."
+            f"Bug report {report.report_id} was accepted by the mail service "
+            f"for delivery to {destination}."
         )
         self._record(
             report,
@@ -449,7 +377,9 @@ def collect_recent_logs(
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
-        excerpt = "\n".join(sanitize_text(line) for line in lines[-max_lines_per_file:])
+        excerpt = "\n".join(
+            sanitize_text(line) for line in lines[-max_lines_per_file:]
+        )
         excerpt = excerpt[:remaining]
         if excerpt:
             collected.append(f"--- {path.name} ---\n{excerpt}")
