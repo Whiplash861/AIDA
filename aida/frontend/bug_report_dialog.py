@@ -196,9 +196,10 @@ class BugReportDialog(QDialog):
         worker.authentication_required.connect(self._show_authentication)
         worker.completed.connect(self._submission_completed)
         worker.failed.connect(self._submission_failed)
+        worker.completed.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
         worker.completed.connect(thread.quit)
         worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._worker_finished)
         self._thread = thread
@@ -231,7 +232,7 @@ class BugReportDialog(QDialog):
                 "Bug report submitted",
                 f"{result.message}\n\nReport ID: {result.report_id}",
             )
-            self.clear_form(keep_status=True)
+            self._clear_form(keep_status=True)
         else:
             QMessageBox.warning(
                 self,
@@ -257,7 +258,10 @@ class BugReportDialog(QDialog):
         self._set_busy(False)
 
     @Slot()
-    def clear_form(self, *, keep_status: bool = False) -> None:
+    def clear_form(self) -> None:
+        self._clear_form()
+
+    def _clear_form(self, *, keep_status: bool = False) -> None:
         if self._thread is not None:
             return
         self.title_box.clear()
