@@ -1,1 +1,1 @@
-"""Offline-safe bug reporting and support services."""
+"""Local-first support reporting services."""
