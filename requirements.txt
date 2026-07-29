@@ -4,6 +4,6 @@ psutil
 PySide6
 requests
 msal
-msal-extensions
+msal-extensions[portalocker]
 playsound==1.2.2
 simpleaudio
