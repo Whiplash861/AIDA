@@ -47,7 +47,7 @@ class _BugReportWorker(QObject):
 
 
 class BugReportDialog(QDialog):
-    """Simple, local-first bug report form with background email delivery."""
+    """Local-first bug form that creates a reviewable email draft."""
 
     def __init__(
         self,
@@ -69,8 +69,9 @@ class BugReportDialog(QDialog):
 
         self.destination_label = QLabel(
             f"Destination: {recipient_address}\n"
-            "Reports are saved locally before email delivery. Passwords, tokens, "
-            "and API keys are redacted."
+            "AIDA saves the report locally, creates an editable email draft, and "
+            "opens it in your default mail application. Review the draft and click "
+            "Send yourself. Passwords, tokens, and API keys are redacted."
         )
         self.destination_label.setWordWrap(True)
         self.destination_label.setObjectName("bugReportDestination")
@@ -116,7 +117,7 @@ class BugReportDialog(QDialog):
         self.status_label.setWordWrap(True)
         self.status_label.setObjectName("bugReportStatus")
 
-        self.submit_button = QPushButton("Submit Bug Report")
+        self.submit_button = QPushButton("Create Email Draft")
         self.submit_button.setObjectName("bugReportSubmitButton")
         self.clear_button = QPushButton("Clear")
         self.close_button = QPushButton("Close")
@@ -183,7 +184,7 @@ class BugReportDialog(QDialog):
 
         self._set_busy(True)
         self.status_label.setText(
-            "Saving the report locally and attempting email delivery..."
+            "Saving the report locally and creating a reviewable email draft..."
         )
         thread = QThread(self)
         worker = _BugReportWorker(self.service, draft)
@@ -208,28 +209,34 @@ class BugReportDialog(QDialog):
         self.status_label.setText(
             f"{result.message}\nReport ID: {result.report_id}"
         )
-        if result.status is BugDeliveryStatus.SENT:
+        if result.status is BugDeliveryStatus.DRAFT_READY:
+            location = f"\n\nDraft file: {result.draft_path}" if result.draft_path else ""
             QMessageBox.information(
                 self,
-                "Bug report submitted",
-                f"{result.message}\n\nReport ID: {result.report_id}",
+                "Email draft ready",
+                f"{result.message}\n\nReport ID: {result.report_id}{location}",
             )
             self.clear_form(keep_status=True)
         else:
+            draft_note = (
+                f"\nDraft file: {result.draft_path}"
+                if result.draft_path
+                else ""
+            )
             QMessageBox.warning(
                 self,
-                "Bug report queued",
+                "Bug report saved locally",
                 f"{result.message}\n\n"
                 f"Report ID: {result.report_id}\n"
-                f"Local record: {result.local_record_path}",
+                f"Local record: {result.local_record_path}{draft_note}",
             )
 
     @Slot(str)
     def _submission_failed(self, message: str) -> None:
         clean = message.strip() or "Unknown bug report error."
         self.status_label.setText(
-            "The form could not complete the submission. No successful email "
-            f"delivery was reported. Error: {clean}"
+            "The form could not complete the draft handoff. No email delivery "
+            f"was reported. Error: {clean}"
         )
         QMessageBox.critical(self, "Bug report error", clean)
 
@@ -264,20 +271,21 @@ class BugReportDialog(QDialog):
     def _delivery_status_text(self) -> str:
         if self.service.delivery_configured:
             return (
-                "Email delivery is configured through AIDA's transactional mail "
-                "service. Every report is preserved locally before transmission."
+                "Local outbox and email-draft handoff are ready. No account, API "
+                "key, or paid mail service is required. You approve final delivery "
+                "by clicking Send in your mail application."
             )
         return (
-            "Local outbox is ready. Email delivery requires a SendGrid API key "
-            "and a verified AIDAdeveloper@outlook.com sender identity."
+            "Local outbox is ready, but the registered developer email address is "
+            "not valid. Reports will remain preserved locally."
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._thread is not None:
             QMessageBox.information(
                 self,
-                "Submission in progress",
-                "Wait for the current bug report submission to finish before closing.",
+                "Draft creation in progress",
+                "Wait for the current bug report draft to finish before closing.",
             )
             event.ignore()
             return
