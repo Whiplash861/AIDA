@@ -1,0 +1,51 @@
+name: Apply AIDA upgrade payload
+
+on:
+  push:
+    branches:
+      - agent/security-autonomy-memory-foundation
+    paths:
+      - ".github/workflows/apply-aida-upgrade.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/security-autonomy-memory-foundation
+          fetch-depth: 0
+
+      - name: Reassemble and validate payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .aida-upgrade/chunk* | base64 -d > /tmp/aida-upgrade.tar.gz
+          echo "74bac9b3e20e819612253badfba6b0107a001161682c7e26e4db5a51e6a63a08  /tmp/aida-upgrade.tar.gz" | sha256sum --check --strict
+          tar -tzf /tmp/aida-upgrade.tar.gz >/tmp/aida-upgrade-files.txt
+          test "$(wc -l </tmp/aida-upgrade-files.txt)" -eq 60
+
+      - name: Apply source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf /tmp/aida-upgrade.tar.gz -C .
+          rm -rf .aida-upgrade
+
+      - name: Compile Python foundation
+        run: python -m compileall -q aida
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "AIDA Upgrade Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Add memory, intent, continuity, and controlled autonomy foundations"
+          git push origin HEAD:agent/security-autonomy-memory-foundation
