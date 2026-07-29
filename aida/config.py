@@ -13,6 +13,7 @@ APP_NAME = "AIDA"
 APP_FULL_NAME = "Analytical Intelligence & Diagnostic Agent"
 VERSION = "1.0.0"
 DEFAULT_BUG_REPORT_RECIPIENT = "AIDAdeveloper@outlook.com"
+DEFAULT_BUG_REPORT_SENDER = "AIDAdeveloper@outlook.com"
 
 
 @dataclass
@@ -29,9 +30,9 @@ class AidaConfig:
     elevenlabs_voice_id: str | None
     voice_enabled: bool
     bug_report_recipient: str = DEFAULT_BUG_REPORT_RECIPIENT
-    microsoft_graph_client_id: str | None = None
+    bug_report_sender: str = DEFAULT_BUG_REPORT_SENDER
+    sendgrid_api_key: str | None = None
     bug_report_outbox_dir: str = ""
-    microsoft_token_cache_path: str = ""
 
 
 def get_config() -> AidaConfig:
@@ -50,8 +51,6 @@ def get_config() -> AidaConfig:
     memory_dir.mkdir(parents=True, exist_ok=True)
     support_dir = user_data_root / "support"
     support_dir.mkdir(parents=True, exist_ok=True)
-    auth_dir = user_data_root / "auth"
-    auth_dir.mkdir(parents=True, exist_ok=True)
 
     elevenlabs_api_key = os.getenv(
         "ELEVENLABS_API_KEY"
@@ -82,13 +81,14 @@ def get_config() -> AidaConfig:
             os.getenv("AIDA_BUG_REPORT_RECIPIENT")
             or DEFAULT_BUG_REPORT_RECIPIENT
         ).strip(),
-        microsoft_graph_client_id=(
-            os.getenv("AIDA_MICROSOFT_GRAPH_CLIENT_ID") or None
+        bug_report_sender=(
+            os.getenv("AIDA_BUG_REPORT_SENDER")
+            or DEFAULT_BUG_REPORT_SENDER
+        ).strip(),
+        sendgrid_api_key=(
+            os.getenv("AIDA_SENDGRID_API_KEY") or None
         ),
         bug_report_outbox_dir=str(support_dir / "bug_reports"),
-        microsoft_token_cache_path=str(
-            auth_dir / "microsoft_graph_token_cache.bin"
-        ),
     )
 
 
