@@ -6,6 +6,12 @@ on:
       - agent/security-autonomy-memory-foundation
     paths:
       - ".github/workflows/apply-aida-upgrade.yml"
+  pull_request:
+    branches:
+      - agent/security-foundation-phase-1
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/apply-aida-upgrade.yml"
 
 permissions:
   contents: write
