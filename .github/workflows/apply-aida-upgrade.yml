@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Retry after the final payload segment was restored and verified.
+          # Apply from the verified branch snapshot containing chunks 07a-07c.
           cat .aida-upgrade/chunk* | base64 -d > /tmp/aida-upgrade.tar.gz
           echo "74bac9b3e20e819612253badfba6b0107a001161682c7e26e4db5a51e6a63a08  /tmp/aida-upgrade.tar.gz" | sha256sum --check --strict
           tar -tzf /tmp/aida-upgrade.tar.gz >/tmp/aida-upgrade-files.txt
