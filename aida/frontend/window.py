@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from typing import Callable, Optional
@@ -30,6 +29,7 @@ class AIDAWindow(QMainWindow):
     message_displayed = Signal(object)
     autonomy_toggled = Signal(bool)
     memory_requested = Signal()
+    bug_report_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -45,6 +45,12 @@ class AIDAWindow(QMainWindow):
             "SYSTEMS DIAGNOSTIC CORE"
         )
         self.app_subtitle.setObjectName("appSubtitle")
+
+        self.bug_report_button = QPushButton("REPORT BUG")
+        self.bug_report_button.setObjectName("bugReportButton")
+        self.bug_report_button.setToolTip(
+            "Report an AIDA defect to the registered developer mailbox."
+        )
 
         self.memory_button = QPushButton("MEMORY")
         self.memory_button.setObjectName("memoryButton")
@@ -132,6 +138,7 @@ class AIDAWindow(QMainWindow):
         header_layout.setSpacing(12)
         header_layout.addLayout(identity_layout)
         header_layout.addStretch()
+        header_layout.addWidget(self.bug_report_button)
         header_layout.addWidget(self.memory_button)
         header_layout.addLayout(autonomy_layout)
         header_layout.addWidget(self.status_label)
@@ -197,6 +204,9 @@ class AIDAWindow(QMainWindow):
         self.memory_button.clicked.connect(
             self._emit_memory_requested
         )
+        self.bug_report_button.clicked.connect(
+            self._emit_bug_report_requested
+        )
 
     @Slot(bool)
     def _emit_autonomy_toggled(self, enabled: bool) -> None:
@@ -205,6 +215,10 @@ class AIDAWindow(QMainWindow):
     @Slot()
     def _emit_memory_requested(self) -> None:
         self.memory_requested.emit()
+
+    @Slot()
+    def _emit_bug_report_requested(self) -> None:
+        self.bug_report_requested.emit()
 
     @Slot()
     def _submit_input(self) -> None:
