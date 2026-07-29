@@ -76,13 +76,12 @@ The language model is not an execution authority. Registered local executors, ex
 ### Bug reporting
 
 - The frontend includes a **REPORT BUG** form.
-- Reports are sanitized and written atomically to a local outbox before transmission.
+- Reports are sanitized and written atomically to a local outbox before draft creation.
 - Optional basic system context is enabled by default; recent log excerpts require explicit selection.
-- Delivery uses the SendGrid Mail Send API with a verified sender identity.
-- The registered sender and recipient are `AIDAdeveloper@outlook.com`.
-- The SendGrid API key is loaded from local configuration and can be limited to mail sending.
-- AIDA stores no Outlook password and requires no Entra or Microsoft Graph application registration for this transport.
-- Failed or unconfigured delivery preserves the report in the pending outbox.
+- AIDA creates a reviewable `.eml` draft addressed to `AIDAdeveloper@outlook.com` and opens it through the user's default mail application.
+- The user reviews the draft and clicks **Send**; AIDA never claims delivery occurred.
+- No Entra tenant, Microsoft Graph registration, SendGrid account, SMTP password, paid subscription, or hosted backend is required.
+- Failed draft handoff preserves the report and any successfully generated `.eml` file locally.
 
 ## Deliberately not enabled
 
@@ -96,7 +95,7 @@ The language model is not an execution authority. Registered local executors, ex
 
 The Memory Bank is stored in the current Windows user's local application-data directory, scoped by user and device, redacts likely secrets, uses SQLite transactions, WAL, foreign keys, and secure-delete mode where supported. Database-at-rest encryption with Windows user-bound protection is not included in this foundation and remains an early-alpha hardening item.
 
-The SendGrid API key currently resides in AIDA's local `.env` file, which is excluded from Git. Before broader early-alpha distribution, move support-service credentials to Windows Credential Manager or another DPAPI-backed secret store.
+Bug reports remain local until the user reviews and sends the generated draft through an external mail client. AIDA stores no mail-service credentials.
 
 ## Required Windows field validation
 
@@ -106,5 +105,5 @@ The SendGrid API key currently resides in AIDA's local `.env` file, which is exc
 - Frontend switch persistence and kill-switch lockout.
 - Memory UI add, edit, search, soft delete, restart persistence, and multi-user isolation.
 - Stand Down identity change and explicit-rescan behavior.
-- Bug-report local queue, SendGrid sender verification, API acceptance, and mailbox arrival.
+- Bug-report local queue, `.eml` generation, default-client handoff, user review, and mailbox arrival after manual sending.
 - Offline launch with Azure and ElevenLabs unavailable.
