@@ -13,7 +13,6 @@ APP_NAME = "AIDA"
 APP_FULL_NAME = "Analytical Intelligence & Diagnostic Agent"
 VERSION = "1.0.0"
 DEFAULT_BUG_REPORT_RECIPIENT = "AIDAdeveloper@outlook.com"
-DEFAULT_BUG_REPORT_SENDER = "AIDAdeveloper@outlook.com"
 
 
 @dataclass
@@ -30,8 +29,6 @@ class AidaConfig:
     elevenlabs_voice_id: str | None
     voice_enabled: bool
     bug_report_recipient: str = DEFAULT_BUG_REPORT_RECIPIENT
-    bug_report_sender: str = DEFAULT_BUG_REPORT_SENDER
-    sendgrid_api_key: str | None = None
     bug_report_outbox_dir: str = ""
 
 
@@ -81,13 +78,6 @@ def get_config() -> AidaConfig:
             os.getenv("AIDA_BUG_REPORT_RECIPIENT")
             or DEFAULT_BUG_REPORT_RECIPIENT
         ).strip(),
-        bug_report_sender=(
-            os.getenv("AIDA_BUG_REPORT_SENDER")
-            or DEFAULT_BUG_REPORT_SENDER
-        ).strip(),
-        sendgrid_api_key=(
-            os.getenv("AIDA_SENDGRID_API_KEY") or None
-        ),
         bug_report_outbox_dir=str(support_dir / "bug_reports"),
     )
 
