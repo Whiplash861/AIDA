@@ -1,8 +1,8 @@
-# AIDA Security, Autonomy, Intent, and Memory Foundation
+# AIDA Security, Autonomy, Intent, Memory, and Support Foundation
 
 ## Purpose
 
-This prototype foundation gives AIDA deterministic, offline-capable infrastructure for security-task continuity, natural-language intent resolution, controlled autonomy policy, operational memory, threat reporting, Stand Down trust exceptions, and application-health recovery planning.
+This prototype foundation gives AIDA deterministic, offline-capable infrastructure for security-task continuity, natural-language intent resolution, controlled autonomy policy, operational memory, threat reporting, Stand Down trust exceptions, application-health recovery planning, and local-first bug reporting.
 
 The language model is not an execution authority. Registered local executors, explicit policy, exact-scope confirmations, and provider adapters control operations.
 
@@ -15,7 +15,7 @@ The language model is not an execution authority. Registered local executors, ex
 - Preserves diagnostic Quickscan as distinct from Defender Surface Security Scan.
 - Supports extensible intent definitions instead of a central wall of regular expressions.
 - Returns local clarification when wording is ambiguous.
-- Keeps local security, memory, autonomy, and application commands outside language-model context.
+- Keeps local security, memory, autonomy, application, and support commands outside language-model context.
 
 ### Memory Bank
 
@@ -73,6 +73,17 @@ The language model is not an execution authority. Registered local executors, ex
 - Offline repair planning for graceful restart, Office repair, application repair, cache recovery, reset, forced termination, and Windows integrity paths.
 - High-impact execution remains disabled during early alpha.
 
+### Bug reporting
+
+- The frontend includes a **REPORT BUG** form.
+- Reports are sanitized and written atomically to a local outbox before transmission.
+- Optional basic system context is enabled by default; recent log excerpts require explicit selection.
+- Delivery uses the SendGrid Mail Send API with a verified sender identity.
+- The registered sender and recipient are `AIDAdeveloper@outlook.com`.
+- The SendGrid API key is loaded from local configuration and can be limited to mail sending.
+- AIDA stores no Outlook password and requires no Entra or Microsoft Graph application registration for this transport.
+- Failed or unconfigured delivery preserves the report in the pending outbox.
+
 ## Deliberately not enabled
 
 - Autonomous quarantine, deletion, restoration, allow-listing, Defender exclusions, firewall changes, credential changes, reboot, shutdown, forced process termination, app reset, cache deletion, Office repair execution, DISM repair, SFC repair, or arbitrary vendor repair execution.
@@ -85,6 +96,8 @@ The language model is not an execution authority. Registered local executors, ex
 
 The Memory Bank is stored in the current Windows user's local application-data directory, scoped by user and device, redacts likely secrets, uses SQLite transactions, WAL, foreign keys, and secure-delete mode where supported. Database-at-rest encryption with Windows user-bound protection is not included in this foundation and remains an early-alpha hardening item.
 
+The SendGrid API key currently resides in AIDA's local `.env` file, which is excluded from Git. Before broader early-alpha distribution, move support-service credentials to Windows Credential Manager or another DPAPI-backed secret store.
+
 ## Required Windows field validation
 
 - Fresh and recovered Full Sweep completion.
@@ -93,4 +106,5 @@ The Memory Bank is stored in the current Windows user's local application-data d
 - Frontend switch persistence and kill-switch lockout.
 - Memory UI add, edit, search, soft delete, restart persistence, and multi-user isolation.
 - Stand Down identity change and explicit-rescan behavior.
+- Bug-report local queue, SendGrid sender verification, API acceptance, and mailbox arrival.
 - Offline launch with Azure and ElevenLabs unavailable.
