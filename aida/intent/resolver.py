@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -188,6 +187,16 @@ class IntentResolver:
             if definition.modifiers and objects and not modifiers:
                 score -= 0.10
 
+        if (
+            definition.intent_id == "security.scan.surface"
+            and _is_unqualified_security_scan(normalized)
+        ):
+            score = max(score, 0.92)
+            reasons.append(
+                "explicit malware, antivirus, or security scan defaults "
+                "to Surface Security Scan"
+            )
+
         negatives = [
             term
             for term in definition.negative_terms
@@ -226,6 +235,40 @@ class IntentResolver:
             return f"Did you mean {labels[0]}?"
         return f"Did you mean {labels[0]} or {labels[1]}?"
 
+
+def _is_unqualified_security_scan(normalized: str) -> bool:
+    security_phrases = (
+        "malware scan",
+        "antivirus scan",
+        "anti virus scan",
+        "security scan",
+        "defender scan",
+    )
+    if not any(
+        contains_phrase(normalized, phrase)
+        for phrase in security_phrases
+    ):
+        return False
+
+    explicit_non_surface_modes = (
+        "deep",
+        "deeply",
+        "targeted",
+        "specific file",
+        "specific folder",
+        "specific path",
+        "full",
+        "full system",
+        "comprehensive",
+        "complete system",
+        "entire computer",
+        "whole machine",
+        "all drives",
+    )
+    return not any(
+        contains_phrase(normalized, term)
+        for term in explicit_non_surface_modes
+    )
 
 
 def _needs_scan_type_clarification(normalized: str) -> bool:
