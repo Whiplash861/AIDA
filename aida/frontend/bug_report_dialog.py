@@ -28,7 +28,6 @@ from aida.support.reporting import BugReportService
 
 
 class _BugReportWorker(QObject):
-    authentication_required = Signal(str)
     completed = Signal(object)
     failed = Signal(str)
 
@@ -40,10 +39,7 @@ class _BugReportWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            result = self.service.submit(
-                self.draft,
-                authentication_prompt=self.authentication_required.emit,
-            )
+            result = self.service.submit(self.draft)
         except Exception as exc:  # Last-resort UI boundary.
             self.failed.emit(str(exc))
             return
@@ -187,36 +183,22 @@ class BugReportDialog(QDialog):
 
         self._set_busy(True)
         self.status_label.setText(
-            "Saving the report locally and attempting Microsoft email delivery..."
+            "Saving the report locally and attempting email delivery..."
         )
         thread = QThread(self)
         worker = _BugReportWorker(self.service, draft)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.authentication_required.connect(self._show_authentication)
         worker.completed.connect(self._submission_completed)
         worker.failed.connect(self._submission_failed)
-        worker.completed.connect(worker.deleteLater)
-        worker.failed.connect(worker.deleteLater)
         worker.completed.connect(thread.quit)
         worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._worker_finished)
         self._thread = thread
         self._worker = worker
         thread.start()
-
-    @Slot(str)
-    def _show_authentication(self, instructions: str) -> None:
-        self.status_label.setText(
-            "Microsoft mailbox sign-in is required. Complete the displayed "
-            "device-code instructions; AIDA will continue automatically."
-        )
-        QMessageBox.information(
-            self,
-            "Connect AIDA Developer Mailbox",
-            instructions,
-        )
 
     @Slot(object)
     def _submission_completed(self, result: object) -> None:
@@ -232,7 +214,7 @@ class BugReportDialog(QDialog):
                 "Bug report submitted",
                 f"{result.message}\n\nReport ID: {result.report_id}",
             )
-            self._clear_form(keep_status=True)
+            self.clear_form(keep_status=True)
         else:
             QMessageBox.warning(
                 self,
@@ -258,10 +240,7 @@ class BugReportDialog(QDialog):
         self._set_busy(False)
 
     @Slot()
-    def clear_form(self) -> None:
-        self._clear_form()
-
-    def _clear_form(self, *, keep_status: bool = False) -> None:
+    def clear_form(self, *, keep_status: bool = False) -> None:
         if self._thread is not None:
             return
         self.title_box.clear()
@@ -285,12 +264,12 @@ class BugReportDialog(QDialog):
     def _delivery_status_text(self) -> str:
         if self.service.delivery_configured:
             return (
-                "Microsoft delivery is configured. The first submission may ask "
-                "you to connect AIDAdeveloper@outlook.com."
+                "Email delivery is configured through AIDA's transactional mail "
+                "service. Every report is preserved locally before transmission."
             )
         return (
-            "Local outbox is ready. Microsoft delivery requires AIDA's Microsoft "
-            "application client ID before reports can be emailed."
+            "Local outbox is ready. Email delivery requires a SendGrid API key "
+            "and a verified AIDAdeveloper@outlook.com sender identity."
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
