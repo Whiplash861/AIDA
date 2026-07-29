@@ -3,7 +3,5 @@ python-dotenv
 psutil
 PySide6
 requests
-msal
-msal-extensions[portalocker]
 playsound==1.2.2
 simpleaudio
