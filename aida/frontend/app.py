@@ -40,8 +40,8 @@ from aida.security.windows.defender_cancel import DefenderCancellationService
 from aida.support.reporting import (
     BugReportOutbox,
     BugReportService,
-    MicrosoftGraphBugReportTransport,
-    MicrosoftGraphMailConfig,
+    SendGridBugReportTransport,
+    SendGridMailConfig,
 )
 from aida.ui.cli import aida_say_text
 
@@ -85,18 +85,17 @@ def main() -> int:
         database,
         memory_service,
     )
-    bug_mail_config = MicrosoftGraphMailConfig(
-        client_id=config.microsoft_graph_client_id or "",
+    bug_mail_config = SendGridMailConfig(
+        api_key=config.sendgrid_api_key or "",
+        sender_address=config.bug_report_sender,
         recipient_address=config.bug_report_recipient,
-        expected_account=config.bug_report_recipient,
-        token_cache_path=config.microsoft_token_cache_path,
     )
     bug_report_service = BugReportService(
         version=config.version,
         log_dir=config.log_dir,
         outbox=BugReportOutbox(config.bug_report_outbox_dir),
         memory=memory_service,
-        transport=MicrosoftGraphBugReportTransport(bug_mail_config),
+        transport=SendGridBugReportTransport(bug_mail_config),
     )
 
     window = AIDAWindow()
