@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from email.utils import parseaddr
+from email import policy
+from email.message import EmailMessage
+from email.utils import format_datetime, make_msgid, parseaddr
 from pathlib import Path
 from typing import Callable, Protocol
-
-import requests
 
 from aida.memory.models import ProcessOutcome
 from aida.memory.privacy import sanitize_text
@@ -26,10 +29,17 @@ class BugReportConfigurationError(RuntimeError):
 
 
 class BugReportDeliveryError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        draft_path: str | Path | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.draft_path = Path(draft_path) if draft_path is not None else None
 
 
-AuthenticationPrompt = Callable[[str], None]
+DraftLauncher = Callable[[Path], None]
 
 
 class BugReportTransport(Protocol):
@@ -41,47 +51,33 @@ class BugReportTransport(Protocol):
     def destination_address(self) -> str:
         ...
 
-    def send(
-        self,
-        report: BugReport,
-        *,
-        authentication_prompt: AuthenticationPrompt | None = None,
-    ) -> None:
+    def prepare(self, report: BugReport) -> Path:
         ...
 
 
 @dataclass(frozen=True, slots=True)
-class SendGridMailConfig:
-    api_key: str
-    sender_address: str
+class EmlDraftConfig:
     recipient_address: str
-    sender_name: str = "AIDA Bug Reporter"
-    endpoint: str = "https://api.sendgrid.com/v3/mail/send"
+    drafts_dir: str | Path
+    subject_prefix: str = "AIDA Bug Report"
 
     @property
     def configured(self) -> bool:
-        values = (
-            self.api_key,
-            self.sender_address,
-            self.recipient_address,
-            self.endpoint,
-        )
-        return all(value.strip() for value in values)
+        _, address = parseaddr(self.recipient_address.strip())
+        return bool(address and "@" in address)
 
 
-class SendGridBugReportTransport:
-    """Transactional mail transport using a verified SendGrid sender."""
+class EmlBugReportTransport:
+    """Create a reviewable local email draft and open the default mail client."""
 
     def __init__(
         self,
-        config: SendGridMailConfig,
+        config: EmlDraftConfig,
         *,
-        session: requests.Session | None = None,
-        timeout_seconds: float = 20.0,
+        launcher: DraftLauncher | None = None,
     ) -> None:
         self.config = config
-        self.session = session or requests.Session()
-        self.timeout_seconds = timeout_seconds
+        self.launcher = launcher or _open_with_default_application
 
     @property
     def configured(self) -> bool:
@@ -91,73 +87,49 @@ class SendGridBugReportTransport:
     def destination_address(self) -> str:
         return self.config.recipient_address.strip()
 
-    def send(
-        self,
-        report: BugReport,
-        *,
-        authentication_prompt: AuthenticationPrompt | None = None,
-    ) -> None:
-        del authentication_prompt
+    def prepare(self, report: BugReport) -> Path:
         if not self.configured:
             raise BugReportConfigurationError(
-                "SendGrid bug-report delivery is not configured."
+                "The AIDA bug-report destination address is invalid."
             )
-        _validate_email(self.config.sender_address, "sender address")
-        _validate_email(self.config.recipient_address, "recipient address")
+        _validate_email(self.destination_address, "recipient address")
 
-        payload = {
-            "personalizations": [
-                {
-                    "to": [
-                        {"email": self.config.recipient_address.strip()}
-                    ],
-                    "subject": (
-                        f"[{report.severity.value.upper()}] "
-                        f"{report.report_id}: {report.title}"
-                    ),
-                }
-            ],
-            "from": {
-                "email": self.config.sender_address.strip(),
-                "name": self.config.sender_name.strip() or "AIDA Bug Reporter",
-            },
-            "content": [
-                {
-                    "type": "text/plain",
-                    "value": render_bug_report_email(report),
-                }
-            ],
-        }
+        drafts_dir = Path(self.config.drafts_dir)
+        drafts_dir.mkdir(parents=True, exist_ok=True)
+        target = drafts_dir / f"{report.report_id}.eml"
+
+        message = EmailMessage(policy=policy.default)
+        message["To"] = self.destination_address
+        message["Subject"] = _single_line(
+            f"[{report.severity.value.upper()}] "
+            f"{self.config.subject_prefix}: {report.report_id} - {report.title}"
+        )
+        message["Date"] = format_datetime(report.created_at)
+        message["Message-ID"] = make_msgid(domain="aida.local")
+        message["X-AIDA-Report-ID"] = report.report_id
+        # Outlook and several desktop clients recognize this as an editable draft.
+        message["X-Unsent"] = "1"
+        message.set_content(render_bug_report_email(report))
+
+        _atomic_bytes_write(target, message.as_bytes(policy=policy.default))
         try:
-            response = self.session.post(
-                self.config.endpoint.strip(),
-                headers={
-                    "Authorization": f"Bearer {self.config.api_key.strip()}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=self.timeout_seconds,
-            )
-        except requests.RequestException as exc:
+            self.launcher(target)
+        except OSError as exc:
             raise BugReportDeliveryError(
-                "SendGrid could not be reached."
+                "The email draft was created, but Windows could not open it in "
+                f"the default mail application. Open it manually: {target}",
+                draft_path=target,
             ) from exc
-        if response.status_code != 202:
-            detail = sanitize_text((response.text or "").strip())[:500]
-            suffix = f" Details: {detail}" if detail else ""
-            raise BugReportDeliveryError(
-                f"SendGrid rejected the report with HTTP "
-                f"{response.status_code}.{suffix}"
-            )
+        return target
 
 
 class BugReportOutbox:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.pending_dir = self.root / "pending"
-        self.sent_dir = self.root / "sent"
+        self.drafts_dir = self.root / "drafts"
         self.pending_dir.mkdir(parents=True, exist_ok=True)
-        self.sent_dir.mkdir(parents=True, exist_ok=True)
+        self.drafts_dir.mkdir(parents=True, exist_ok=True)
 
     def queue(self, report: BugReport) -> Path:
         target = self.pending_dir / f"{report.report_id}.json"
@@ -188,22 +160,27 @@ class BugReportOutbox:
         )
         return target
 
-    def mark_sent(self, report: BugReport) -> Path:
+    def mark_draft_ready(
+        self,
+        report: BugReport,
+        draft_path: str | Path,
+    ) -> Path:
         pending = self.pending_dir / f"{report.report_id}.json"
-        sent = self.sent_dir / f"{report.report_id}.json"
+        ready = self.drafts_dir / f"{report.report_id}.json"
         existing = _read_json(pending)
         _atomic_json_write(
-            sent,
+            ready,
             {
                 **existing,
-                "delivery_status": BugDeliveryStatus.SENT.value,
-                "sent_at": datetime.now(timezone.utc).isoformat(),
+                "delivery_status": BugDeliveryStatus.DRAFT_READY.value,
+                "draft_created_at": datetime.now(timezone.utc).isoformat(),
+                "draft_path": str(Path(draft_path)),
                 "last_error": "",
                 "report": report.to_dict(),
             },
         )
         pending.unlink(missing_ok=True)
-        return sent
+        return ready
 
 
 class BugReportService:
@@ -224,14 +201,10 @@ class BugReportService:
 
     @property
     def delivery_configured(self) -> bool:
+        """Compatibility name for the frontend's draft-handoff readiness."""
         return bool(self.transport is not None and self.transport.configured)
 
-    def submit(
-        self,
-        draft: BugReportDraft,
-        *,
-        authentication_prompt: AuthenticationPrompt | None = None,
-    ) -> BugReportSubmissionResult:
+    def submit(self, draft: BugReportDraft) -> BugReportSubmissionResult:
         clean = draft.validated()
         report = BugReport(
             title=sanitize_text(clean.title),
@@ -256,8 +229,8 @@ class BugReportService:
 
         if not self.delivery_configured:
             message = (
-                "Bug report saved to AIDA's local outbox. Email delivery "
-                "is not configured yet."
+                "Bug report saved to AIDA's local outbox. The email-draft "
+                "handoff is not available."
             )
             self._record(
                 report,
@@ -275,19 +248,22 @@ class BugReportService:
 
         try:
             assert self.transport is not None
-            self.transport.send(
-                report,
-                authentication_prompt=authentication_prompt,
-            )
+            draft_path = self.transport.prepare(report)
         except (BugReportConfigurationError, BugReportDeliveryError) as exc:
             queued_path = self.outbox.mark_failed(report, str(exc))
+            saved_draft = (
+                str(exc.draft_path)
+                if isinstance(exc, BugReportDeliveryError)
+                and exc.draft_path is not None
+                else ""
+            )
             message = (
-                "Bug report was preserved in AIDA's local outbox because email "
-                f"delivery failed: {exc}"
+                "Bug report was preserved in AIDA's local outbox. "
+                f"The email draft could not be opened automatically: {exc}"
             )
             self._record(
                 report,
-                "BUG_REPORT_DELIVERY_FAILED",
+                "BUG_REPORT_DRAFT_FAILED",
                 message,
                 ProcessOutcome.PARTIAL,
                 queued_path,
@@ -297,26 +273,29 @@ class BugReportService:
                 status=BugDeliveryStatus.QUEUED,
                 message=message,
                 local_record_path=str(queued_path),
+                draft_path=saved_draft,
             )
 
-        sent_path = self.outbox.mark_sent(report)
+        record_path = self.outbox.mark_draft_ready(report, draft_path)
         destination = self.transport.destination_address
         message = (
-            f"Bug report {report.report_id} was accepted by the mail service "
-            f"for delivery to {destination}."
+            f"Bug report {report.report_id} was saved locally and opened as an "
+            f"email draft addressed to {destination}. Review it and click Send "
+            "in your mail application. AIDA cannot confirm delivery."
         )
         self._record(
             report,
-            "BUG_REPORT_SENT",
+            "BUG_REPORT_DRAFT_READY",
             message,
-            ProcessOutcome.SUCCEEDED,
-            sent_path,
+            ProcessOutcome.PARTIAL,
+            record_path,
         )
         return BugReportSubmissionResult(
             report_id=report.report_id,
-            status=BugDeliveryStatus.SENT,
+            status=BugDeliveryStatus.DRAFT_READY,
             message=message,
-            local_record_path=str(sent_path),
+            local_record_path=str(record_path),
+            draft_path=str(draft_path),
         )
 
     def _record(
@@ -398,6 +377,8 @@ def render_bug_report_email(report: BugReport) -> str:
     return (
         "AIDA BUG REPORT\n"
         "===============\n\n"
+        "This draft was generated locally by AIDA. Review all included details "
+        "before sending.\n\n"
         f"Report ID: {report.report_id}\n"
         f"Created: {report.created_at.astimezone().isoformat()}\n"
         f"Category: {report.category.value}\n"
@@ -418,6 +399,23 @@ def render_bug_report_email(report: BugReport) -> str:
     )
 
 
+def _open_with_default_application(path: Path) -> None:
+    if sys.platform == "win32":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    command = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+    subprocess.Popen(
+        command,
+        close_fds=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _single_line(value: str) -> str:
+    return " ".join(value.replace("\r", " ").replace("\n", " ").split())[:240]
+
+
 def _validate_email(value: str, label: str) -> None:
     _, address = parseaddr(value.strip())
     if not address or "@" not in address:
@@ -431,6 +429,13 @@ def _atomic_json_write(path: Path, payload: dict) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    temporary.replace(path)
+
+
+def _atomic_bytes_write(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_bytes(payload)
     temporary.replace(path)
 
 
