@@ -24,7 +24,7 @@ The local outbox is stored below the current Windows user's AIDA application-dat
 
 ## SendGrid setup
 
-The Outlook mailbox and SendGrid account are separate. The Outlook mailbox receives and may also appear as the verified sender. SendGrid provides the transactional delivery API.
+The Outlook mailbox and SendGrid account are separate. The Outlook mailbox receives reports and is also used as the verified prototype sender. SendGrid provides the transactional delivery API.
 
 1. Create a Twilio SendGrid account.
 2. Open **Settings > Sender Authentication**.
@@ -40,6 +40,8 @@ AIDA_SENDGRID_API_KEY=<mail-send-api-key>
 ```
 
 The API key is revocable and does not grant access to the Outlook mailbox. Do not enter the Outlook password into AIDA.
+
+Single Sender Verification is appropriate for prototype and testing use. Large mailbox-provider addresses such as Outlook.com may encounter DMARC or deliverability limitations. Before public or broad early-alpha distribution, use a domain controlled by the AIDA project and configure domain authentication.
 
 ## Form contents
 
