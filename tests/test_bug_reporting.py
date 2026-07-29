@@ -23,11 +23,16 @@ from aida.support.reporting import (
 )
 
 
+class _TransportConfig:
+    recipient_address = "AIDAdeveloper@outlook.com"
+
+
 class _SuccessfulTransport:
     configured = True
 
     def __init__(self) -> None:
         self.reports: list[BugReport] = []
+        self.config = _TransportConfig()
 
     def send(self, report: BugReport, *, authentication_prompt=None) -> None:
         del authentication_prompt
