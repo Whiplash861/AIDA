@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import re
@@ -10,26 +9,46 @@ _SENSITIVE_KEYS = {
     "passwd",
     "passphrase",
     "secret",
+    "client_secret",
     "token",
     "api_key",
     "apikey",
     "access_key",
+    "access_token",
+    "refresh_token",
+    "id_token",
     "private_key",
     "credential",
     "credentials",
+    "authorization",
     "authorization_header",
 }
 
 _INLINE_SECRET = re.compile(
-    r"(?i)\b(password|passwd|passphrase|api[_ -]?key|access[_ -]?token|secret)"
+    r"(?i)\b(password|passwd|passphrase|api[_ -]?key|access[_ -]?key|"
+    r"access[_ -]?token|refresh[_ -]?token|id[_ -]?token|client[_ -]?secret|secret)"
     r"\s*[:=]\s*([^\s,;]+)"
+)
+_BEARER_SECRET = re.compile(
+    r"(?i)\b(authorization\s*:\s*bearer|bearer)\s+([A-Za-z0-9._~+/=-]+)"
+)
+_JWT_SECRET = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"
 )
 
 
 def sanitize_text(value: str) -> str:
-    """Redacts likely secret assignments without removing ordinary preference text."""
+    """Redacts likely credentials without removing ordinary preference text."""
 
-    return _INLINE_SECRET.sub(lambda match: f"{match.group(1)}=[REDACTED]", value)
+    redacted = _INLINE_SECRET.sub(
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        value,
+    )
+    redacted = _BEARER_SECRET.sub(
+        lambda match: f"{match.group(1)} [REDACTED]",
+        redacted,
+    )
+    return _JWT_SECRET.sub("[REDACTED JWT]", redacted)
 
 
 def sanitize_payload(value: Any) -> Any:
