@@ -18,21 +18,17 @@ from aida.support.reporting import (
     BugReportDeliveryError,
     BugReportOutbox,
     BugReportService,
-    MicrosoftGraphBugReportTransport,
-    MicrosoftGraphMailConfig,
+    SendGridBugReportTransport,
+    SendGridMailConfig,
 )
-
-
-class _TransportConfig:
-    recipient_address = "AIDAdeveloper@outlook.com"
 
 
 class _SuccessfulTransport:
     configured = True
+    destination_address = "AIDAdeveloper@outlook.com"
 
     def __init__(self) -> None:
         self.reports: list[BugReport] = []
-        self.config = _TransportConfig()
 
     def send(self, report: BugReport, *, authentication_prompt=None) -> None:
         del authentication_prompt
@@ -53,27 +49,6 @@ class _FakeSession:
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         return self.response
-
-
-class _FakeApp:
-    def __init__(self, result: dict) -> None:
-        self.result = result
-
-    def get_accounts(self, username: str):
-        return [{"username": username}]
-
-    def acquire_token_silent(self, scopes: list[str], account: dict):
-        del scopes, account
-        return self.result
-
-
-class _TestGraphTransport(MicrosoftGraphBugReportTransport):
-    def __init__(self, *args, app: _FakeApp, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.app = app
-
-    def _build_client(self):
-        return self.app
 
 
 def _service(tmp_path: Path, transport=None) -> BugReportService:
@@ -100,6 +75,18 @@ def _draft(description: str = "The report button stopped responding.") -> BugRep
         expected_behavior="The report form should open.",
         reproduction_steps="1. Launch AIDA\n2. Press Report Bug",
         include_system_info=True,
+    )
+
+
+def _report() -> BugReport:
+    return BugReport(
+        title="Example failure",
+        category=BugCategory.FRONTEND,
+        severity=BugSeverity.LOW,
+        description="A harmless test report.",
+        expected_behavior="The test should send.",
+        reproduction_steps="Run the unit test.",
+        reporter_contact="",
     )
 
 
@@ -140,69 +127,50 @@ def test_report_redacts_inline_secrets_before_persistence(tmp_path: Path) -> Non
     assert "[REDACTED]" in content
 
 
-def test_graph_transport_sends_to_registered_developer_mailbox() -> None:
+def test_sendgrid_transport_uses_registered_sender_and_mailbox() -> None:
     mailbox = "AIDAdeveloper@outlook.com"
     session = _FakeSession(_FakeResponse(202))
-    app = _FakeApp(
-        {
-            "access_token": "not-a-real-token",
-            "id_token_claims": {"preferred_username": mailbox},
-        }
-    )
-    transport = _TestGraphTransport(
-        MicrosoftGraphMailConfig(
-            client_id="test-client-id",
+    transport = SendGridBugReportTransport(
+        SendGridMailConfig(
+            api_key="SG.test-key",
+            sender_address=mailbox,
             recipient_address=mailbox,
-            expected_account=mailbox,
-            token_cache_path="unused-in-test",
         ),
         session=session,
-        app=app,
-    )
-    report = BugReport(
-        title="Example failure",
-        category=BugCategory.FRONTEND,
-        severity=BugSeverity.LOW,
-        description="A harmless test report.",
-        expected_behavior="The test should send.",
-        reproduction_steps="Run the unit test.",
-        reporter_contact="",
     )
 
-    transport.send(report)
+    transport.send(_report())
 
-    assert session.calls[0]["url"].endswith("/me/sendMail")
-    recipients = session.calls[0]["json"]["message"]["toRecipients"]
-    assert recipients[0]["emailAddress"]["address"] == mailbox
+    call = session.calls[0]
+    assert call["url"] == "https://api.sendgrid.com/v3/mail/send"
+    assert call["headers"]["Authorization"] == "Bearer SG.test-key"
+    assert call["json"]["from"]["email"] == mailbox
+    recipients = call["json"]["personalizations"][0]["to"]
+    assert recipients[0]["email"] == mailbox
 
 
-def test_graph_transport_rejects_wrong_connected_account() -> None:
+def test_sendgrid_transport_requires_http_202() -> None:
     mailbox = "AIDAdeveloper@outlook.com"
-    app = _FakeApp(
-        {
-            "access_token": "not-a-real-token",
-            "id_token_claims": {"preferred_username": "someone@example.com"},
-        }
-    )
-    transport = _TestGraphTransport(
-        MicrosoftGraphMailConfig(
-            client_id="test-client-id",
+    transport = SendGridBugReportTransport(
+        SendGridMailConfig(
+            api_key="SG.test-key",
+            sender_address=mailbox,
             recipient_address=mailbox,
-            expected_account=mailbox,
-            token_cache_path="unused-in-test",
         ),
-        session=_FakeSession(_FakeResponse(202)),
-        app=app,
-    )
-    report = BugReport(
-        title="Example failure",
-        category=BugCategory.FRONTEND,
-        severity=BugSeverity.LOW,
-        description="A harmless test report.",
-        expected_behavior="The test should send.",
-        reproduction_steps="Run the unit test.",
-        reporter_contact="",
+        session=_FakeSession(_FakeResponse(401, "invalid API key")),
     )
 
     with pytest.raises(BugReportDeliveryError):
-        transport.send(report)
+        transport.send(_report())
+
+
+def test_sendgrid_transport_is_unconfigured_without_api_key() -> None:
+    transport = SendGridBugReportTransport(
+        SendGridMailConfig(
+            api_key="",
+            sender_address="AIDAdeveloper@outlook.com",
+            recipient_address="AIDAdeveloper@outlook.com",
+        )
+    )
+
+    assert transport.configured is False
