@@ -1,16 +1,10 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum, auto
 
+from aida.autonomy.models import AutonomyLevel
 from aida.security.models import SecurityScanMode, SecurityScanRequest
-
-
-class AutonomyLevel(IntEnum):
-    MANUAL = 0
-    OBSERVE = auto()
-    TRIAGE = auto()
-    INVESTIGATE = auto()
 
 
 class SecurityPolicyViolation(RuntimeError):
@@ -19,6 +13,14 @@ class SecurityPolicyViolation(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class SecurityPolicy:
+    """Provider-neutral scan authority boundary.
+
+    The frontend autonomy switch and Controlled Autonomy engine determine
+    whether an autonomous proposal may be created. This policy remains the
+    final scan-specific gate and therefore independently rejects autonomous
+    Full-System Sweeps and missing evidence/target requirements.
+    """
+
     autonomy_level: AutonomyLevel = AutonomyLevel.MANUAL
     allow_full_sweep: bool = True
     require_local_evidence: bool = True
@@ -27,33 +29,55 @@ class SecurityPolicy:
         auth = request.authorization
 
         if not auth.granted:
-            raise SecurityPolicyViolation("Security scan authorization was not granted")
+            raise SecurityPolicyViolation(
+                "Security scan authorization was not granted"
+            )
         if not auth.granted_by.strip():
-            raise SecurityPolicyViolation("Authorization must identify who granted it")
+            raise SecurityPolicyViolation(
+                "Authorization must identify who granted it"
+            )
         if not auth.reason.strip():
-            raise SecurityPolicyViolation("Authorization must include a reason")
+            raise SecurityPolicyViolation(
+                "Authorization must include a reason"
+            )
         if self.require_local_evidence and not request.local_evidence_only:
-            raise SecurityPolicyViolation("Raw security evidence must remain local-only")
+            raise SecurityPolicyViolation(
+                "Raw security evidence must remain local-only"
+            )
 
-        if request.mode is SecurityScanMode.DEEP and not request.scope.is_targeted:
-            raise SecurityPolicyViolation("Deep scans require a target path or process")
+        if (
+            request.mode is SecurityScanMode.DEEP
+            and not request.scope.is_targeted
+        ):
+            raise SecurityPolicyViolation(
+                "Deep scans require a target path or process"
+            )
 
         if request.mode is SecurityScanMode.FULL_SWEEP:
             if not self.allow_full_sweep:
-                raise SecurityPolicyViolation("Full-system sweeps are disabled by policy")
+                raise SecurityPolicyViolation(
+                    "Full-System Sweeps are disabled by policy"
+                )
             if auth.autonomous:
-                raise SecurityPolicyViolation("Full-system sweeps require direct user authorization")
+                raise SecurityPolicyViolation(
+                    "Full-System Sweeps require direct user authorization"
+                )
 
         if auth.autonomous:
             if not auth.policy_trigger:
-                raise SecurityPolicyViolation("Autonomous scans require a recorded policy trigger")
+                raise SecurityPolicyViolation(
+                    "Autonomous scans require a recorded policy trigger"
+                )
             if request.mode is SecurityScanMode.SURFACE:
                 required = AutonomyLevel.TRIAGE
             elif request.mode is SecurityScanMode.DEEP:
                 required = AutonomyLevel.INVESTIGATE
             else:
-                raise SecurityPolicyViolation("This scan mode cannot run autonomously")
+                raise SecurityPolicyViolation(
+                    "This scan mode cannot run autonomously"
+                )
             if self.autonomy_level < required:
                 raise SecurityPolicyViolation(
-                    f"Autonomy level {self.autonomy_level.name} cannot authorize {request.mode.name}"
+                    f"Autonomy level {self.autonomy_level.name} "
+                    f"cannot authorize {request.mode.name}"
                 )

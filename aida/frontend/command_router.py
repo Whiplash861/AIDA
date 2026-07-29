@@ -1,8 +1,13 @@
+
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
+from typing import Any
+
+from aida.intent.defaults import build_default_intent_registry
+from aida.intent.models import IntentContext
+from aida.intent.resolver import IntentResolver
 
 
 class CommandType(Enum):
@@ -12,6 +17,24 @@ class CommandType(Enum):
     SECURITY_SURFACE_SCAN = auto()
     SECURITY_DEEP_SCAN = auto()
     SECURITY_FULL_SWEEP = auto()
+    SECURITY_CANCEL_REQUEST = auto()
+    SECURITY_CANCEL_CONFIRM = auto()
+    AUTONOMY_ENABLE = auto()
+    AUTONOMY_DISABLE = auto()
+    AUTONOMY_STATUS = auto()
+    MEMORY_SHOW = auto()
+    MEMORY_SEARCH = auto()
+    MEMORY_ADD = auto()
+    MEMORY_DELETE = auto()
+    MEMORY_REVISE = auto()
+    STAND_DOWN_REQUEST = auto()
+    STAND_DOWN_CONFIRM = auto()
+    STAND_DOWN_LIST = auto()
+    APPLICATION_HEALTH = auto()
+    APPLICATION_REPAIR_PLAN = auto()
+    APPLICATION_CACHE_PLAN = auto()
+    APPLICATION_RESTART_PLAN = auto()
+    INTENT_CLARIFICATION = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,159 +43,97 @@ class RoutedCommand:
     original_text: str
     target_path: str | None = None
     local_only: bool = False
+    intent_id: str | None = None
+    confidence: float | None = None
+    requires_confirmation: bool = False
+    slots: dict[str, Any] = field(default_factory=dict)
+    clarification_text: str = ""
+    user_initiated: bool = True
 
 
 class CommandRouter:
-    """
-    Identifies frontend commands that should be handled by
-    AIDA's internal systems instead of the language model.
+    """Routes speech or typed language through AIDA's local intent resolver."""
 
-    Security command patterns intentionally accept ordinary spaced and
-    hyphenated wording, such as "surface level" and "surface-level".
-    """
-
-    _SECURITY_STATUS_PATTERNS = (
-        r"\b(?:check|show|read|report)(?: the| my)? "
-        r"(?:antivirus|anti-virus|defender|security provider) status\b",
-        r"\b(?:antivirus|anti-virus|defender|security provider) status\b",
+    _CONTROL_COMMANDS = frozenset(
+        {
+            CommandType.SECURITY_CANCEL_REQUEST,
+            CommandType.SECURITY_CANCEL_CONFIRM,
+            CommandType.AUTONOMY_DISABLE,
+            CommandType.AUTONOMY_STATUS,
+        }
     )
 
-    _FULL_SWEEP_PATTERNS = (
-        r"\b(?:run|perform|start|initiate)(?: a)? "
-        r"full(?:[\s-]+system)? sweep\b",
-        r"\bfull(?:[\s-]+system)? sweep\b",
-        r"\b(?:run|perform|start|initiate)(?: a)? full "
-        r"(?:security|antivirus|anti-virus|malware) scan\b",
-    )
+    def __init__(self, resolver: IntentResolver | None = None) -> None:
+        self.resolver = resolver or IntentResolver(
+            build_default_intent_registry()
+        )
+        self._context = IntentContext()
 
-    _SURFACE_SCAN_PATTERNS = (
-        r"\b(?:run|perform|start|initiate)(?: a)? "
-        r"surface(?:[\s-]+level)? "
-        r"(?:security|antivirus|anti-virus|malware) scan\b",
-        r"\bsurface(?:[\s-]+level)? "
-        r"(?:security|antivirus|anti-virus|malware) scan\b",
-        r"\b(?:run|perform|start|initiate)(?: a)? "
-        r"(?:security|antivirus|anti-virus|malware) scan\b",
-        r"\bscan for malware\b",
-    )
+    @property
+    def context(self) -> IntentContext:
+        return self._context
 
-    _DEEP_SCAN_PATTERN = re.compile(
-        r"^\s*(?:(?:run|perform|start|initiate)\s+)?(?:a\s+)?"
-        r"deep(?:[\s-]+level)?\s+"
-        r"(?:(?:security|antivirus|anti-virus|malware|file|folder|path)\s+)?"
-        r"scan\b(?P<remainder>.*)$",
-        re.IGNORECASE,
-    )
+    def set_context(self, context: IntentContext) -> None:
+        self._context = context
 
-    _QUICKSCAN_PATTERNS = (
-        r"\brun (?:a )?quick\s*scan\b",
-        r"\bperform (?:a )?quick\s*scan\b",
-        r"\bstart (?:a )?quick\s*scan\b",
-        r"\bquick\s*scan\b",
-        r"\bquickscan\b",
-    )
-
-    _PERFORMANCE_SCAN_PATTERNS = (
-        r"\brun (?:a )?performance\s*scan\b",
-        r"\bperform (?:a )?performance\s*scan\b",
-        r"\bstart (?:a )?performance\s*scan\b",
-        r"\bscan (?:system )?performance\b",
-        r"\bperformance\s*scan\b",
-    )
-
-    def route(self, text: str) -> RoutedCommand | None:
-        clean_text = " ".join(text.lower().split())
-
-        if not clean_text:
-            return None
-
-        if self._matches(self._SECURITY_STATUS_PATTERNS, clean_text):
-            return RoutedCommand(
-                command_type=CommandType.SECURITY_STATUS,
-                original_text=text,
-                local_only=True,
-            )
-
-        if self._matches(self._FULL_SWEEP_PATTERNS, clean_text):
-            return RoutedCommand(
-                command_type=CommandType.SECURITY_FULL_SWEEP,
-                original_text=text,
-                local_only=True,
-            )
-
-        deep_match = self._DEEP_SCAN_PATTERN.match(text)
-        if deep_match is not None:
-            return RoutedCommand(
-                command_type=CommandType.SECURITY_DEEP_SCAN,
-                original_text=text,
-                target_path=self._extract_target(
-                    deep_match.group("remainder")
-                ),
-                local_only=True,
-            )
-
-        if self._matches(self._SURFACE_SCAN_PATTERNS, clean_text):
-            return RoutedCommand(
-                command_type=CommandType.SECURITY_SURFACE_SCAN,
-                original_text=text,
-                local_only=True,
-            )
-
-        if self._matches(self._QUICKSCAN_PATTERNS, clean_text):
-            return RoutedCommand(
-                command_type=CommandType.QUICKSCAN,
-                original_text=text,
-            )
-
-        if self._matches(self._PERFORMANCE_SCAN_PATTERNS, clean_text):
-            return RoutedCommand(
-                command_type=CommandType.PERFORMANCE_SCAN,
-                original_text=text,
-            )
-
-        return None
-
-    @staticmethod
-    def _matches(
-        patterns: tuple[str, ...],
-        text: str,
-    ) -> bool:
-        return any(
-            re.search(pattern, text)
-            for pattern in patterns
+    def set_active_task(self, task_name: str | None) -> None:
+        self._context = IntentContext(
+            last_intent_id=self._context.last_intent_id,
+            current_domain=self._context.current_domain,
+            last_path=self._context.last_path,
+            active_task=task_name,
+            pending_confirmation_id=self._context.pending_confirmation_id,
+            pending_confirmation_action=self._context.pending_confirmation_action,
+            extra=self._context.extra,
         )
 
-    @staticmethod
-    def _extract_target(remainder: str) -> str | None:
-        target = remainder.strip()
-
-        target = re.sub(
-            r"^(?:(?:of|on|for|path|folder|file|target)\b[\s:]*)+",
-            "",
-            target,
-            flags=re.IGNORECASE,
-        ).strip()
-
-        if (
-            len(target) >= 2
-            and target[0] == target[-1]
-            and target[0] in {'"', "'"}
-        ):
-            target = target[1:-1].strip()
-
-        if not target:
+    def route(self, text: str) -> RoutedCommand | None:
+        resolution = self.resolver.resolve(text, self._context)
+        if resolution.resolved is None:
+            if resolution.clarification:
+                return RoutedCommand(
+                    command_type=CommandType.INTENT_CLARIFICATION,
+                    original_text=text,
+                    local_only=any(
+                        candidate.definition.local_only
+                        for candidate in resolution.candidates
+                    ),
+                    clarification_text=resolution.clarification,
+                )
             return None
 
-        placeholders = {
-            "this folder",
-            "this file",
-            "my computer",
-            "my system",
-            "the computer",
-            "the system",
-            "everything",
-        }
-        if target.lower() in placeholders:
+        resolved = resolution.resolved
+        try:
+            command_type = CommandType[resolved.command_type]
+        except KeyError:
             return None
 
-        return target
+        target_path = resolved.slots.get("target_path")
+        self._context = IntentContext(
+            last_intent_id=resolved.intent_id,
+            current_domain=resolved.intent_id.split(".", 1)[0],
+            last_path=(
+                str(target_path)
+                if target_path
+                else self._context.last_path
+            ),
+            active_task=self._context.active_task,
+            pending_confirmation_id=self._context.pending_confirmation_id,
+            pending_confirmation_action=(
+                self._context.pending_confirmation_action
+            ),
+            extra=self._context.extra,
+        )
+        return RoutedCommand(
+            command_type=command_type,
+            original_text=text,
+            target_path=str(target_path) if target_path else None,
+            local_only=resolved.local_only,
+            intent_id=resolved.intent_id,
+            confidence=resolved.confidence,
+            requires_confirmation=resolved.requires_confirmation,
+            slots=resolved.slots,
+        )
+
+    def is_control_command(self, command: RoutedCommand) -> bool:
+        return command.command_type in self._CONTROL_COMMANDS
