@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import sys
@@ -11,6 +10,7 @@ from aida.authorization.confirmation import ConfirmationService
 from aida.autonomy.controller import AutonomyController
 from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
+from aida.frontend.bug_report_dialog import BugReportDialog
 from aida.frontend.command_manager import CommandManager
 from aida.frontend.command_router import (
     CommandRouter,
@@ -37,6 +37,12 @@ from aida.security.continuity import SecurityTaskLedger
 from aida.security.startup_recovery import SecurityStartupReconciler
 from aida.security.stand_down import StandDownService
 from aida.security.windows.defender_cancel import DefenderCancellationService
+from aida.support.reporting import (
+    BugReportOutbox,
+    BugReportService,
+    MicrosoftGraphBugReportTransport,
+    MicrosoftGraphMailConfig,
+)
 from aida.ui.cli import aida_say_text
 
 
@@ -79,11 +85,29 @@ def main() -> int:
         database,
         memory_service,
     )
+    bug_mail_config = MicrosoftGraphMailConfig(
+        client_id=config.microsoft_graph_client_id or "",
+        recipient_address=config.bug_report_recipient,
+        expected_account=config.bug_report_recipient,
+        token_cache_path=config.microsoft_token_cache_path,
+    )
+    bug_report_service = BugReportService(
+        version=config.version,
+        log_dir=config.log_dir,
+        outbox=BugReportOutbox(config.bug_report_outbox_dir),
+        memory=memory_service,
+        transport=MicrosoftGraphBugReportTransport(bug_mail_config),
+    )
 
     window = AIDAWindow()
     overlay = AIDAOverlay()
     memory_dialog = MemoryBankDialog(
         memory_service,
+        parent=window,
+    )
+    bug_report_dialog = BugReportDialog(
+        bug_report_service,
+        recipient_address=config.bug_report_recipient,
         parent=window,
     )
 
@@ -112,8 +136,14 @@ def main() -> int:
         memory_dialog.raise_()
         memory_dialog.activateWindow()
 
+    def show_bug_report() -> None:
+        bug_report_dialog.show()
+        bug_report_dialog.raise_()
+        bug_report_dialog.activateWindow()
+
     overlay.clicked.connect(restore_main_window)
     window.memory_requested.connect(show_memory_bank)
+    window.bug_report_requested.connect(show_bug_report)
 
     session_store = SessionStore()
     history = ChatHistory(
@@ -244,9 +274,13 @@ def main() -> int:
         window.memory_requested.disconnect(
             show_memory_bank
         )
+        window.bug_report_requested.disconnect(
+            show_bug_report
+        )
         overlay.clicked.disconnect(
             restore_main_window
         )
+        bug_report_dialog.close()
         memory_dialog.close()
         overlay.close()
         controller.shutdown()
