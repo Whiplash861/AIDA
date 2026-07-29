@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from PySide6.QtCore import QTimer, Qt
@@ -40,8 +41,8 @@ from aida.security.windows.defender_cancel import DefenderCancellationService
 from aida.support.reporting import (
     BugReportOutbox,
     BugReportService,
-    SendGridBugReportTransport,
-    SendGridMailConfig,
+    EmlBugReportTransport,
+    EmlDraftConfig,
 )
 from aida.ui.cli import aida_say_text
 
@@ -85,17 +86,18 @@ def main() -> int:
         database,
         memory_service,
     )
-    bug_mail_config = SendGridMailConfig(
-        api_key=config.sendgrid_api_key or "",
-        sender_address=config.bug_report_sender,
-        recipient_address=config.bug_report_recipient,
-    )
+    outbox = BugReportOutbox(config.bug_report_outbox_dir)
     bug_report_service = BugReportService(
         version=config.version,
         log_dir=config.log_dir,
-        outbox=BugReportOutbox(config.bug_report_outbox_dir),
+        outbox=outbox,
         memory=memory_service,
-        transport=SendGridBugReportTransport(bug_mail_config),
+        transport=EmlBugReportTransport(
+            EmlDraftConfig(
+                recipient_address=config.bug_report_recipient,
+                drafts_dir=Path(config.bug_report_outbox_dir) / "mail_drafts",
+            )
+        ),
     )
 
     window = AIDAWindow()
