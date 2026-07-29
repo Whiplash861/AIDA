@@ -61,6 +61,7 @@ class BugReportDialog(QDialog):
         self.recipient_address = recipient_address
         self._thread: QThread | None = None
         self._worker: _BugReportWorker | None = None
+        self._clear_after_worker = False
 
         self.setWindowTitle("Report an AIDA Bug")
         self.setObjectName("bugReportDialog")
@@ -182,6 +183,7 @@ class BugReportDialog(QDialog):
             QMessageBox.warning(self, "Bug report incomplete", str(exc))
             return
 
+        self._clear_after_worker = False
         self._set_busy(True)
         self.status_label.setText(
             "Saving the report locally and creating a reviewable email draft..."
@@ -216,7 +218,7 @@ class BugReportDialog(QDialog):
                 "Email draft ready",
                 f"{result.message}\n\nReport ID: {result.report_id}{location}",
             )
-            self.clear_form(keep_status=True)
+            self._clear_after_worker = True
         else:
             draft_note = (
                 f"\nDraft file: {result.draft_path}"
@@ -242,9 +244,13 @@ class BugReportDialog(QDialog):
 
     @Slot()
     def _worker_finished(self) -> None:
+        should_clear = self._clear_after_worker
+        self._clear_after_worker = False
         self._thread = None
         self._worker = None
         self._set_busy(False)
+        if should_clear:
+            self.clear_form(keep_status=True)
 
     @Slot()
     def clear_form(self, *, keep_status: bool = False) -> None:
