@@ -115,8 +115,9 @@ class BugReportDraftReviewDialog(QDialog):
         destination = QLabel(
             f"Destination: {self.draft.recipient}\n"
             "AIDA has prepared this report locally but has not sent it. Review the "
-            "contents below, then choose a mail handoff. Gmail Web is the primary "
-            "path for this installation."
+            "contents below, then choose a mail handoff. Outlook Web is the "
+            "validated primary path for this installation. Gmail Web remains a "
+            "fallback and may be filtered into the destination mailbox's Junk folder."
         )
         destination.setWordWrap(True)
 
@@ -133,16 +134,16 @@ class BugReportDraftReviewDialog(QDialog):
         )
         self.status_label.setWordWrap(True)
 
-        self.gmail_button = QPushButton("Copy + Open Gmail Web")
-        self.outlook_button = QPushButton("Copy + Open Outlook Web")
+        self.outlook_button = QPushButton("Copy + Open Outlook Web (Recommended)")
+        self.gmail_button = QPushButton("Copy + Open Gmail Web (Fallback)")
         self.default_button = QPushButton("Open Default Mail App")
         self.copy_button = QPushButton("Copy Full Report")
         self.folder_button = QPushButton("Open Draft Folder")
         self.close_button = QPushButton("Close")
 
         primary_actions = QHBoxLayout()
-        primary_actions.addWidget(self.gmail_button)
         primary_actions.addWidget(self.outlook_button)
+        primary_actions.addWidget(self.gmail_button)
 
         secondary_actions = QHBoxLayout()
         secondary_actions.addWidget(self.default_button)
@@ -161,8 +162,8 @@ class BugReportDraftReviewDialog(QDialog):
         layout.addLayout(primary_actions)
         layout.addLayout(secondary_actions)
 
-        self.gmail_button.clicked.connect(self.open_gmail)
         self.outlook_button.clicked.connect(self.open_outlook)
+        self.gmail_button.clicked.connect(self.open_gmail)
         self.default_button.clicked.connect(self.open_default_mail_app)
         self.copy_button.clicked.connect(self.copy_full_report)
         self.folder_button.clicked.connect(self.open_draft_folder)
@@ -179,13 +180,27 @@ class BugReportDraftReviewDialog(QDialog):
 
     @Slot()
     def open_gmail(self) -> None:
-        self._open_webmail(build_gmail_compose_url(self.draft), "Gmail Web")
+        self._open_webmail(
+            build_gmail_compose_url(self.draft),
+            "Gmail Web",
+            delivery_note=(
+                " Outlook may classify this Gmail-originated report as Junk. Check "
+                "the destination Junk folder or add the sending Gmail address to "
+                "Outlook's Safe Senders list."
+            ),
+        )
 
     @Slot()
     def open_outlook(self) -> None:
         self._open_webmail(build_outlook_compose_url(self.draft), "Outlook Web")
 
-    def _open_webmail(self, url: str, provider_name: str) -> None:
+    def _open_webmail(
+        self,
+        url: str,
+        provider_name: str,
+        *,
+        delivery_note: str = "",
+    ) -> None:
         self.copy_full_report()
         if not QDesktopServices.openUrl(QUrl(url)):
             QMessageBox.warning(
@@ -198,7 +213,7 @@ class BugReportDraftReviewDialog(QDialog):
         self.status_label.setText(
             f"{provider_name} was opened and the complete report was copied to the "
             "clipboard. Review the compose window and click Send yourself. AIDA "
-            "cannot confirm delivery."
+            f"cannot confirm delivery.{delivery_note}"
         )
 
     @Slot()
@@ -207,8 +222,8 @@ class BugReportDraftReviewDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Mail application could not open",
-                "Windows could not open the local .eml draft. Use Gmail Web, "
-                "Outlook Web, or open the draft folder instead.",
+                "Windows could not open the local .eml draft. Use Outlook Web, "
+                "Gmail Web, or open the draft folder instead.",
             )
             return
         self.status_label.setText(
