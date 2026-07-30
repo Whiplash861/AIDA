@@ -39,11 +39,15 @@ def test_gmail_compose_url_contains_destination_subject_and_body() -> None:
         body="The button failed.",
     )
 
-    query = parse_qs(urlparse(build_gmail_compose_url(draft)).query)
+    url = build_gmail_compose_url(draft)
+    query = parse_qs(urlparse(url).query)
 
     assert query["to"] == ["AIDAdeveloper@outlook.com"]
     assert query["su"] == ["Frontend issue"]
     assert query["body"] == ["The button failed."]
+    assert "%20" in url
+    assert "Frontend+issue" not in url
+    assert "The+button+failed" not in url
 
 
 def test_outlook_compose_url_contains_destination_subject_and_body() -> None:
@@ -54,11 +58,33 @@ def test_outlook_compose_url_contains_destination_subject_and_body() -> None:
         body="The revision was not displayed.",
     )
 
-    query = parse_qs(urlparse(build_outlook_compose_url(draft)).query)
+    url = build_outlook_compose_url(draft)
+    query = parse_qs(urlparse(url).query)
 
     assert query["to"] == ["AIDAdeveloper@outlook.com"]
     assert query["subject"] == ["Memory issue"]
     assert query["body"] == ["The revision was not displayed."]
+    assert "%20" in url
+    assert "Memory+issue" not in url
+    assert "The+revision+was+not+displayed" not in url
+
+
+def test_webmail_urls_percent_encode_line_breaks_and_literal_plus_signs() -> None:
+    draft = PreparedEmailDraft(
+        path=Path("report.eml"),
+        recipient="AIDAdeveloper@outlook.com",
+        subject="AIDA + report",
+        body="First line\nSecond + line",
+    )
+
+    gmail_url = build_gmail_compose_url(draft)
+    outlook_url = build_outlook_compose_url(draft)
+
+    for url in (gmail_url, outlook_url):
+        assert "%20" in url
+        assert "%0A" in url
+        assert "%2B" in url
+        assert "+" not in url
 
 
 def test_browser_handoff_truncates_large_body_with_clear_notice() -> None:
