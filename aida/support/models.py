@@ -34,8 +34,8 @@ class BugDeliveryStatus(StrEnum):
 @dataclass(frozen=True, slots=True)
 class BugReportDraft:
     title: str
-    category: BugCategory
-    severity: BugSeverity
+    category: BugCategory | str
+    severity: BugSeverity | str
     description: str
     expected_behavior: str = ""
     reproduction_steps: str = ""
@@ -52,10 +52,29 @@ class BugReportDraft:
             raise ValueError("Bug report title cannot exceed 160 characters.")
         if len(description) < 10:
             raise ValueError("Bug description must contain at least ten characters.")
+
+        try:
+            category = (
+                self.category
+                if isinstance(self.category, BugCategory)
+                else BugCategory(str(self.category).strip().lower())
+            )
+        except ValueError as exc:
+            raise ValueError("Bug report category is invalid.") from exc
+
+        try:
+            severity = (
+                self.severity
+                if isinstance(self.severity, BugSeverity)
+                else BugSeverity(str(self.severity).strip().lower())
+            )
+        except ValueError as exc:
+            raise ValueError("Bug report severity is invalid.") from exc
+
         return BugReportDraft(
             title=title,
-            category=self.category,
-            severity=self.severity,
+            category=category,
+            severity=severity,
             description=description,
             expected_behavior=self.expected_behavior.strip(),
             reproduction_steps=self.reproduction_steps.strip(),
