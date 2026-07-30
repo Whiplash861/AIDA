@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aida.frontend.bug_report_review_dialog import BugReportDraftReviewDialog
 from aida.support.models import (
     BugCategory,
     BugDeliveryStatus,
@@ -24,7 +25,7 @@ from aida.support.models import (
     BugReportSubmissionResult,
     BugSeverity,
 )
-from aida.support.reporting import BugReportService
+from aida.support.reporting import BugReportService, EmlBugReportTransport
 
 
 class _BugReportWorker(QObject):
@@ -47,7 +48,7 @@ class _BugReportWorker(QObject):
 
 
 class BugReportDialog(QDialog):
-    """Local-first bug form that creates a reviewable email draft."""
+    """Local-first bug form that prepares a reviewable email draft."""
 
     def __init__(
         self,
@@ -63,6 +64,13 @@ class BugReportDialog(QDialog):
         self._worker: _BugReportWorker | None = None
         self._clear_after_worker = False
 
+        # AIDA owns the review and handoff step. Do not blindly launch whatever
+        # Windows has registered for .eml files; that may be an unconfigured or
+        # legacy mail client. The review dialog exposes explicit handoff choices.
+        transport = self.service.transport
+        if isinstance(transport, EmlBugReportTransport):
+            transport.launcher = lambda _path: None
+
         self.setWindowTitle("Report an AIDA Bug")
         self.setObjectName("bugReportDialog")
         self.resize(720, 700)
@@ -70,9 +78,10 @@ class BugReportDialog(QDialog):
 
         self.destination_label = QLabel(
             f"Destination: {recipient_address}\n"
-            "AIDA saves the report locally, creates an editable email draft, and "
-            "opens it in your default mail application. Review the draft and click "
-            "Send yourself. Passwords, tokens, and API keys are redacted."
+            "AIDA saves the report locally, creates a sanitized email draft, and "
+            "opens an internal review window. From there, choose Gmail Web, Outlook "
+            "Web, the registered desktop mail application, or copy the complete "
+            "report. You retain final Send authority."
         )
         self.destination_label.setWordWrap(True)
         self.destination_label.setObjectName("bugReportDestination")
@@ -118,7 +127,7 @@ class BugReportDialog(QDialog):
         self.status_label.setWordWrap(True)
         self.status_label.setObjectName("bugReportStatus")
 
-        self.submit_button = QPushButton("Create Email Draft")
+        self.submit_button = QPushButton("Prepare Bug Report")
         self.submit_button.setObjectName("bugReportSubmitButton")
         self.clear_button = QPushButton("Clear")
         self.close_button = QPushButton("Close")
@@ -186,7 +195,7 @@ class BugReportDialog(QDialog):
         self._clear_after_worker = False
         self._set_busy(True)
         self.status_label.setText(
-            "Saving the report locally and creating a reviewable email draft..."
+            "Saving the report locally and preparing AIDA's review window..."
         )
         thread = QThread(self)
         worker = _BugReportWorker(self.service, draft)
@@ -208,30 +217,42 @@ class BugReportDialog(QDialog):
         if not isinstance(result, BugReportSubmissionResult):
             self._submission_failed("Bug report service returned an invalid result.")
             return
+
+        if result.status is BugDeliveryStatus.DRAFT_READY and result.draft_path:
+            self.status_label.setText(
+                f"Bug report {result.report_id} was preserved locally and prepared "
+                "for review. AIDA has not sent it."
+            )
+            try:
+                review_dialog = BugReportDraftReviewDialog(
+                    result.draft_path,
+                    parent=self,
+                )
+            except (OSError, ValueError) as exc:
+                self._submission_failed(
+                    "The report was saved, but AIDA could not load the prepared "
+                    f"email draft for review: {exc}"
+                )
+                return
+            self._clear_after_worker = True
+            review_dialog.exec()
+            return
+
+        draft_note = (
+            f"\nDraft file: {result.draft_path}"
+            if result.draft_path
+            else ""
+        )
         self.status_label.setText(
             f"{result.message}\nReport ID: {result.report_id}"
         )
-        if result.status is BugDeliveryStatus.DRAFT_READY:
-            location = f"\n\nDraft file: {result.draft_path}" if result.draft_path else ""
-            QMessageBox.information(
-                self,
-                "Email draft ready",
-                f"{result.message}\n\nReport ID: {result.report_id}{location}",
-            )
-            self._clear_after_worker = True
-        else:
-            draft_note = (
-                f"\nDraft file: {result.draft_path}"
-                if result.draft_path
-                else ""
-            )
-            QMessageBox.warning(
-                self,
-                "Bug report saved locally",
-                f"{result.message}\n\n"
-                f"Report ID: {result.report_id}\n"
-                f"Local record: {result.local_record_path}{draft_note}",
-            )
+        QMessageBox.warning(
+            self,
+            "Bug report saved locally",
+            f"{result.message}\n\n"
+            f"Report ID: {result.report_id}\n"
+            f"Local record: {result.local_record_path}{draft_note}",
+        )
 
     @Slot(str)
     def _submission_failed(self, message: str) -> None:
@@ -277,9 +298,9 @@ class BugReportDialog(QDialog):
     def _delivery_status_text(self) -> str:
         if self.service.delivery_configured:
             return (
-                "Local outbox and email-draft handoff are ready. No account, API "
-                "key, or paid mail service is required. You approve final delivery "
-                "by clicking Send in your mail application."
+                "Local outbox and review handoff are ready. No account, API key, or "
+                "paid mail service is required. AIDA will not open a desktop mail "
+                "client until you explicitly choose that option."
             )
         return (
             "Local outbox is ready, but the registered developer email address is "
