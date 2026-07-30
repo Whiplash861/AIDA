@@ -93,6 +93,35 @@ def test_successful_handoff_creates_editable_eml_and_draft_record(
     assert "The report button stopped responding." in message.get_content()
 
 
+def test_qt_string_combo_data_is_normalized_before_eml_rendering(
+    tmp_path: Path,
+) -> None:
+    opened: list[Path] = []
+    transport = EmlBugReportTransport(
+        EmlDraftConfig(
+            recipient_address="AIDAdeveloper@outlook.com",
+            drafts_dir=tmp_path / "mail_drafts",
+        ),
+        launcher=opened.append,
+    )
+    service = _service(tmp_path, transport=transport)
+    draft = BugReportDraft(
+        title="Qt combo conversion",
+        category="frontend",
+        severity="low",
+        description="Qt returned plain strings for combo-box user data.",
+    )
+
+    result = service.submit(draft)
+
+    assert result.status is BugDeliveryStatus.DRAFT_READY
+    assert len(opened) == 1
+    message = BytesParser(policy=policy.default).parsebytes(opened[0].read_bytes())
+    assert message["Subject"].startswith("[LOW]")
+    assert "Category: frontend" in message.get_content()
+    assert "Severity: low" in message.get_content()
+
+
 def test_report_redacts_inline_secrets_before_persistence(tmp_path: Path) -> None:
     service = _service(tmp_path, transport=None)
 
