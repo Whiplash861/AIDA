@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from PySide6.QtCore import QUrl, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication
@@ -61,8 +61,20 @@ def browser_handoff_body(body: str) -> str:
     return body[: _BROWSER_BODY_LIMIT - len(suffix)] + suffix
 
 
+def _webmail_query(parameters: dict[str, str]) -> str:
+    """Encode webmail query values without form-style '+' space substitution.
+
+    Outlook Web can display '+' literally inside the compose body even though
+    application/x-www-form-urlencoded normally treats it as a space. Percent
+    encoding spaces as %20 is accepted by both Outlook Web and Gmail and keeps
+    the report human-readable.
+    """
+
+    return urlencode(parameters, quote_via=quote, safe="")
+
+
 def build_gmail_compose_url(draft: PreparedEmailDraft) -> str:
-    return "https://mail.google.com/mail/?" + urlencode(
+    return "https://mail.google.com/mail/?" + _webmail_query(
         {
             "view": "cm",
             "fs": "1",
@@ -74,7 +86,7 @@ def build_gmail_compose_url(draft: PreparedEmailDraft) -> str:
 
 
 def build_outlook_compose_url(draft: PreparedEmailDraft) -> str:
-    return "https://outlook.live.com/mail/0/deeplink/compose?" + urlencode(
+    return "https://outlook.live.com/mail/0/deeplink/compose?" + _webmail_query(
         {
             "to": draft.recipient,
             "subject": draft.subject,
