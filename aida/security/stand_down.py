@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import hashlib
@@ -110,6 +109,22 @@ class StandDownService:
         with self.database.transaction() as connection:
             connection.execute(
                 """
+                UPDATE stand_down_items
+                SET status = ?, last_evaluated_at = ?, suspended_reason = ?
+                WHERE user_id = ? AND device_id = ? AND path = ? AND status = ?
+                """,
+                (
+                    StandDownStatus.REVOKED.value,
+                    _iso(now),
+                    "Superseded by a newly authorized Stand Down record.",
+                    self.memory.user_id,
+                    self.memory.device_id,
+                    str(target),
+                    StandDownStatus.ACTIVE.value,
+                ),
+            )
+            connection.execute(
+                """
                 INSERT INTO stand_down_items (
                     exception_id, user_id, device_id, path, sha256, file_size,
                     modified_ns, signer, publisher, reason, authorized_by,
@@ -180,9 +195,30 @@ class StandDownService:
                 StandDownStatus.EXPIRED,
                 "The Stand Down exception expired.",
             )
-            return StandDownEvaluation(False, expired.status, expired.suspended_reason or "", expired)
+            return StandDownEvaluation(
+                False,
+                expired.status,
+                expired.suspended_reason or "",
+                expired,
+            )
 
         if explicit_scan:
+            self._touch(record)
+            self.memory.log_event(
+                "STAND_DOWN_EXPLICIT_SCAN_OVERRIDE",
+                "security.stand_down",
+                (
+                    f"An explicit scan of {record.path.name} temporarily "
+                    "overrode Stand Down suppression for this assessment."
+                ),
+                payload={
+                    "exception_id": record.exception_id,
+                    "path": str(record.path),
+                },
+                outcome=ProcessOutcome.PARTIAL,
+                confidence=1.0,
+                promote=False,
+            )
             return StandDownEvaluation(
                 False,
                 record.status,
@@ -196,7 +232,12 @@ class StandDownService:
                 StandDownStatus.SUSPENDED,
                 "New security alarms were recorded after Stand Down.",
             )
-            return StandDownEvaluation(False, suspended.status, suspended.suspended_reason or "", suspended)
+            return StandDownEvaluation(
+                False,
+                suspended.status,
+                suspended.suspended_reason or "",
+                suspended,
+            )
 
         if not target.is_file():
             suspended = self._set_status(
@@ -204,7 +245,12 @@ class StandDownService:
                 StandDownStatus.SUSPENDED,
                 "The trusted file is no longer present at the recorded path.",
             )
-            return StandDownEvaluation(False, suspended.status, suspended.suspended_reason or "", suspended)
+            return StandDownEvaluation(
+                False,
+                suspended.status,
+                suspended.suspended_reason or "",
+                suspended,
+            )
 
         stat = target.stat()
         current_hash = _sha256(target)
@@ -218,7 +264,12 @@ class StandDownService:
                 StandDownStatus.SUSPENDED,
                 "The trusted file identity changed. AIDA resumed threat assessment.",
             )
-            return StandDownEvaluation(False, suspended.status, suspended.suspended_reason or "", suspended)
+            return StandDownEvaluation(
+                False,
+                suspended.status,
+                suspended.suspended_reason or "",
+                suspended,
+            )
 
         self._touch(record)
         return StandDownEvaluation(
@@ -228,7 +279,19 @@ class StandDownService:
             record,
         )
 
-    def find_active(self, path: Path) -> StandDownRecord | None:
+    def get(self, exception_id: str) -> StandDownRecord | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM stand_down_items
+                WHERE exception_id = ? AND user_id = ? AND device_id = ?
+                """,
+                (exception_id, self.memory.user_id, self.memory.device_id),
+            ).fetchone()
+        return None if row is None else _record_from_row(row)
+
+    def find_active(self, path: Path | str) -> StandDownRecord | None:
+        target = Path(path).expanduser().resolve()
         with self.database.connect() as connection:
             row = connection.execute(
                 """
@@ -240,13 +303,14 @@ class StandDownService:
                 (
                     self.memory.user_id,
                     self.memory.device_id,
-                    str(path),
+                    str(target),
                     StandDownStatus.ACTIVE.value,
                 ),
             ).fetchone()
         return None if row is None else _record_from_row(row)
 
     def list_active(self) -> list[StandDownRecord]:
+        self.expire_due()
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
@@ -262,41 +326,47 @@ class StandDownService:
             ).fetchall()
         return [_record_from_row(row) for row in rows]
 
-    def revoke(self, exception_id: str, *, revoked_by: str) -> None:
+    def expire_due(self) -> int:
         now = datetime.now(timezone.utc)
-        with self.database.transaction() as connection:
-            row = connection.execute(
+        with self.database.connect() as connection:
+            rows = connection.execute(
                 """
                 SELECT * FROM stand_down_items
-                WHERE exception_id = ? AND user_id = ? AND device_id = ?
-                """,
-                (exception_id, self.memory.user_id, self.memory.device_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Unknown Stand Down exception: {exception_id}")
-            connection.execute(
-                """
-                UPDATE stand_down_items
-                SET status = ?, last_evaluated_at = ?, suspended_reason = ?
-                WHERE exception_id = ?
+                WHERE user_id = ? AND device_id = ? AND status = ?
+                  AND expires_at IS NOT NULL AND expires_at <= ?
                 """,
                 (
-                    StandDownStatus.REVOKED.value,
+                    self.memory.user_id,
+                    self.memory.device_id,
+                    StandDownStatus.ACTIVE.value,
                     _iso(now),
-                    f"Revoked by {revoked_by}",
-                    exception_id,
                 ),
+            ).fetchall()
+        for row in rows:
+            self._set_status(
+                _record_from_row(row),
+                StandDownStatus.EXPIRED,
+                "The Stand Down exception expired.",
             )
-        self.memory.log_event(
-            "STAND_DOWN_REVOKED",
-            "security.stand_down",
-            f"The Stand Down exception for {Path(row['path']).name} was revoked.",
-            payload={
-                "exception_id": exception_id,
-                "revoked_by": revoked_by,
-            },
-            outcome=ProcessOutcome.SUCCEEDED,
-            promote=True,
+        return len(rows)
+
+    def revoke(
+        self,
+        exception_id: str,
+        *,
+        revoked_by: str,
+    ) -> StandDownRecord:
+        if not revoked_by.strip():
+            raise ValueError("Stand Down revocation requires an identified user")
+        record = self.get(exception_id)
+        if record is None:
+            raise KeyError(f"Unknown Stand Down exception: {exception_id}")
+        if record.status is StandDownStatus.REVOKED:
+            return record
+        return self._set_status(
+            record,
+            StandDownStatus.REVOKED,
+            f"Revoked by {revoked_by.strip()}",
         )
 
     def _set_status(
@@ -311,16 +381,48 @@ class StandDownService:
                 """
                 UPDATE stand_down_items
                 SET status = ?, last_evaluated_at = ?, suspended_reason = ?
-                WHERE exception_id = ?
+                WHERE exception_id = ? AND user_id = ? AND device_id = ?
                 """,
-                (status.value, _iso(now), reason, record.exception_id),
+                (
+                    status.value,
+                    _iso(now),
+                    reason,
+                    record.exception_id,
+                    self.memory.user_id,
+                    self.memory.device_id,
+                ),
             )
-        return replace(
+        updated = replace(
             record,
             status=status,
             last_evaluated_at=now,
             suspended_reason=reason,
         )
+        event_type = {
+            StandDownStatus.SUSPENDED: "STAND_DOWN_SUSPENDED",
+            StandDownStatus.EXPIRED: "STAND_DOWN_EXPIRED",
+            StandDownStatus.REVOKED: "STAND_DOWN_REVOKED",
+            StandDownStatus.ACTIVE: "STAND_DOWN_UPDATED",
+        }[status]
+        self.memory.log_event(
+            event_type,
+            "security.stand_down",
+            f"Stand Down for {record.path.name}: {reason}",
+            payload={
+                "exception_id": record.exception_id,
+                "path": str(record.path),
+                "status": status.value,
+                "reason": reason,
+            },
+            outcome=(
+                ProcessOutcome.SUCCEEDED
+                if status is StandDownStatus.REVOKED
+                else ProcessOutcome.PARTIAL
+            ),
+            confidence=1.0,
+            promote=True,
+        )
+        return updated
 
     def _touch(self, record: StandDownRecord) -> None:
         with self.database.transaction() as connection:
