@@ -78,6 +78,7 @@ def _discovery(provider):
     return WindowsProviderDiscovery(
         provider=provider,
         products=(),
+        selected_product=None,
         detail="test discovery",
     )
 
@@ -183,4 +184,6 @@ def test_new_detection_suspends_stand_down_even_for_explicit_deep_scan(tmp_path)
 
     assert "Stand Down status: Suspended" in result.transcript_text
     assert "normal threat assessment resumed" in result.transcript_text
-    assert stand_down.get(trusted.exception_id).status is StandDownStatus.SUSPENDED
+    loaded = stand_down.get(trusted.exception_id)
+    assert loaded is not None
+    assert loaded.status is StandDownStatus.SUSPENDED
