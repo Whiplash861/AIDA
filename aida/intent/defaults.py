@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from aida.intent.models import IntentDefinition, IntentRisk
@@ -229,6 +228,32 @@ def build_default_intent_registry() -> IntentRegistry:
             priority=90,
         ),
         IntentDefinition(
+            intent_id="autonomy.observe.security",
+            command_type="AUTONOMY_OBSERVE_SECURITY",
+            actions=frozenset({"observe", "inspect", "check", "run", "perform"}),
+            objects=frozenset(
+                {
+                    "security posture",
+                    "observation check",
+                    "security observation",
+                    "autonomy observation",
+                }
+            ),
+            aliases=frozenset(
+                {
+                    "run observation check",
+                    "observe security posture",
+                    "run security observation",
+                    "autonomy observation",
+                    "observation mode check",
+                }
+            ),
+            risk=IntentRisk.INFORMATIONAL,
+            local_only=True,
+            description="a read-only Observation-mode security posture check",
+            priority=105,
+        ),
+        IntentDefinition(
             intent_id="memory.show",
             command_type="MEMORY_SHOW",
             actions=frozenset({"show", "open", "list", "display"}),
@@ -289,7 +314,36 @@ def build_default_intent_registry() -> IntentRegistry:
             description="revising a Memory Bank item",
             priority=98,
         ),
-
+        IntentDefinition(
+            intent_id="security.stand_down.revoke.confirm",
+            command_type="STAND_DOWN_REVOKE_CONFIRM",
+            aliases=frozenset({"confirm stand down revocation"}),
+            risk=IntentRisk.HIGH_IMPACT,
+            local_only=True,
+            description="confirmation to revoke the pending Stand Down exception",
+            priority=133,
+        ),
+        IntentDefinition(
+            intent_id="security.stand_down.revoke",
+            command_type="STAND_DOWN_REVOKE_REQUEST",
+            actions=frozenset({"revoke", "remove", "cancel", "end"}),
+            objects=frozenset(
+                {"stand down", "trust exception", "trusted item", "user trust"}
+            ),
+            aliases=frozenset(
+                {
+                    "revoke stand down",
+                    "remove stand down",
+                    "revoke trust exception",
+                    "end stand down",
+                }
+            ),
+            required_slots=("target_path",),
+            risk=IntentRisk.ELEVATED,
+            local_only=True,
+            description="revoking an AIDA-local Stand Down trust exception",
+            priority=117,
+        ),
         IntentDefinition(
             intent_id="security.stand_down.confirm",
             command_type="STAND_DOWN_CONFIRM",
