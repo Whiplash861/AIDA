@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -8,6 +7,7 @@ from aida.applications.models import RepairAction
 from aida.applications.repair import ApplicationRepairPlanner
 from aida.authorization.confirmation import ConfirmationService
 from aida.autonomy.controller import AutonomyController
+from aida.autonomy.observation import AutonomyObservationService
 from aida.config import AidaConfig
 from aida.frontend.command_router import CommandType, RoutedCommand
 from aida.frontend.commands.application import (
@@ -17,6 +17,9 @@ from aida.frontend.commands.application import (
 from aida.frontend.commands.autonomy import (
     AutonomyCommandExecutor,
     AutonomyOperation,
+)
+from aida.frontend.commands.autonomy_observation import (
+    SecurityObservationExecutor,
 )
 from aida.frontend.commands.base import CommandExecutor
 from aida.frontend.commands.memory import (
@@ -68,6 +71,7 @@ class CommandRegistry:
             self.memory = memory_service
             database = self.memory.database
         self.autonomy = autonomy_controller or AutonomyController(self.memory)
+        self.observation = AutonomyObservationService(self.autonomy)
         self.confirmations = confirmation_service or ConfirmationService()
         self.cancellation = (
             cancellation_service or DefenderCancellationService()
@@ -99,43 +103,21 @@ class CommandRegistry:
                 lambda command: SecurityStatusExecutor()
             ),
             CommandType.SECURITY_SURFACE_SCAN: (
-                lambda command: SecurityScanExecutor(
-                    mode=SecurityScanMode.SURFACE,
-                    authorization_reason=command.original_text,
-                    memory_service=self.memory,
-                    task_ledger=self.task_ledger,
-                    recovery_task_id=(
-                        str(command.slots.get("recovery_task_id"))
-                        if command.slots.get("recovery_task_id")
-                        else None
-                    ),
+                lambda command: self._security_scan(
+                    SecurityScanMode.SURFACE,
+                    command,
                 )
             ),
             CommandType.SECURITY_DEEP_SCAN: (
-                lambda command: SecurityScanExecutor(
-                    mode=SecurityScanMode.DEEP,
-                    authorization_reason=command.original_text,
-                    target_path=command.target_path,
-                    memory_service=self.memory,
-                    task_ledger=self.task_ledger,
-                    recovery_task_id=(
-                        str(command.slots.get("recovery_task_id"))
-                        if command.slots.get("recovery_task_id")
-                        else None
-                    ),
+                lambda command: self._security_scan(
+                    SecurityScanMode.DEEP,
+                    command,
                 )
             ),
             CommandType.SECURITY_FULL_SWEEP: (
-                lambda command: SecurityScanExecutor(
-                    mode=SecurityScanMode.FULL_SWEEP,
-                    authorization_reason=command.original_text,
-                    memory_service=self.memory,
-                    task_ledger=self.task_ledger,
-                    recovery_task_id=(
-                        str(command.slots.get("recovery_task_id"))
-                        if command.slots.get("recovery_task_id")
-                        else None
-                    ),
+                lambda command: self._security_scan(
+                    SecurityScanMode.FULL_SWEEP,
+                    command,
                 )
             ),
             CommandType.SECURITY_CANCEL_REQUEST: (
@@ -162,6 +144,18 @@ class CommandRegistry:
                     command,
                 )
             ),
+            CommandType.STAND_DOWN_REVOKE_REQUEST: (
+                lambda command: self._security_control(
+                    SecurityControlOperation.STAND_DOWN_REVOKE_REQUEST,
+                    command,
+                )
+            ),
+            CommandType.STAND_DOWN_REVOKE_CONFIRM: (
+                lambda command: self._security_control(
+                    SecurityControlOperation.STAND_DOWN_REVOKE_CONFIRM,
+                    command,
+                )
+            ),
             CommandType.STAND_DOWN_LIST: (
                 lambda command: self._security_control(
                     SecurityControlOperation.STAND_DOWN_LIST,
@@ -184,6 +178,14 @@ class CommandRegistry:
                 lambda command: AutonomyCommandExecutor(
                     self.autonomy,
                     AutonomyOperation.STATUS,
+                )
+            ),
+            CommandType.AUTONOMY_OBSERVE_SECURITY: (
+                lambda command: SecurityObservationExecutor(
+                    self.observation,
+                    memory=self.memory,
+                    stand_down=self.stand_down,
+                    cancellation=self.cancellation,
                 )
             ),
             CommandType.MEMORY_SHOW: (
@@ -261,6 +263,29 @@ class CommandRegistry:
             ),
         }
 
+    def _security_scan(
+        self,
+        mode: SecurityScanMode,
+        command: RoutedCommand,
+    ) -> SecurityScanExecutor:
+        return SecurityScanExecutor(
+            mode=mode,
+            authorization_reason=command.original_text,
+            target_path=(
+                command.target_path
+                if mode is SecurityScanMode.DEEP
+                else None
+            ),
+            memory_service=self.memory,
+            task_ledger=self.task_ledger,
+            stand_down_service=self.stand_down,
+            recovery_task_id=(
+                str(command.slots.get("recovery_task_id"))
+                if command.slots.get("recovery_task_id")
+                else None
+            ),
+        )
+
     def _security_control(
         self,
         operation: SecurityControlOperation,
@@ -272,6 +297,7 @@ class CommandRegistry:
             memory=self.memory,
             cancellation_service=self.cancellation,
             stand_down_service=self.stand_down,
+            task_ledger=self.task_ledger,
             original_text=command.original_text,
             target_path=command.target_path,
         )
