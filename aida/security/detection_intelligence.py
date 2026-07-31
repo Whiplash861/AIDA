@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Iterable
@@ -88,6 +88,7 @@ class DetectionReconciler:
         scan_started_at: datetime | None = None,
     ) -> DetectionReconciliation:
         prior = before.by_key
+        current = after.by_key
         assessments: list[DetectionAssessment] = []
         for detection in after.detections:
             previous = prior.get(_detection_key(detection))
@@ -100,18 +101,41 @@ class DetectionReconciler:
             )
             unresolved = _is_unresolved(detection)
             assessments.append(
-                DetectionAssessment(
-                    disposition=disposition,
-                    detection=detection,
-                    previous=previous,
-                    new_for_scan=new_for_scan,
-                    unresolved=unresolved,
-                    summary=_assessment_summary(
-                        disposition,
-                        detection,
-                        new_for_scan,
-                        unresolved,
+                _assessment(
+                    disposition,
+                    detection,
+                    previous,
+                    new_for_scan,
+                    unresolved,
+                )
+            )
+
+        for key, previous in prior.items():
+            if key in current or not _is_unresolved(previous):
+                continue
+            resolved = replace(
+                previous,
+                metadata={
+                    **previous.metadata,
+                    "is_active": False,
+                    "action_success": True,
+                    "resolution_basis": (
+                        "The detection was absent from the later complete provider snapshot."
                     ),
+                },
+                detail=(
+                    previous.detail
+                    + ("; " if previous.detail else "")
+                    + "No longer present in the complete provider snapshot"
+                ),
+            )
+            assessments.append(
+                _assessment(
+                    DetectionDisposition.RESOLVED,
+                    resolved,
+                    previous,
+                    False,
+                    False,
                 )
             )
         return DetectionReconciliation(
@@ -144,6 +168,28 @@ def render_detection_reconciliation(
             "misreported as new scan detections."
         )
     return "\n".join(lines)
+
+
+def _assessment(
+    disposition: DetectionDisposition,
+    detection: ProviderDetection,
+    previous: ProviderDetection | None,
+    new_for_scan: bool,
+    unresolved: bool,
+) -> DetectionAssessment:
+    return DetectionAssessment(
+        disposition=disposition,
+        detection=detection,
+        previous=previous,
+        new_for_scan=new_for_scan,
+        unresolved=unresolved,
+        summary=_assessment_summary(
+            disposition,
+            detection,
+            new_for_scan,
+            unresolved,
+        ),
+    )
 
 
 def _detection_key(detection: ProviderDetection) -> str:
