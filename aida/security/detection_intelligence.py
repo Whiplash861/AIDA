@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Iterable
@@ -88,7 +88,6 @@ class DetectionReconciler:
         scan_started_at: datetime | None = None,
     ) -> DetectionReconciliation:
         prior = before.by_key
-        current = after.by_key
         assessments: list[DetectionAssessment] = []
         for detection in after.detections:
             previous = prior.get(_detection_key(detection))
@@ -109,35 +108,9 @@ class DetectionReconciler:
                     unresolved,
                 )
             )
-
-        for key, previous in prior.items():
-            if key in current or not _is_unresolved(previous):
-                continue
-            resolved = replace(
-                previous,
-                metadata={
-                    **previous.metadata,
-                    "is_active": False,
-                    "action_success": True,
-                    "resolution_basis": (
-                        "The detection was absent from the later complete provider snapshot."
-                    ),
-                },
-                detail=(
-                    previous.detail
-                    + ("; " if previous.detail else "")
-                    + "No longer present in the complete provider snapshot"
-                ),
-            )
-            assessments.append(
-                _assessment(
-                    DetectionDisposition.RESOLVED,
-                    resolved,
-                    previous,
-                    False,
-                    False,
-                )
-            )
+        # Absence from a later history snapshot is not enough to prove that a
+        # detection was neutralized. Resolution is recorded only when the
+        # provider explicitly reports an inactive state or successful action.
         return DetectionReconciliation(
             before=before,
             after=after,
@@ -156,7 +129,7 @@ def render_detection_reconciliation(
         "",
         f"New or reactivated detections in this scan window: {new_count}",
         f"Pre-existing unresolved detections still reported: {unresolved_count}",
-        f"Detections with newly confirmed resolution: {resolved_count}",
+        f"Detections with provider-confirmed resolution: {resolved_count}",
     ]
     if not new_count:
         lines.append(
