@@ -186,6 +186,7 @@ class CommandRegistry:
                     memory=self.memory,
                     stand_down=self.stand_down,
                     cancellation=self.cancellation,
+                    announce=command.user_initiated,
                 )
             ),
             CommandType.MEMORY_SHOW: (
