@@ -36,6 +36,7 @@ The language model is not an execution authority. Registered local executors, ex
 - Heartbeats report **Provider-total elapsed** and **AIDA monitoring-session elapsed** as separate clocks.
 - Full-System Sweep launch and ten-minute messages explain that full scans may be lengthy.
 - Startup reattachment records interruption and recovery events without granting new authority.
+- Stale Quick/Full records with no matching active provider scan are closed as **abandoned with unknown provider outcome**, never falsely labeled completed or cancelled.
 
 ### Provider-native cancellation
 
@@ -53,9 +54,10 @@ The language model is not an execution authority. Registered local executors, ex
 - Captures complete Defender detection snapshots before and after a fresh scan when available.
 - Reconciles provider history with the scan window instead of treating all historical detections as new.
 - Classifies findings as new, reactivated, unchanged active, status changed, resolved, or historical.
-- Separately reports new/reactivated detections, pre-existing unresolved detections, and resolved detections.
-- Treats a previously active detection absent from a later complete provider snapshot as newly resolved, while preserving the basis for that conclusion.
-- Stores `THREAT_DETECTED`, `THREAT_STILL_UNRESOLVED`, and `THREAT_NEUTRALIZED` events locally.
+- Separately reports new/reactivated detections, pre-existing unresolved detections, and provider-confirmed resolved detections.
+- Records resolution only when Defender explicitly reports an inactive state or successful provider action.
+- Absence from a later history snapshot alone never produces `THREAT_NEUTRALIZED`.
+- Stores `THREAT_DETECTED`, `THREAT_STILL_UNRESOLVED`, and `THREAT_NEUTRALIZED` events locally when their evidence requirements are met.
 - Feeds unresolved findings into evidence-limited threat reports and Stand Down evaluation.
 
 ### Controlled autonomy
@@ -136,11 +138,11 @@ Previously completed Windows validation:
 Automated validation added in this checkpoint covers:
 
 - Provider and AIDA monitoring-session continuity fields and additive database migration.
-- Exact and time-bounded startup recovery matching.
+- Exact and time-bounded startup recovery matching plus stale-task abandonment.
 - Confirmed and unconfirmed cancellation durability.
 - Conservative provider Scan ID linking.
 - Stand Down creation, supersession, explicit-scan override, new-alarm suspension, identity-change suspension, expiry, and revocation.
-- Detection scan-window reconciliation and historical unresolved findings.
+- Detection scan-window reconciliation, historical unresolved separation, and explicit evidence requirements for resolution.
 - Observation-mode policy reporting without operational execution.
 - CPI routing for Observation and Stand Down revocation.
 
