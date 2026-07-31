@@ -46,6 +46,7 @@ def render_decision_report(report: AutonomousDecisionReport) -> str:
         f"Decision ID: {report.decision.decision_id}",
         f"Created: {report.created_at.astimezone().isoformat()}",
         f"Trigger: {proposal.trigger or 'Direct deterministic evaluation'}",
+        f"Proposal basis: {proposal.reason}",
         f"Autonomy state: {autonomy_state}",
         f"Autonomy level: {report.autonomy_level}",
         f"Policy: {report.decision.policy_version}",
