@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from aida.authorization.confirmation import ConfirmationService
 from aida.autonomy.controller import AutonomyController
+from aida.autonomy.models import AutonomyLevel
 from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
 from aida.frontend.bug_report_dialog import BugReportDialog
@@ -33,6 +34,7 @@ from aida.frontend.task_manager import TaskManager
 from aida.frontend.theme import apply_theme
 from aida.frontend.window import AIDAWindow
 from aida.memory.database import MemoryDatabase
+from aida.memory.models import ProcessOutcome
 from aida.memory.service import MemoryService
 from aida.security.continuity import SecurityTaskLedger
 from aida.security.startup_recovery import SecurityStartupReconciler
@@ -45,6 +47,9 @@ from aida.support.reporting import (
     EmlDraftConfig,
 )
 from aida.ui.cli import aida_say_text
+
+
+_OBSERVATION_INTERVAL_MS = 15 * 60 * 1000
 
 
 def _get_application() -> QApplication:
@@ -114,10 +119,7 @@ def main() -> int:
 
     def activate_main_window() -> None:
         current_state = window.windowState()
-        restored_state = (
-            current_state
-            & ~Qt.WindowState.WindowMinimized
-        )
+        restored_state = current_state & ~Qt.WindowState.WindowMinimized
         restored_state |= Qt.WindowState.WindowActive
         window.setWindowState(restored_state)
         window.show()
@@ -147,14 +149,10 @@ def main() -> int:
     window.bug_report_requested.connect(show_bug_report)
 
     session_store = SessionStore()
-    history = ChatHistory(
-        message_saver=session_store.save_message
-    )
+    history = ChatHistory(message_saver=session_store.save_message)
     task_manager = TaskManager()
     command_router = CommandRouter()
-    status_manager = StatusManager(
-        initial_status=AIDAStatus.STARTUP
-    )
+    status_manager = StatusManager(initial_status=AIDAStatus.STARTUP)
     brain = AIDABrain()
 
     command_registry = CommandRegistry(
@@ -206,9 +204,7 @@ def main() -> int:
         if window.isMinimized():
             overlay.notify_message()
 
-    window.message_displayed.connect(
-        handle_message_displayed
-    )
+    window.message_displayed.connect(handle_message_displayed)
 
     def resume_provider_owned_scan() -> None:
         reconciler = SecurityStartupReconciler(
@@ -232,14 +228,45 @@ def main() -> int:
             if candidate.task.mode == "FULL_SWEEP"
             else CommandType.SECURITY_SURFACE_SCAN
         )
+        provider_elapsed = (
+            _format_elapsed(candidate.provider_elapsed_seconds)
+            if candidate.provider_elapsed_seconds is not None
+            else "unknown"
+        )
         history.add_system(
             (
                 "Existing Microsoft Defender scan detected. "
                 "AIDA is resuming local monitoring.\n\n"
                 f"Provider Scan ID: {candidate.active_scan.scan_id}\n"
-                f"Provider started: {candidate.active_scan.started_at}"
+                f"Provider started: {candidate.active_scan.started_at}\n"
+                f"Provider elapsed: {provider_elapsed}\n"
+                "AIDA monitoring-session elapsed: 00:00:00\n"
+                f"Recovery count: {candidate.task.recovery_count}"
             ),
             include_in_context=False,
+        )
+        memory_service.log_event(
+            "PROCESS_RECOVERED",
+            "security.continuity",
+            (
+                "AIDA reattached to a matching provider-owned Microsoft "
+                "Defender scan after startup."
+            ),
+            payload={
+                "task_id": candidate.task.task_id,
+                "provider_scan_id": candidate.active_scan.scan_id,
+                "mode": candidate.task.mode,
+                "provider_started_at": candidate.active_scan.started_at,
+                "provider_elapsed_seconds": candidate.provider_elapsed_seconds,
+                "monitoring_session_started_at": (
+                    candidate.task.monitoring_session_started_at.isoformat()
+                ),
+                "recovery_count": candidate.task.recovery_count,
+                "interrupted_task_count": candidate.interrupted_task_count,
+            },
+            outcome=ProcessOutcome.RECOVERED,
+            confidence=1.0,
+            promote=True,
         )
         command_manager.execute(
             RoutedCommand(
@@ -258,33 +285,71 @@ def main() -> int:
             )
         )
 
+    observation_timer = QTimer(app)
+    observation_timer.setInterval(_OBSERVATION_INTERVAL_MS)
+
+    def run_observation_if_idle() -> None:
+        settings = autonomy_controller.settings
+        if (
+            not settings.enabled
+            or settings.kill_switch_engaged
+            or settings.level < AutonomyLevel.OBSERVE
+        ):
+            return
+        if command_manager.is_running or task_manager.active_task_names:
+            return
+        if status_manager.current is not AIDAStatus.STANDBY:
+            return
+        command_manager.execute(
+            RoutedCommand(
+                command_type=CommandType.AUTONOMY_OBSERVE_SECURITY,
+                original_text="Scheduled Observation-mode security posture check",
+                local_only=True,
+                intent_id="autonomy.observe.security",
+                confidence=1.0,
+                user_initiated=False,
+            )
+        )
+
+    def handle_autonomy_observation_schedule(enabled: bool) -> None:
+        if enabled:
+            QTimer.singleShot(1500, run_observation_if_idle)
+
+    observation_timer.timeout.connect(run_observation_if_idle)
+    observation_timer.start()
+    window.autonomy_toggled.connect(handle_autonomy_observation_schedule)
+
     window.show()
     overlay.set_status(status_manager.current)
     overlay.move_to_default_position()
     overlay.show()
     QTimer.singleShot(300, resume_provider_owned_scan)
+    if autonomy_controller.settings.enabled:
+        QTimer.singleShot(2500, run_observation_if_idle)
 
     try:
         return app.exec()
     finally:
+        observation_timer.stop()
+        observation_timer.timeout.disconnect(run_observation_if_idle)
+        window.autonomy_toggled.disconnect(handle_autonomy_observation_schedule)
         confirmation_service.invalidate_all()
         status_manager.unsubscribe(update_overlay)
-        window.message_displayed.disconnect(
-            handle_message_displayed
-        )
-        window.memory_requested.disconnect(
-            show_memory_bank
-        )
-        window.bug_report_requested.disconnect(
-            show_bug_report
-        )
-        overlay.clicked.disconnect(
-            restore_main_window
-        )
+        window.message_displayed.disconnect(handle_message_displayed)
+        window.memory_requested.disconnect(show_memory_bank)
+        window.bug_report_requested.disconnect(show_bug_report)
+        overlay.clicked.disconnect(restore_main_window)
         bug_report_dialog.close()
         memory_dialog.close()
         overlay.close()
         controller.shutdown()
+
+
+def _format_elapsed(total_seconds: int) -> str:
+    safe = max(0, total_seconds)
+    hours, remainder = divmod(safe, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 if __name__ == "__main__":
