@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -22,6 +21,7 @@ class CommandType(Enum):
     AUTONOMY_ENABLE = auto()
     AUTONOMY_DISABLE = auto()
     AUTONOMY_STATUS = auto()
+    AUTONOMY_OBSERVE_SECURITY = auto()
     MEMORY_SHOW = auto()
     MEMORY_SEARCH = auto()
     MEMORY_ADD = auto()
@@ -29,6 +29,8 @@ class CommandType(Enum):
     MEMORY_REVISE = auto()
     STAND_DOWN_REQUEST = auto()
     STAND_DOWN_CONFIRM = auto()
+    STAND_DOWN_REVOKE_REQUEST = auto()
+    STAND_DOWN_REVOKE_CONFIRM = auto()
     STAND_DOWN_LIST = auto()
     APPLICATION_HEALTH = auto()
     APPLICATION_REPAIR_PLAN = auto()
