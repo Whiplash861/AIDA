@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -45,7 +44,7 @@ _FORBIDDEN = {
 
 @dataclass(frozen=True, slots=True)
 class AutonomyPolicy:
-    version: str = "2026.07-alpha-1"
+    version: str = "2026.07-alpha-2"
 
     def evaluate(
         self,
