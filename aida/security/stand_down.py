@@ -202,30 +202,8 @@ class StandDownService:
                 expired,
             )
 
-        if explicit_scan:
-            self._touch(record)
-            self.memory.log_event(
-                "STAND_DOWN_EXPLICIT_SCAN_OVERRIDE",
-                "security.stand_down",
-                (
-                    f"An explicit scan of {record.path.name} temporarily "
-                    "overrode Stand Down suppression for this assessment."
-                ),
-                payload={
-                    "exception_id": record.exception_id,
-                    "path": str(record.path),
-                },
-                outcome=ProcessOutcome.PARTIAL,
-                confidence=1.0,
-                promote=False,
-            )
-            return StandDownEvaluation(
-                False,
-                record.status,
-                "The explicit user scan request overrides suppression for this assessment.",
-                record,
-            )
-
+        # New provider alarms and identity changes always invalidate trust before
+        # an explicit scan can temporarily override recommendation suppression.
         if current_alarm_count > record.alarm_count_at_creation:
             suspended = self._set_status(
                 record,
@@ -269,6 +247,30 @@ class StandDownService:
                 suspended.status,
                 suspended.suspended_reason or "",
                 suspended,
+            )
+
+        if explicit_scan:
+            self._touch(record)
+            self.memory.log_event(
+                "STAND_DOWN_EXPLICIT_SCAN_OVERRIDE",
+                "security.stand_down",
+                (
+                    f"An explicit scan of {record.path.name} temporarily "
+                    "overrode Stand Down suppression for this assessment."
+                ),
+                payload={
+                    "exception_id": record.exception_id,
+                    "path": str(record.path),
+                },
+                outcome=ProcessOutcome.PARTIAL,
+                confidence=1.0,
+                promote=False,
+            )
+            return StandDownEvaluation(
+                False,
+                record.status,
+                "The explicit user scan request overrides suppression for this assessment.",
+                record,
             )
 
         self._touch(record)
