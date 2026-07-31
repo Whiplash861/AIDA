@@ -39,6 +39,7 @@ Expected:
 - Heartbeats display **Provider-total elapsed** and **AIDA monitoring-session elapsed** separately.
 - Memory records the interruption, recovery count, reattachment, and final provider result.
 - The scan reaches a provider-confirmed terminal state without duplicate durable tasks.
+- When Defender reports no matching active scan, stale Quick/Full records close as **abandoned with unknown provider outcome**, not completed or cancelled.
 
 Failure evidence to preserve:
 
@@ -101,18 +102,20 @@ Validate these states separately:
 
 - A newly reported or reactivated provider detection inside the scan window.
 - A pre-existing unresolved provider detection that remains active.
-- A provider detection that changes to resolved.
-- A prior active detection absent from a later complete provider snapshot.
+- A provider detection whose later record explicitly reports inactive state or successful provider action.
+- A prior detection absent from a later history snapshot without any explicit provider resolution state.
 
 Expected:
 
-- AIDA separates **new/reactivated**, **pre-existing unresolved**, and **resolved** findings.
+- AIDA separates **new/reactivated**, **pre-existing unresolved**, and **provider-confirmed resolved** findings.
 - A scan with no new finding does not claim that an old unresolved threat was newly detected.
+- AIDA creates `THREAT_NEUTRALIZED` only from explicit provider state or action evidence.
+- A missing history record alone does not produce a neutralization claim.
 - Threat reports distinguish provider observations from AIDA inference.
 - Attribution defaults to unknown without provider-supplied evidence.
 - Endpoint registration or region is never presented as an actor's physical location.
 - Stand Down status is shown separately from the provider's factual detection.
-- Memory creates `THREAT_DETECTED`, `THREAT_STILL_UNRESOLVED`, or `THREAT_NEUTRALIZED` events as appropriate.
+- Memory creates `THREAT_DETECTED`, `THREAT_STILL_UNRESOLVED`, or `THREAT_NEUTRALIZED` events only when the corresponding evidence is available.
 
 ## Test 5 — Controlled Autonomy Observation mode
 
@@ -140,5 +143,6 @@ The integrated lifecycle passes when:
 - No cancellation is reported without a Defender cancellation event.
 - Stand Down cannot survive identity change, new alarm, expiry, or confirmed revocation.
 - Old unresolved detections are never mislabeled as new findings.
+- Neutralization is never inferred from missing history alone.
 - Observation mode records decisions but never executes an operational response.
 - All resulting security evidence remains local-only and excluded from language-model context.
