@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import time
@@ -408,20 +407,16 @@ class CommandManager(QObject):
             return
 
         wall_now = self._wall_clock()
-        elapsed_seconds = max(
+        session_elapsed_seconds = max(
             0,
             int((wall_now - started_at).total_seconds()),
         )
-        if elapsed_seconds <= self._security_last_elapsed_seconds:
+        if session_elapsed_seconds <= self._security_last_elapsed_seconds:
             return
 
         self._security_last_heartbeat_at = monotonic_now
-        self._security_last_elapsed_seconds = elapsed_seconds
+        self._security_last_elapsed_seconds = session_elapsed_seconds
 
-        parts = [
-            "Security task is still running.",
-            f"Elapsed time: {_format_elapsed_clock(elapsed_seconds)}.",
-        ]
         provider_started_at = (
             self._active_executor.provider_started_at
             if self._active_executor is not None
@@ -431,16 +426,30 @@ class CommandManager(QObject):
             provider_started_at,
             wall_now,
         )
-        if provider_elapsed is not None and abs(provider_elapsed - elapsed_seconds) >= 5:
+        parts = [
+            "Security task is still running.",
+            (
+                "AIDA monitoring-session elapsed: "
+                f"{_format_elapsed_clock(session_elapsed_seconds)}."
+            ),
+        ]
+        if provider_elapsed is not None:
             parts.append(
-                "Provider elapsed: "
+                "Provider-total elapsed: "
                 f"{_format_elapsed_clock(provider_elapsed)}."
             )
+        else:
+            parts.append("Provider-total elapsed: not yet available.")
 
+        duration_basis = (
+            provider_elapsed
+            if provider_elapsed is not None
+            else session_elapsed_seconds
+        )
         full_sweep_notice = (
             self._active_executor is not None
             and self._active_executor.heartbeat_kind == "full_sweep"
-            and elapsed_seconds >= 10 * 60
+            and duration_basis >= 10 * 60
             and not self._security_duration_notice_announced
         )
         if full_sweep_notice:
@@ -492,7 +501,6 @@ def _format_elapsed_clock(total_seconds: int) -> str:
     hours, remainder = divmod(safe_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
 
 
 def _first_line(text: str) -> str:
