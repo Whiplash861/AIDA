@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import sqlite3
@@ -130,10 +129,15 @@ CREATE TABLE IF NOT EXISTS security_tasks (
     authorization_reason TEXT NOT NULL,
     provider_started_at TEXT,
     monitoring_started_at TEXT NOT NULL,
+    monitoring_session_started_at TEXT NOT NULL,
     last_provider_check_at TEXT,
     provider_state TEXT NOT NULL,
     tracking_state TEXT NOT NULL,
     recovered INTEGER NOT NULL DEFAULT 0,
+    recovery_count INTEGER NOT NULL DEFAULT 0,
+    last_recovered_at TEXT,
+    cancellation_requested_at TEXT,
+    cancellation_confirmed_at TEXT,
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -201,19 +205,34 @@ class MemoryDatabase:
                 "PRAGMA table_info(security_tasks)"
             ).fetchall()
         }
-        if "user_id" not in columns:
-            connection.execute(
-                "ALTER TABLE security_tasks "
-                "ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
-            )
-        if "device_id" not in columns:
-            connection.execute(
-                "ALTER TABLE security_tasks "
-                "ADD COLUMN device_id TEXT NOT NULL DEFAULT ''"
-            )
+        additions = {
+            "user_id": "TEXT NOT NULL DEFAULT ''",
+            "device_id": "TEXT NOT NULL DEFAULT ''",
+            "monitoring_session_started_at": "TEXT NOT NULL DEFAULT ''",
+            "recovery_count": "INTEGER NOT NULL DEFAULT 0",
+            "last_recovered_at": "TEXT",
+            "cancellation_requested_at": "TEXT",
+            "cancellation_confirmed_at": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE security_tasks ADD COLUMN {name} {definition}"
+                )
+        connection.execute(
+            "UPDATE security_tasks "
+            "SET monitoring_session_started_at = monitoring_started_at "
+            "WHERE monitoring_session_started_at = ''"
+        )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_security_tasks_scope_open "
             "ON security_tasks("
             "user_id, device_id, provider_state, tracking_state, updated_at DESC"
+            ")"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_security_tasks_provider_scan "
+            "ON security_tasks("
+            "user_id, device_id, provider_id, provider_scan_id, updated_at DESC"
             ")"
         )
