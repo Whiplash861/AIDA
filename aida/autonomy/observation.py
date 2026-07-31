@@ -13,6 +13,14 @@ from aida.autonomy.reporting import AutonomousDecisionReport
 from aida.security.detection_intelligence import DetectionAssessment
 
 
+_READ_ONLY_ACTIONS = {
+    ActionKind.OBSERVE,
+    ActionKind.REPORT,
+    ActionKind.ALERT,
+    ActionKind.SECURITY_STATUS,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class SecurityObservation:
     provider_name: str
@@ -41,31 +49,32 @@ class AutonomyObservationService:
     def evaluate(self, observation: SecurityObservation) -> ObservationOutcome:
         evidence = _evidence_lines(observation)
         proposals = self._proposals(observation)
+        settings = self.controller.settings
         reports: list[AutonomousDecisionReport] = []
         for proposal in proposals:
             decision = self.controller.evaluate(proposal)
+            operational = proposal.action_kind not in _READ_ONLY_ACTIONS
             reports.append(
                 AutonomousDecisionReport(
                     proposal=proposal,
                     decision=decision,
                     observed_evidence=evidence,
                     action_taken=(
-                        "No operational action taken. Observation mode only."
-                        if proposal.action_kind not in {
-                            ActionKind.OBSERVE,
-                            ActionKind.REPORT,
-                            ActionKind.ALERT,
-                            ActionKind.SECURITY_STATUS,
-                        }
+                        "No operational action taken. Observation executor only."
+                        if operational
                         else "Read-only observation recorded."
                     ),
                     provider_result="No provider mutation requested",
                     remaining_risk=_remaining_risk(observation),
-                    recommended_follow_up=(
-                        "Review and explicitly authorize an operational response."
-                        if decision.disposition
-                        is PolicyDisposition.REQUIRE_USER
-                        else "Continue deterministic monitoring."
+                    recommended_follow_up=_follow_up(
+                        decision.disposition,
+                        operational,
+                    ),
+                    autonomy_enabled=settings.enabled,
+                    autonomy_level=settings.level.name.title(),
+                    authorization_source=_authorization_source(
+                        decision.disposition,
+                        operational,
                     ),
                 )
             )
@@ -86,7 +95,7 @@ class AutonomyObservationService:
         proposals: list[ActionProposal] = [
             ActionProposal(
                 action_kind=ActionKind.REPORT,
-                reason="A scheduled deterministic security observation completed.",
+                reason="A deterministic security observation completed.",
                 risk=ActionRisk.INFORMATIONAL,
                 autonomous=True,
                 scope={"provider": observation.provider_name},
@@ -188,6 +197,37 @@ def _remaining_risk(observation: SecurityObservation) -> str:
     if not observation.provider_healthy:
         return "Provider health is degraded or could not be fully confirmed."
     return "No elevated risk was identified by this observation."
+
+
+def _follow_up(
+    disposition: PolicyDisposition,
+    operational: bool,
+) -> str:
+    if not operational:
+        return "Continue deterministic monitoring."
+    if disposition is PolicyDisposition.REQUIRE_USER:
+        return "Review and explicitly authorize any operational response."
+    if disposition is PolicyDisposition.ALLOW:
+        return (
+            "Policy would permit this action at the current authority level, "
+            "but the Observation executor intentionally withheld execution."
+        )
+    return "The considered action remains denied. Continue monitoring."
+
+
+def _authorization_source(
+    disposition: PolicyDisposition,
+    operational: bool,
+) -> str:
+    if not operational:
+        return "Read-only observation allowed by deterministic policy"
+    if disposition is PolicyDisposition.REQUIRE_USER:
+        return "No operational authorization; direct user confirmation required"
+    if disposition is PolicyDisposition.ALLOW:
+        return (
+            "Deterministic policy allowance only; Observation executor does not execute"
+        )
+    return "Deterministic policy denial"
 
 
 def _bool_text(value: bool | None) -> str:
