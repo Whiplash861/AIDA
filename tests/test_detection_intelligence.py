@@ -108,7 +108,7 @@ def test_provider_status_change_records_resolution() -> None:
     assert result.resolved[0].unresolved is False
 
 
-def test_detection_missing_from_complete_later_snapshot_is_resolved() -> None:
+def test_missing_history_alone_does_not_claim_resolution() -> None:
     reconciler = DetectionReconciler()
     detected = datetime.now(timezone.utc) - timedelta(hours=1)
     existing = _detection(
@@ -123,6 +123,5 @@ def test_detection_missing_from_complete_later_snapshot_is_resolved() -> None:
         reconciler.snapshot(()),
     )
 
-    assert len(result.resolved) == 1
-    assert result.resolved[0].detection.metadata["is_active"] is False
-    assert "absent" in result.resolved[0].detection.metadata["resolution_basis"]
+    assert result.resolved == ()
+    assert result.assessments == ()
