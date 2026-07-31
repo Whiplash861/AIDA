@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from aida.security.continuity import (
+    ProviderTaskState,
     SecurityTaskLedger,
     SecurityTaskRecord,
+    TrackingState,
 )
 from aida.security.windows.defender_cancel import (
     ActiveDefenderScan,
@@ -20,6 +22,7 @@ class SecurityRecoveryCandidate:
     active_scan: ActiveDefenderScan
     interrupted_task_count: int
     provider_elapsed_seconds: int | None
+    abandoned_task_count: int = 0
 
 
 class SecurityStartupReconciler:
@@ -35,8 +38,13 @@ class SecurityStartupReconciler:
 
     def reconcile(self) -> SecurityRecoveryCandidate | None:
         interrupted = self.ledger.mark_startup_interrupted()
+        open_cancellable = self._open_cancellable_tasks()
         active = self.defender.active_cancelable_scan()
         if active is None:
+            self._abandon(
+                open_cancellable,
+                "AIDA restarted, but Microsoft Defender reported no active Quick or Full Scan. The provider outcome while AIDA was closed is unknown.",
+            )
             return None
 
         expected_mode = {
@@ -44,14 +52,32 @@ class SecurityStartupReconciler:
             DefenderCancelableScan.FULL: "FULL_SWEEP",
         }[active.mode]
         candidates = [
-            task
-            for task in self.ledger.open_tasks()
-            if task.provider_id == "microsoft_defender"
-            and task.mode == expected_mode
+            task for task in open_cancellable if task.mode == expected_mode
         ]
         task = _select_matching_task(candidates, active)
         if task is None:
+            self._abandon(
+                open_cancellable,
+                (
+                    "A different provider-owned Quick or Full Scan was active "
+                    "at startup. AIDA could not safely associate it with this "
+                    "durable task."
+                ),
+            )
             return None
+
+        unmatched = [
+            candidate
+            for candidate in open_cancellable
+            if candidate.task_id != task.task_id
+        ]
+        abandoned = self._abandon(
+            unmatched,
+            (
+                "AIDA recovered a different provider-owned scan. This older "
+                "durable task no longer had a matching active provider scan."
+            ),
+        )
 
         provider_started_at = _parse_time(active.started_at)
         updated = self.ledger.mark_recovered(
@@ -68,7 +94,32 @@ class SecurityStartupReconciler:
             active_scan=active,
             interrupted_task_count=interrupted,
             provider_elapsed_seconds=_elapsed_seconds(provider_started_at),
+            abandoned_task_count=abandoned,
         )
+
+    def _open_cancellable_tasks(self) -> list[SecurityTaskRecord]:
+        return [
+            task
+            for task in self.ledger.open_tasks()
+            if task.provider_id == "microsoft_defender"
+            and task.mode in {"SURFACE", "FULL_SWEEP"}
+        ]
+
+    def _abandon(
+        self,
+        tasks: list[SecurityTaskRecord],
+        detail: str,
+    ) -> int:
+        for task in tasks:
+            self.ledger.update(
+                task.task_id,
+                provider_state=ProviderTaskState.UNKNOWN,
+                tracking_state=TrackingState.ABANDONED,
+                detail=detail,
+                provider_check_succeeded=True,
+                terminal=True,
+            )
+        return len(tasks)
 
 
 def _select_matching_task(
@@ -98,7 +149,7 @@ def _select_matching_task(
             ).total_seconds()
         ) <= 5 * 60
     ]
-    return timed[0] if timed else None
+    return timed[0] if len(timed) == 1 else None
 
 
 def _elapsed_seconds(started_at: datetime | None) -> int | None:
