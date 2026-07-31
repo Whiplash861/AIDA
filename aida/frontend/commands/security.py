@@ -1,10 +1,9 @@
-
 from __future__ import annotations
 
 import getpass
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +20,14 @@ from aida.security.continuity import (
     SecurityTaskRecord,
     TrackingState,
 )
+from aida.security.detection_intelligence import (
+    DetectionAssessment,
+    DetectionDisposition,
+    DetectionReconciliation,
+    DetectionReconciler,
+    DetectionSnapshot,
+    render_detection_reconciliation,
+)
 from aida.security.models import (
     ProviderDetection,
     ScanScope,
@@ -34,6 +41,11 @@ from aida.security.orchestrator import (
     SecurityOrchestrator,
 )
 from aida.security.policy import SecurityPolicy
+from aida.security.stand_down import (
+    StandDownEvaluation,
+    StandDownService,
+    StandDownStatus,
+)
 from aida.security.threat_intelligence import (
     ThreatIntelligenceBuilder,
     render_threat_report,
@@ -144,6 +156,7 @@ class SecurityScanExecutor(CommandExecutor):
         poll_interval_seconds: float = 1.0,
         memory_service: MemoryService | None = None,
         task_ledger: SecurityTaskLedger | None = None,
+        stand_down_service: StandDownService | None = None,
         recovery_task_id: str | None = None,
     ) -> None:
         self._mode = mode
@@ -155,10 +168,12 @@ class SecurityScanExecutor(CommandExecutor):
         self._poll_interval_seconds = max(0.05, poll_interval_seconds)
         self._memory = memory_service
         self._ledger = task_ledger
+        self._stand_down = stand_down_service
         self._recovery_task_id = recovery_task_id
         self._provider_started_at: datetime | None = None
         self._ledger_task_id: str | None = None
         self._threat_intelligence = ThreatIntelligenceBuilder()
+        self._detection_reconciler = DetectionReconciler()
 
     @property
     def category(self) -> CommandCategory:
@@ -174,6 +189,12 @@ class SecurityScanExecutor(CommandExecutor):
 
     @property
     def start_message(self) -> str:
+        if self._recovery_task_id is not None:
+            return (
+                "Existing provider-owned security scan detected. AIDA is "
+                "starting a new local monitoring session without restarting "
+                "the antivirus engine scan."
+            )
         if self._mode is SecurityScanMode.FULL_SWEEP:
             return (
                 "Full-System Sweep directly authorized and starting. "
@@ -194,8 +215,6 @@ class SecurityScanExecutor(CommandExecutor):
 
     @property
     def locks_input(self) -> bool:
-        # Long provider tasks remain interactive so the user can request status,
-        # disable autonomy, or invoke the separately confirmed cancel protocol.
         return False
 
     @property
@@ -218,6 +237,7 @@ class SecurityScanExecutor(CommandExecutor):
 
         request: SecurityScanRequest | None = None
         discovery: WindowsProviderDiscovery | None = None
+        pre_scan_snapshot: DetectionSnapshot | None = None
         try:
             discovery = self._discover()
             provider_status = discovery.provider.get_status()
@@ -240,6 +260,11 @@ class SecurityScanExecutor(CommandExecutor):
                     {"reason": "provider_inactive"},
                 )
                 return result
+
+            if self._recovery_task_id is None:
+                pre_scan_snapshot = self._read_detection_snapshot(
+                    discovery.provider
+                )
 
             request = SecurityScanRequest(
                 mode=self._mode,
@@ -323,25 +348,46 @@ class SecurityScanExecutor(CommandExecutor):
             )
 
         if outcome.status.state is SecurityScanState.COMPLETED:
+            post_scan_snapshot = self._read_detection_snapshot(
+                discovery.provider
+            )
+            reconciliation = self._reconcile_detections(
+                pre_scan_snapshot,
+                post_scan_snapshot,
+                tuple(outcome.detections),
+            )
+            stand_down_results = self._evaluate_stand_down(reconciliation)
             result = self._completed_result(
                 provider_name=discovery.provider.display_name,
-                detections=outcome.detections,
+                reconciliation=reconciliation,
+                stand_down_results=stand_down_results,
             )
             self._record_outcome(
                 ProcessOutcome.SUCCEEDED,
                 f"{self._scan_label()} completed.",
                 {
                     "mode": self._mode.name,
-                    "detection_count": len(outcome.detections),
+                    "new_detection_count": len(
+                        reconciliation.new_detections
+                    ),
+                    "unresolved_existing_count": len(
+                        reconciliation.unresolved_existing
+                    ),
+                    "resolved_count": len(reconciliation.resolved),
                     "provider": discovery.provider.display_name,
                     "provider_started_at": (
                         self._provider_started_at.isoformat()
                         if self._provider_started_at
                         else None
                     ),
+                    "recovered_monitoring": bool(self._recovery_task_id),
                 },
             )
-            self._record_detections(outcome.detections)
+            self._record_detection_assessments(
+                reconciliation,
+                stand_down_results,
+            )
+            self._record_recovery_completion()
             return result
 
         detail = outcome.status.detail or "No provider detail was returned."
@@ -356,6 +402,7 @@ class SecurityScanExecutor(CommandExecutor):
             {
                 "state": outcome.status.state.name,
                 "provider_detail": detail,
+                "recovered_monitoring": bool(self._recovery_task_id),
             },
         )
         return CommandResult(
@@ -400,10 +447,88 @@ class SecurityScanExecutor(CommandExecutor):
             )
         return ScanScope(paths=(target,))
 
+    def _read_detection_snapshot(
+        self,
+        provider: object,
+    ) -> DetectionSnapshot | None:
+        getter = getattr(provider, "get_detection_snapshot", None)
+        if not callable(getter):
+            return None
+        try:
+            rows = getter()
+        except (OSError, RuntimeError):
+            return None
+        return self._detection_reconciler.snapshot(tuple(rows or ()))
+
+    def _reconcile_detections(
+        self,
+        before: DetectionSnapshot | None,
+        after: DetectionSnapshot | None,
+        scan_window_detections: tuple[ProviderDetection, ...],
+    ) -> DetectionReconciliation:
+        effective_before = before or self._detection_reconciler.snapshot(())
+        merged_after = _merge_detections(
+            after.detections if after is not None else (),
+            scan_window_detections,
+        )
+        effective_after = self._detection_reconciler.snapshot(merged_after)
+        return self._detection_reconciler.reconcile(
+            effective_before,
+            effective_after,
+            scan_started_at=self._provider_started_at,
+        )
+
+    def _evaluate_stand_down(
+        self,
+        reconciliation: DetectionReconciliation,
+    ) -> dict[str, StandDownEvaluation]:
+        if self._stand_down is None:
+            return {}
+        evaluations: dict[str, StandDownEvaluation] = {}
+        for assessment in reconciliation.assessments:
+            path = assessment.detection.file_path
+            if path is None:
+                continue
+            active_record = self._stand_down.find_active(path)
+            if active_record is None:
+                continue
+            new_alarm = assessment.disposition in {
+                DetectionDisposition.NEW,
+                DetectionDisposition.REACTIVATED,
+            }
+            evaluation = self._stand_down.evaluate(
+                path,
+                explicit_scan=self._explicit_scan_covers(path),
+                current_alarm_count=(
+                    active_record.alarm_count_at_creation + 1
+                    if new_alarm
+                    else active_record.alarm_count_at_creation
+                ),
+            )
+            evaluations[assessment.detection.detection_id] = evaluation
+        return evaluations
+
+    def _explicit_scan_covers(self, path: Path) -> bool:
+        if self._mode is not SecurityScanMode.DEEP or not self._target_path:
+            return False
+        try:
+            target = Path(self._target_path).expanduser().resolve()
+            resource = path.expanduser().resolve()
+        except OSError:
+            return False
+        if target.is_file():
+            return target == resource
+        try:
+            resource.relative_to(target)
+            return True
+        except ValueError:
+            return False
+
     def _completed_result(
         self,
         provider_name: str,
-        detections: tuple[ProviderDetection, ...],
+        reconciliation: DetectionReconciliation,
+        stand_down_results: dict[str, StandDownEvaluation],
     ) -> CommandResult:
         lines = [
             f"{self._scan_label()} complete.",
@@ -417,26 +542,41 @@ class SecurityScanExecutor(CommandExecutor):
                     "%Y-%m-%d %H:%M:%S %Z"
                 )
             )
-        if not detections:
+        if self._recovery_task_id is not None:
             lines.append(
-                "Result: The provider reported no detections for this scan."
+                "Monitoring continuity: recovered after AIDA restart"
             )
-            speech = (
-                f"{self._scan_label()} complete. "
-                "The provider reported no detections."
-            )
+        lines.extend(["", render_detection_reconciliation(reconciliation)])
+
+        reportable = [
+            assessment
+            for assessment in reconciliation.assessments
+            if assessment.new_for_scan
+            or assessment.unresolved
+            or assessment.disposition is DetectionDisposition.RESOLVED
+        ]
+        if reportable:
+            lines.extend(["", "DETECTION DETAILS", ""])
+            for index, assessment in enumerate(reportable, start=1):
+                lines.extend(_format_assessment(index, assessment))
+                stand_down = stand_down_results.get(
+                    assessment.detection.detection_id
+                )
+                if stand_down is not None:
+                    lines.extend(_format_stand_down_evaluation(stand_down))
+                if assessment.unresolved:
+                    report = self._threat_intelligence.build(
+                        assessment.detection
+                    )
+                    lines.extend(["", render_threat_report(report), ""])
         else:
-            lines.append(f"Detections reported: {len(detections)}")
-            lines.append("")
-            for index, detection in enumerate(detections, start=1):
-                lines.extend(_format_detection(index, detection))
-                report = self._threat_intelligence.build(detection)
-                lines.extend(["", render_threat_report(report), ""])
-            speech = (
-                f"{self._scan_label()} complete. "
-                f"{len(detections)} detections were reported. "
-                "Review the local transcript."
+            lines.extend(
+                [
+                    "",
+                    "Result: No active or newly resolved provider findings required a detailed report.",
+                ]
             )
+
         lines.extend(
             [
                 "",
@@ -446,6 +586,25 @@ class SecurityScanExecutor(CommandExecutor):
                 ),
             ]
         )
+        new_count = len(reconciliation.new_detections)
+        existing_count = len(reconciliation.unresolved_existing)
+        if new_count:
+            speech = (
+                f"{self._scan_label()} complete. "
+                f"{new_count} new or reactivated detections were reported. "
+                "Review the local transcript."
+            )
+        elif existing_count:
+            speech = (
+                f"{self._scan_label()} complete. No new detections were "
+                f"attributed to this scan, but {existing_count} existing "
+                "unresolved findings remain."
+            )
+        else:
+            speech = (
+                f"{self._scan_label()} complete. "
+                "The provider reported no new unresolved detections."
+            )
         return CommandResult(
             transcript_text="\n".join(lines),
             speech_text=speech,
@@ -470,9 +629,12 @@ class SecurityScanExecutor(CommandExecutor):
         if self._recovery_task_id is not None:
             existing = self._ledger.get(self._recovery_task_id)
             if existing is not None:
+                self._provider_started_at = (
+                    existing.provider_started_at or provider_started_at
+                )
                 updated = self._ledger.update(
                     existing.task_id,
-                    provider_started_at=provider_started_at,
+                    provider_started_at=self._provider_started_at,
                     provider_state=ProviderTaskState.RUNNING,
                     tracking_state=TrackingState.RECOVERING,
                     recovered=True,
@@ -495,8 +657,8 @@ class SecurityScanExecutor(CommandExecutor):
             provider_state=ProviderTaskState.RUNNING,
             tracking_state=TrackingState.MONITORING,
         )
-        self._ledger.create(record)
-        self._ledger_task_id = record.task_id
+        created = self._ledger.create(record)
+        self._ledger_task_id = created.task_id
 
     def _update_ledger_from_status(
         self,
@@ -515,26 +677,36 @@ class SecurityScanExecutor(CommandExecutor):
             SecurityScanState.FAILED: ProviderTaskState.FAILED,
         }[state]
         recovered = bool(
-            self._provider_started_at is not None
-            and self._provider_started_at
-            < request.requested_at - _seconds(5)
+            self._recovery_task_id
+            or (
+                self._provider_started_at is not None
+                and self._provider_started_at
+                < request.requested_at - _seconds(5)
+            )
         )
         tracking_state = (
             TrackingState.RECOVERED
-            if recovered and state in {
+            if recovered
+            and state in {
                 SecurityScanState.PENDING,
                 SecurityScanState.RUNNING,
             }
             else TrackingState.TERMINAL
-            if state not in {
+            if state
+            not in {
                 SecurityScanState.PENDING,
                 SecurityScanState.RUNNING,
             }
             else TrackingState.MONITORING
         )
+        current = self._ledger.get(self._ledger_task_id)
+        detail_scan_id = _scan_id_from_detail(detail)
         self._ledger.update(
             self._ledger_task_id,
-            provider_scan_id=_scan_id_from_detail(detail),
+            provider_scan_id=(
+                detail_scan_id
+                or (current.provider_scan_id if current is not None else None)
+            ),
             provider_started_at=self._provider_started_at,
             provider_state=provider_state,
             tracking_state=tracking_state,
@@ -570,21 +742,63 @@ class SecurityScanExecutor(CommandExecutor):
             confidence=1.0,
         )
 
-    def _record_detections(
+    def _record_recovery_completion(self) -> None:
+        if self._memory is None or self._recovery_task_id is None:
+            return
+        self._memory.log_event(
+            "PROCESS_RECOVERED",
+            "security.continuity",
+            (
+                f"AIDA recovered monitoring of {self._scan_label()} and "
+                "observed its provider-confirmed completion."
+            ),
+            payload={
+                "task_id": self._recovery_task_id,
+                "provider_started_at": (
+                    self._provider_started_at.isoformat()
+                    if self._provider_started_at
+                    else None
+                ),
+            },
+            outcome=ProcessOutcome.RECOVERED,
+            confidence=1.0,
+            promote=True,
+        )
+
+    def _record_detection_assessments(
         self,
-        detections: tuple[ProviderDetection, ...],
+        reconciliation: DetectionReconciliation,
+        stand_down_results: dict[str, StandDownEvaluation],
     ) -> None:
         if self._memory is None:
             return
-        for detection in detections:
+        for assessment in reconciliation.assessments:
+            if (
+                not assessment.new_for_scan
+                and not assessment.unresolved
+                and assessment.disposition
+                is not DetectionDisposition.RESOLVED
+            ):
+                continue
+            detection = assessment.detection
             report = self._threat_intelligence.build(detection)
+            stand_down = stand_down_results.get(detection.detection_id)
+            event_type = (
+                "THREAT_NEUTRALIZED"
+                if assessment.disposition is DetectionDisposition.RESOLVED
+                else "THREAT_DETECTED"
+                if assessment.new_for_scan
+                else "THREAT_STILL_UNRESOLVED"
+            )
+            summary = (
+                f"{detection.name} was reported by {detection.source}. "
+                f"Assessment: {assessment.summary} "
+                "AIDA did not independently verify authorship or physical origin."
+            )
             self._memory.log_event(
-                "THREAT_DETECTED",
+                event_type,
                 "security.finding",
-                (
-                    f"{detection.name} was reported by {detection.source}. "
-                    "AIDA did not independently verify authorship or physical origin."
-                ),
+                summary,
                 payload={
                     "detection_id": detection.detection_id,
                     "name": detection.name,
@@ -596,48 +810,105 @@ class SecurityScanExecutor(CommandExecutor):
                         else None
                     ),
                     "metadata": detection.metadata,
+                    "disposition": assessment.disposition.value,
+                    "new_for_scan": assessment.new_for_scan,
+                    "unresolved": assessment.unresolved,
                     "likely_purpose": report.likely_purpose,
                     "classification_confidence": (
                         report.classification_confidence
                     ),
                     "threat_actor": report.threat_actor,
-                    "attribution_confidence": (
-                        report.actor_confidence.value
-                    ),
+                    "attribution_confidence": report.actor_confidence.value,
                     "actor_location": report.actor_location,
                     "possible_impacts": list(report.possible_impacts),
-                    "observed_endpoints": [
+                    "stand_down": (
                         {
-                            "address": endpoint.address,
-                            "port": endpoint.port,
-                            "registration_region": (
-                                endpoint.registration_region
+                            "status": stand_down.status.value,
+                            "suppression_active": (
+                                stand_down.suppress_aida_recommendation
                             ),
-                            "autonomous_system": (
-                                endpoint.autonomous_system
+                            "reason": stand_down.reason,
+                            "exception_id": (
+                                stand_down.record.exception_id
+                                if stand_down.record is not None
+                                else None
                             ),
                         }
-                        for endpoint in report.observed_endpoints
-                    ],
+                        if stand_down is not None
+                        else None
+                    ),
                 },
+                outcome=(
+                    ProcessOutcome.SUCCEEDED
+                    if event_type == "THREAT_NEUTRALIZED"
+                    else ProcessOutcome.PARTIAL
+                ),
                 confidence=report.classification_confidence,
                 promote=True,
             )
 
 
-def _format_detection(
+def _merge_detections(
+    primary: Iterable[ProviderDetection],
+    additional: Iterable[ProviderDetection],
+) -> tuple[ProviderDetection, ...]:
+    merged: dict[str, ProviderDetection] = {}
+    for detection in (*tuple(primary), *tuple(additional)):
+        key = detection.detection_id.strip().lower()
+        if not key:
+            key = (
+                f"{detection.name.lower()}|"
+                f"{str(detection.file_path or '').lower()}"
+            )
+        merged[key] = detection
+    return tuple(merged.values())
+
+
+def _format_assessment(
     index: int,
-    detection: ProviderDetection,
+    assessment: DetectionAssessment,
 ) -> list[str]:
+    detection = assessment.detection
     lines = [
         f"{index}. {detection.name}",
         f"   Severity: {detection.severity.name}",
         f"   Source: {detection.source}",
+        (
+            "   Assessment: "
+            + assessment.disposition.value.replace("_", " ").title()
+        ),
+        f"   New for this scan: {'yes' if assessment.new_for_scan else 'no'}",
+        f"   Unresolved: {'yes' if assessment.unresolved else 'no'}",
     ]
     if detection.file_path is not None:
         lines.append(f"   Resource: {detection.file_path}")
     if detection.detail:
-        lines.append(f"   Detail: {detection.detail}")
+        lines.append(f"   Provider detail: {detection.detail}")
+    return lines
+
+
+def _format_stand_down_evaluation(
+    evaluation: StandDownEvaluation,
+) -> list[str]:
+    if evaluation.record is None:
+        return []
+    lines = [
+        "   Stand Down status: "
+        + evaluation.status.value.replace("_", " ").title(),
+        f"   Stand Down assessment: {evaluation.reason}",
+    ]
+    if evaluation.suppress_aida_recommendation:
+        lines.append(
+            "   AIDA recommendation: suppressed by the unchanged local trust exception; the provider finding remains factual."
+        )
+    elif evaluation.status is StandDownStatus.ACTIVE:
+        lines.append(
+            "   AIDA recommendation: active Stand Down was overridden for this explicit assessment."
+        )
+    else:
+        lines.append(
+            "   AIDA recommendation: normal threat assessment resumed."
+        )
     return lines
 
 
