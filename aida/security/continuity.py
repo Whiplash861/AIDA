@@ -261,10 +261,22 @@ class SecurityTaskLedger:
     ) -> SecurityTaskRecord | None:
         task = self.find_open_by_provider_scan_id(provider_scan_id)
         if task is None:
-            return None
+            candidates = [
+                item
+                for item in self.open_tasks()
+                if item.provider_id == "microsoft_defender"
+                and item.mode in {"SURFACE", "FULL_SWEEP"}
+            ]
+            # AIDA allows only one foreground security scan. Linking an unknown
+            # provider Scan ID is safe only when that invariant leaves exactly
+            # one cancellable durable candidate.
+            if len(candidates) != 1:
+                return None
+            task = candidates[0]
         now = datetime.now(timezone.utc)
         return self.update(
             task.task_id,
+            provider_scan_id=provider_scan_id,
             provider_state=(
                 ProviderTaskState.CANCELLED
                 if confirmed
