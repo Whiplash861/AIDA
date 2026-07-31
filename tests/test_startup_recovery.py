@@ -27,6 +27,11 @@ class Defender:
         )
 
 
+class NoActiveDefender:
+    def active_cancelable_scan(self):
+        return None
+
+
 def test_startup_reconciliation_matches_same_mode(tmp_path):
     ledger = SecurityTaskLedger(MemoryDatabase(tmp_path / "m.db"))
     provider_started = datetime.now(timezone.utc) - timedelta(minutes=5)
@@ -79,7 +84,7 @@ def test_startup_reconciliation_prefers_exact_provider_scan_id(tmp_path):
             tracking_state=TrackingState.MONITORING,
         )
     )
-    ledger.create(
+    nearby = ledger.create(
         SecurityTaskRecord(
             request_id="nearby",
             provider_id="microsoft_defender",
@@ -99,12 +104,17 @@ def test_startup_reconciliation_prefers_exact_provider_scan_id(tmp_path):
 
     assert candidate is not None
     assert candidate.task.task_id == exact.task_id
+    assert candidate.abandoned_task_count == 1
+    stale = ledger.get(nearby.task_id)
+    assert stale is not None
+    assert stale.tracking_state is TrackingState.ABANDONED
+    assert stale.provider_state is ProviderTaskState.UNKNOWN
 
 
-def test_startup_reconciliation_rejects_unrelated_same_mode_scan(tmp_path):
+def test_startup_reconciliation_rejects_and_abandons_unrelated_scan(tmp_path):
     ledger = SecurityTaskLedger(MemoryDatabase(tmp_path / "mismatch.db"))
     old_start = datetime.now(timezone.utc) - timedelta(days=1)
-    ledger.create(
+    task = ledger.create(
         SecurityTaskRecord(
             request_id="old",
             provider_id="microsoft_defender",
@@ -123,3 +133,47 @@ def test_startup_reconciliation_rejects_unrelated_same_mode_scan(tmp_path):
     ).reconcile()
 
     assert candidate is None
+    abandoned = ledger.get(task.task_id)
+    assert abandoned is not None
+    assert abandoned.tracking_state is TrackingState.ABANDONED
+    assert abandoned.provider_state is ProviderTaskState.UNKNOWN
+    assert ledger.open_tasks() == []
+
+
+def test_no_active_provider_scan_abandons_stale_quick_full_tasks(tmp_path):
+    ledger = SecurityTaskLedger(MemoryDatabase(tmp_path / "none.db"))
+    surface = ledger.create(
+        SecurityTaskRecord(
+            request_id="surface",
+            provider_id="microsoft_defender",
+            mode="SURFACE",
+            authorized_by="Austin",
+            authorization_reason="manual",
+            provider_state=ProviderTaskState.RUNNING,
+            tracking_state=TrackingState.MONITORING,
+        )
+    )
+    deep = ledger.create(
+        SecurityTaskRecord(
+            request_id="deep",
+            provider_id="microsoft_defender",
+            mode="DEEP",
+            authorized_by="Austin",
+            authorization_reason="manual",
+            provider_state=ProviderTaskState.RUNNING,
+            tracking_state=TrackingState.MONITORING,
+        )
+    )
+
+    candidate = SecurityStartupReconciler(
+        ledger,
+        NoActiveDefender(),
+    ).reconcile()
+
+    assert candidate is None
+    surface_record = ledger.get(surface.task_id)
+    deep_record = ledger.get(deep.task_id)
+    assert surface_record is not None
+    assert deep_record is not None
+    assert surface_record.tracking_state is TrackingState.ABANDONED
+    assert deep_record.tracking_state is TrackingState.TRACKING_INTERRUPTED
