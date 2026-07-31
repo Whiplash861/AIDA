@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import getpass
@@ -50,10 +49,17 @@ class SecurityTaskRecord:
     monitoring_started_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    monitoring_session_started_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     last_provider_check_at: datetime | None = None
     provider_state: ProviderTaskState = ProviderTaskState.PENDING
     tracking_state: TrackingState = TrackingState.STARTING
     recovered: bool = False
+    recovery_count: int = 0
+    last_recovered_at: datetime | None = None
+    cancellation_requested_at: datetime | None = None
+    cancellation_confirmed_at: datetime | None = None
     detail: str = ""
     task_id: str = field(default_factory=lambda: uuid4().hex)
     created_at: datetime = field(
@@ -84,9 +90,6 @@ class SecurityTaskLedger:
         self.device_id = (device_id or _default_device_id()).strip()
         if not self.user_id or not self.device_id:
             raise ValueError("Security task scope cannot be empty")
-        # Databases created by the earlier prototype had no scope columns.
-        # The database itself is per-user, so blank legacy rows can be claimed
-        # by the current local user/device during the additive migration.
         with self.database.transaction() as connection:
             connection.execute(
                 "UPDATE security_tasks SET user_id = ?, device_id = ? "
@@ -105,13 +108,14 @@ class SecurityTaskLedger:
                 """
                 INSERT INTO security_tasks (
                     task_id, user_id, device_id, request_id, provider_id,
-                    provider_scan_id, mode,
-                    target_json, authorization_type, authorized_by,
-                    authorization_reason, provider_started_at,
-                    monitoring_started_at, last_provider_check_at,
-                    provider_state, tracking_state, recovered, detail,
-                    created_at, updated_at, terminal_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    provider_scan_id, mode, target_json, authorization_type,
+                    authorized_by, authorization_reason, provider_started_at,
+                    monitoring_started_at, monitoring_session_started_at,
+                    last_provider_check_at, provider_state, tracking_state,
+                    recovered, recovery_count, last_recovered_at,
+                    cancellation_requested_at, cancellation_confirmed_at,
+                    detail, created_at, updated_at, terminal_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _values(scoped),
             )
@@ -123,9 +127,14 @@ class SecurityTaskLedger:
         *,
         provider_scan_id: str | None = None,
         provider_started_at: datetime | None = None,
+        monitoring_session_started_at: datetime | None = None,
         provider_state: ProviderTaskState | None = None,
         tracking_state: TrackingState | None = None,
         recovered: bool | None = None,
+        recovery_count: int | None = None,
+        last_recovered_at: datetime | None = None,
+        cancellation_requested_at: datetime | None = None,
+        cancellation_confirmed_at: datetime | None = None,
         detail: str | None = None,
         provider_check_succeeded: bool = True,
         terminal: bool = False,
@@ -134,36 +143,50 @@ class SecurityTaskLedger:
         if current is None:
             raise KeyError(f"Unknown security task: {task_id}")
         now = datetime.now(timezone.utc)
-        updated = SecurityTaskRecord(
-            task_id=current.task_id,
-            request_id=current.request_id,
-            user_id=current.user_id,
-            device_id=current.device_id,
-            provider_id=current.provider_id,
+        updated = replace(
+            current,
             provider_scan_id=(
                 current.provider_scan_id
                 if provider_scan_id is None
                 else provider_scan_id
             ),
-            mode=current.mode,
-            target_paths=current.target_paths,
-            authorization_type=current.authorization_type,
-            authorized_by=current.authorized_by,
-            authorization_reason=current.authorization_reason,
             provider_started_at=(
                 current.provider_started_at
                 if provider_started_at is None
                 else provider_started_at
             ),
-            monitoring_started_at=current.monitoring_started_at,
+            monitoring_session_started_at=(
+                current.monitoring_session_started_at
+                if monitoring_session_started_at is None
+                else monitoring_session_started_at
+            ),
             last_provider_check_at=(
                 now if provider_check_succeeded else current.last_provider_check_at
             ),
             provider_state=provider_state or current.provider_state,
             tracking_state=tracking_state or current.tracking_state,
             recovered=current.recovered if recovered is None else recovered,
+            recovery_count=(
+                current.recovery_count
+                if recovery_count is None
+                else max(0, recovery_count)
+            ),
+            last_recovered_at=(
+                current.last_recovered_at
+                if last_recovered_at is None
+                else last_recovered_at
+            ),
+            cancellation_requested_at=(
+                current.cancellation_requested_at
+                if cancellation_requested_at is None
+                else cancellation_requested_at
+            ),
+            cancellation_confirmed_at=(
+                current.cancellation_confirmed_at
+                if cancellation_confirmed_at is None
+                else cancellation_confirmed_at
+            ),
             detail=current.detail if detail is None else detail,
-            created_at=current.created_at,
             updated_at=now,
             terminal_at=now if terminal else current.terminal_at,
         )
@@ -172,18 +195,25 @@ class SecurityTaskLedger:
                 """
                 UPDATE security_tasks
                 SET provider_scan_id = ?, provider_started_at = ?,
-                    last_provider_check_at = ?, provider_state = ?,
-                    tracking_state = ?, recovered = ?, detail = ?,
-                    updated_at = ?, terminal_at = ?
+                    monitoring_session_started_at = ?, last_provider_check_at = ?,
+                    provider_state = ?, tracking_state = ?, recovered = ?,
+                    recovery_count = ?, last_recovered_at = ?,
+                    cancellation_requested_at = ?, cancellation_confirmed_at = ?,
+                    detail = ?, updated_at = ?, terminal_at = ?
                 WHERE task_id = ? AND user_id = ? AND device_id = ?
                 """,
                 (
                     updated.provider_scan_id,
                     _iso_or_none(updated.provider_started_at),
+                    _iso(updated.monitoring_session_started_at),
                     _iso_or_none(updated.last_provider_check_at),
                     updated.provider_state.value,
                     updated.tracking_state.value,
                     int(updated.recovered),
+                    updated.recovery_count,
+                    _iso_or_none(updated.last_recovered_at),
+                    _iso_or_none(updated.cancellation_requested_at),
+                    _iso_or_none(updated.cancellation_confirmed_at),
                     updated.detail,
                     _iso(updated.updated_at),
                     _iso_or_none(updated.terminal_at),
@@ -193,6 +223,89 @@ class SecurityTaskLedger:
                 ),
             )
         return updated
+
+    def mark_recovered(
+        self,
+        task_id: str,
+        *,
+        provider_scan_id: str,
+        provider_started_at: datetime | None,
+        detail: str,
+    ) -> SecurityTaskRecord:
+        current = self.get(task_id)
+        if current is None:
+            raise KeyError(f"Unknown security task: {task_id}")
+        now = datetime.now(timezone.utc)
+        return self.update(
+            task_id,
+            provider_scan_id=provider_scan_id,
+            provider_started_at=(
+                provider_started_at or current.provider_started_at
+            ),
+            monitoring_session_started_at=now,
+            provider_state=ProviderTaskState.RUNNING,
+            tracking_state=TrackingState.RECOVERING,
+            recovered=True,
+            recovery_count=current.recovery_count + 1,
+            last_recovered_at=now,
+            detail=detail,
+        )
+
+    def record_cancellation(
+        self,
+        provider_scan_id: str,
+        *,
+        requested: bool,
+        confirmed: bool,
+        detail: str,
+    ) -> SecurityTaskRecord | None:
+        task = self.find_open_by_provider_scan_id(provider_scan_id)
+        if task is None:
+            return None
+        now = datetime.now(timezone.utc)
+        return self.update(
+            task.task_id,
+            provider_state=(
+                ProviderTaskState.CANCELLED
+                if confirmed
+                else task.provider_state
+            ),
+            tracking_state=(
+                TrackingState.TERMINAL
+                if confirmed
+                else task.tracking_state
+            ),
+            cancellation_requested_at=(now if requested else None),
+            cancellation_confirmed_at=(now if confirmed else None),
+            detail=detail,
+            terminal=confirmed,
+        )
+
+    def find_open_by_provider_scan_id(
+        self,
+        provider_scan_id: str,
+    ) -> SecurityTaskRecord | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM security_tasks
+                WHERE user_id = ? AND device_id = ?
+                  AND provider_scan_id = ?
+                  AND provider_state NOT IN (?, ?, ?)
+                  AND tracking_state != ?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (
+                    self.user_id,
+                    self.device_id,
+                    provider_scan_id,
+                    ProviderTaskState.COMPLETED.value,
+                    ProviderTaskState.CANCELLED.value,
+                    ProviderTaskState.FAILED.value,
+                    TrackingState.ABANDONED.value,
+                ),
+            ).fetchone()
+        return None if row is None else _from_row(row)
 
     def get(self, task_id: str) -> SecurityTaskRecord | None:
         with self.database.connect() as connection:
@@ -271,10 +384,15 @@ def _values(record: SecurityTaskRecord) -> tuple[Any, ...]:
         record.authorization_reason,
         _iso_or_none(record.provider_started_at),
         _iso(record.monitoring_started_at),
+        _iso(record.monitoring_session_started_at),
         _iso_or_none(record.last_provider_check_at),
         record.provider_state.value,
         record.tracking_state.value,
         int(record.recovered),
+        record.recovery_count,
+        _iso_or_none(record.last_recovered_at),
+        _iso_or_none(record.cancellation_requested_at),
+        _iso_or_none(record.cancellation_confirmed_at),
         record.detail,
         _iso(record.created_at),
         _iso(record.updated_at),
@@ -301,10 +419,22 @@ def _from_row(row: Any) -> SecurityTaskRecord:
         authorization_reason=row["authorization_reason"],
         provider_started_at=_parse_or_none(row["provider_started_at"]),
         monitoring_started_at=_parse(row["monitoring_started_at"]),
+        monitoring_session_started_at=_parse(
+            row["monitoring_session_started_at"]
+            or row["monitoring_started_at"]
+        ),
         last_provider_check_at=_parse_or_none(row["last_provider_check_at"]),
         provider_state=ProviderTaskState(row["provider_state"]),
         tracking_state=TrackingState(row["tracking_state"]),
         recovered=bool(row["recovered"]),
+        recovery_count=int(row["recovery_count"] or 0),
+        last_recovered_at=_parse_or_none(row["last_recovered_at"]),
+        cancellation_requested_at=_parse_or_none(
+            row["cancellation_requested_at"]
+        ),
+        cancellation_confirmed_at=_parse_or_none(
+            row["cancellation_confirmed_at"]
+        ),
         detail=row["detail"],
         created_at=_parse(row["created_at"]),
         updated_at=_parse(row["updated_at"]),
