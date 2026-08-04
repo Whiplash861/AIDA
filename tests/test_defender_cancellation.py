@@ -10,9 +10,11 @@ class Runner:
     def __init__(self, payloads):
         self.payloads = list(payloads)
         self.scripts = []
+        self.timeouts = []
 
     def run_json(self, script, timeout=15):
         self.scripts.append(script)
+        self.timeouts.append(timeout)
         payload = self.payloads.pop(0)
         if isinstance(payload, Exception):
             raise payload
@@ -54,6 +56,8 @@ def test_active_scan_and_provider_confirmed_cancel():
 
     assert result.requested and result.confirmed
     assert "-Scan -Cancel" in runner.scripts[1]
+    assert "-Verb RunAs" in runner.scripts[1]
+    assert runner.timeouts[1] == 120.0
     assert "{1}" in runner.scripts[2]
     assert "1002" in result.detail
 
@@ -134,3 +138,28 @@ def test_rejected_cancel_request_is_not_confirmed():
     assert result.confirmed is False
     assert result.exit_code == 5
     assert result.detail == "Elevation required"
+
+
+def test_declined_uac_is_not_reported_as_a_cancel_request():
+    runner = Runner(
+        [
+            {
+                "Requested": False,
+                "ExitCode": None,
+                "ElevationRequested": True,
+                "ElevationAccepted": False,
+                "Detail": (
+                    "Windows elevation was declined or could not be completed. "
+                    "Defender did not receive a cancellation request."
+                ),
+            }
+        ]
+    )
+    service = DefenderCancellationService(runner, sleep=lambda _: None)
+
+    result = service.request_cancel(_scan("{UAC}"))
+
+    assert result.requested is False
+    assert result.confirmed is False
+    assert result.exit_code is None
+    assert "did not receive" in result.detail
