@@ -39,7 +39,7 @@ def test_active_scan_and_provider_confirmed_cancel():
                 "StartTime": "2026-01-01T00:00:00Z",
                 "Parameters": "Full Scan",
             },
-            {"Requested": True, "ExitCode": 0},
+            {"Attempted": True, "Requested": True, "ExitCode": 0},
             {"State": "cancelled", "EventId": 1002},
         ]
     )
@@ -82,7 +82,7 @@ def test_scan_state_distinguishes_running_completed_cancelled_and_unknown():
 def test_provider_completion_is_not_misreported_as_cancellation():
     runner = Runner(
         [
-            {"Requested": True, "ExitCode": 0},
+            {"Attempted": True, "Requested": True, "ExitCode": 0},
             {"State": "completed", "EventId": 1001},
         ]
     )
@@ -100,10 +100,39 @@ def test_provider_completion_is_not_misreported_as_cancellation():
     assert "before cancellation" in result.detail
 
 
+def test_nonzero_exit_still_uses_provider_event_as_source_of_truth():
+    runner = Runner(
+        [
+            {
+                "Attempted": True,
+                "Requested": True,
+                "ExitCode": 2,
+                "Detail": (
+                    "The elevated Defender cancellation command executed with "
+                    "exit code 2. Provider-event confirmation is still required."
+                ),
+            },
+            {"State": "cancelled", "EventId": 1002},
+        ]
+    )
+    service = DefenderCancellationService(runner, sleep=lambda _: None)
+
+    result = service.request_cancel(
+        _scan("{EXIT-TWO}"),
+        confirmation_timeout_seconds=1,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result.requested is True
+    assert result.confirmed is True
+    assert result.exit_code == 2
+    assert "1002" in result.detail
+
+
 def test_transient_event_read_failure_does_not_fake_cancellation():
     runner = Runner(
         [
-            {"Requested": True, "ExitCode": 0},
+            {"Attempted": True, "Requested": True, "ExitCode": 0},
             RuntimeError("event log temporarily unavailable"),
             {"State": "cancelled", "EventId": 1002},
         ]
@@ -124,6 +153,7 @@ def test_rejected_cancel_request_is_not_confirmed():
     runner = Runner(
         [
             {
+                "Attempted": False,
                 "Requested": False,
                 "ExitCode": 5,
                 "Detail": "Elevation required",
@@ -144,13 +174,14 @@ def test_declined_uac_is_not_reported_as_a_cancel_request():
     runner = Runner(
         [
             {
+                "Attempted": False,
                 "Requested": False,
                 "ExitCode": None,
                 "ElevationRequested": True,
                 "ElevationAccepted": False,
                 "Detail": (
                     "Windows elevation was declined or could not be completed. "
-                    "Defender did not receive a cancellation request."
+                    "Defender did not receive a cancellation command."
                 ),
             }
         ]
