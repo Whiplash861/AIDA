@@ -185,8 +185,8 @@ class MicrosoftDefenderProvider(AntivirusProvider):
 
     def cancel_scan(self, handle: SecurityScanHandle) -> bool:
         del handle
-        # Defender exposes no supported Stop-MpScan cmdlet. Terminating the
-        # PowerShell host would not reliably cancel the Defender engine scan.
+        # Defender exposes no Stop-MpScan cmdlet. Provider-native cancellation
+        # is performed by the separately confirmed MpCmdRun cancellation service.
         return False
 
     def get_detections(
@@ -199,10 +199,18 @@ class MicrosoftDefenderProvider(AntivirusProvider):
             raise MicrosoftDefenderError(
                 "Detections are only available after a completed scan"
             )
+        return self._read_detections(record.handle.started_at)
 
-        payload = self._runner.run_json(
-            _detection_script(record.handle.started_at)
-        )
+    def get_detection_snapshot(self) -> list[ProviderDetection]:
+        """Return active and historical Defender detections without a scan filter."""
+
+        return self._read_detections(None)
+
+    def _read_detections(
+        self,
+        started_at: datetime | None,
+    ) -> list[ProviderDetection]:
+        payload = self._runner.run_json(_detection_script(started_at))
         if payload is None:
             return []
         rows = payload if isinstance(payload, list) else [payload]
@@ -274,14 +282,25 @@ $status = Get-MpComputerStatus -ErrorAction Stop
 """.strip()
 
 
-def _detection_script(started_at: datetime) -> str:
-    timestamp = started_at.astimezone(timezone.utc).isoformat()
+def _detection_script(started_at: datetime | None) -> str:
+    if started_at is None:
+        filter_preamble = "$filterByStart = $false\n$started = $null"
+    else:
+        timestamp = started_at.astimezone(timezone.utc).isoformat()
+        filter_preamble = (
+            "$filterByStart = $true\n"
+            f"$started = [DateTimeOffset]::Parse('{timestamp}').UtcDateTime"
+        )
     return f"""
 $ErrorActionPreference = 'Stop'
-$started = [DateTimeOffset]::Parse('{timestamp}').UtcDateTime
+{filter_preamble}
 $rows = @(
     Get-MpThreatDetection -ErrorAction Stop |
-        Where-Object {{ $_.InitialDetectionTime.ToUniversalTime() -ge $started }} |
+        Where-Object {{
+            -not $filterByStart -or
+            ($null -ne $_.InitialDetectionTime -and
+             $_.InitialDetectionTime.ToUniversalTime() -ge $started)
+        }} |
         ForEach-Object {{
             $detection = $_
             $threat = Get-MpThreat -ThreatID $detection.ThreatID -ErrorAction SilentlyContinue |
@@ -345,6 +364,7 @@ def _parse_detection(row: dict[str, Any]) -> ProviderDetection:
             "resources": resources,
             "action_success": action_success,
             "is_active": _optional_bool(row.get("IsActive")),
+            "initial_detection_time": row.get("InitialDetectionTime"),
             "last_status_change": row.get("LastThreatStatusChangeTime"),
         },
     )

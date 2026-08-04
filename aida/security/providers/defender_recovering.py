@@ -33,6 +33,12 @@ class RecoveringMicrosoftDefenderProvider(
     task. If a later Start-MpScan request reports that a scan is already in
     progress, this adapter consults Defender's Operational log and adopts only
     an active scan whose provider-reported type matches the requested mode.
+
+    The same event reconciliation also owns terminal-state precedence. An
+    elevated cancellation can make the original Start-MpScan host exit with an
+    error even though Defender correctly publishes event 1002. In that race,
+    provider-native completion or cancellation evidence must win over the local
+    host-process return code.
     """
 
     def __init__(self, runner=None) -> None:
@@ -55,37 +61,46 @@ class RecoveringMicrosoftDefenderProvider(
 
             if record.command.poll() is not None:
                 execution = record.command.result()
+                payload = self._find_existing_scan(
+                    record.request.mode,
+                    handle.started_at,
+                )
+                adopted = _adopted_scan_from_payload(
+                    payload,
+                    record.request.mode,
+                )
+                if adopted is not None:
+                    self._adopted_scans[handle.scan_id] = adopted
+                    self._replace_record_start_time(
+                        record,
+                        handle,
+                        adopted.started_at,
+                    )
+
+                    terminal = _terminal_status_from_payload(payload)
+                    if terminal is not None:
+                        record.terminal_status = terminal
+                        self._last_provider_checks.pop(handle.scan_id, None)
+                        return terminal
+
+                    # A matching RUNNING event means Defender still owns the
+                    # scan even though the local Start-MpScan host exited. This
+                    # occurs both during recovery and briefly during confirmed
+                    # cancellation while event 1002 is being published.
+                    detail = _payload_detail(payload) or (
+                        "AIDA reattached to an existing Microsoft Defender "
+                        f"{_mode_label(adopted.mode)}. Percentage progress "
+                        "is unavailable."
+                    )
+                    return SecurityScanStatus(
+                        state=SecurityScanState.RUNNING,
+                        detail=detail,
+                    )
+
+                # Preserve the older already-in-progress diagnostic as useful
+                # context, but do not adopt without a matching provider event.
                 if _is_scan_already_in_progress(execution):
-                    payload = self._find_existing_scan(
-                        record.request.mode,
-                        handle.started_at,
-                    )
-                    adopted = _adopted_scan_from_payload(
-                        payload,
-                        record.request.mode,
-                    )
-                    if adopted is not None:
-                        self._adopted_scans[handle.scan_id] = adopted
-                        self._replace_record_start_time(
-                            record,
-                            handle,
-                            adopted.started_at,
-                        )
-
-                        terminal = _terminal_status_from_payload(payload)
-                        if terminal is not None:
-                            record.terminal_status = terminal
-                            return terminal
-
-                        detail = _payload_detail(payload) or (
-                            "AIDA reattached to an existing Microsoft Defender "
-                            f"{_mode_label(adopted.mode)}. Percentage progress "
-                            "is unavailable."
-                        )
-                        return SecurityScanStatus(
-                            state=SecurityScanState.RUNNING,
-                            detail=detail,
-                        )
+                    return super().get_scan_status(handle)
 
             return super().get_scan_status(handle)
 
