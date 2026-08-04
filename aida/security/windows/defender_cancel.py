@@ -330,13 +330,7 @@ try {
         & $executable -Scan -Cancel | Out-Null
         $exitCode = $LASTEXITCODE
     } else {
-        $process = Start-Process \
-            -FilePath $executable \
-            -ArgumentList $cancelArguments \
-            -Verb RunAs \
-            -Wait \
-            -PassThru \
-            -ErrorAction Stop
+        $process = Start-Process -FilePath $executable -ArgumentList $cancelArguments -Verb RunAs -Wait -PassThru -ErrorAction Stop
         $process.Refresh()
         $exitCode = $process.ExitCode
         $elevationAccepted = $true
