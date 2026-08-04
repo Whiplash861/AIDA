@@ -126,17 +126,25 @@ class DefenderCancellationService:
                 scan=scan,
                 detail="Microsoft Defender did not return a cancellation result.",
             )
+
         exit_code = _optional_int(payload.get("ExitCode"))
-        requested = bool(payload.get("Requested"))
-        if not requested:
+        attempted = bool(payload.get("Attempted", payload.get("Requested")))
+        invocation_detail = str(
+            payload.get("Detail")
+            or "Microsoft Defender did not describe the cancellation attempt."
+        )
+        if not attempted:
             return CancellationResult(
                 requested=False,
                 confirmed=False,
                 scan=scan,
                 exit_code=exit_code,
-                detail=str(payload.get("Detail") or "Cancellation was rejected."),
+                detail=invocation_detail,
             )
 
+        # MpCmdRun exit codes do not prove whether the active provider scan
+        # actually stopped. After every successfully launched cancellation
+        # command, Defender's event log remains the source of truth.
         deadline = time.monotonic() + max(0.0, confirmation_timeout_seconds)
         last_state = DefenderProviderScanState.UNKNOWN
         while time.monotonic() <= deadline:
@@ -172,15 +180,21 @@ class DefenderCancellationService:
                     )
             self.sleep(max(0.1, poll_interval_seconds))
 
+        exit_detail = (
+            "No MpCmdRun exit code was returned."
+            if exit_code is None
+            else f"MpCmdRun exit code: {exit_code}."
+        )
         return CancellationResult(
             requested=True,
             confirmed=False,
             scan=scan,
             exit_code=exit_code,
             detail=(
-                "Cancellation was requested, but Microsoft Defender did not "
-                "publish event ID 1002 within the confirmation window. "
-                f"Last observed provider state: {last_state.value}."
+                "The cancellation command was executed, but Microsoft Defender "
+                "did not publish event ID 1002 within the confirmation window. "
+                f"Last observed provider state: {last_state.value}. "
+                f"{exit_detail} Invocation detail: {invocation_detail}"
             ),
         )
 
@@ -321,6 +335,7 @@ $isElevated = $principal.IsInRole(
 )
 $elevationRequested = -not $isElevated
 $elevationAccepted = $isElevated
+$attempted = $false
 $exitCode = $null
 $errorDetail = ''
 $cancelArguments = '-Scan -Cancel'
@@ -329,34 +344,37 @@ try {
     if ($isElevated) {
         & $executable -Scan -Cancel | Out-Null
         $exitCode = $LASTEXITCODE
+        $attempted = $true
     } else {
         $process = Start-Process -FilePath $executable -ArgumentList $cancelArguments -Verb RunAs -Wait -PassThru -ErrorAction Stop
         $process.Refresh()
         $exitCode = $process.ExitCode
         $elevationAccepted = $true
+        $attempted = $true
     }
 } catch {
     $elevationAccepted = $false
+    $attempted = $false
     $errorDetail = [string]$_.Exception.Message
 }
 
-$requested = (
-    $elevationAccepted -and
-    $null -ne $exitCode -and
-    $exitCode -eq 0
-)
-$detail = if ($requested) {
-    'Microsoft Defender accepted the elevated cancellation request.'
+$detail = if ($attempted) {
+    if ($null -eq $exitCode) {
+        'The elevated Defender cancellation command executed without an exit code. Provider-event confirmation is still required.'
+    } else {
+        "The elevated Defender cancellation command executed with exit code $exitCode. Provider-event confirmation is still required."
+    }
 } elseif ($elevationRequested -and -not $elevationAccepted) {
-    'Windows elevation was declined or could not be completed. Defender did not receive a cancellation request.'
-} elseif ($null -eq $exitCode) {
-    if ($errorDetail) { $errorDetail } else { 'No MpCmdRun exit code was returned.' }
+    'Windows elevation was declined or could not be completed. Defender did not receive a cancellation command.'
+} elseif ($errorDetail) {
+    $errorDetail
 } else {
-    "MpCmdRun returned exit code $exitCode after the cancellation attempt."
+    'The Defender cancellation command could not be executed.'
 }
 
 [PSCustomObject]@{
-    Requested = $requested
+    Attempted = $attempted
+    Requested = $attempted
     ExitCode = $exitCode
     Executable = $executable
     ElevationRequested = $elevationRequested
