@@ -88,6 +88,38 @@ def _control(
     )
 
 
+def test_cancel_request_links_same_mode_task_before_scan_loop_copies_id(tmp_path):
+    memory, ledger, stand_down = _services(tmp_path)
+    task = ledger.create(
+        SecurityTaskRecord(
+            request_id="early-race",
+            provider_id="microsoft_defender",
+            mode="FULL_SWEEP",
+            authorized_by="Austin",
+            authorization_reason="manual",
+            provider_state=ProviderTaskState.RUNNING,
+            tracking_state=TrackingState.MONITORING,
+        )
+    )
+    confirmations = ConfirmationService()
+    cancellation = Cancellation(confirmed=False)
+
+    request = _control(
+        SecurityControlOperation.CANCEL_REQUEST,
+        memory=memory,
+        ledger=ledger,
+        stand_down=stand_down,
+        confirmations=confirmations,
+        cancellation=cancellation,
+    ).execute()
+
+    linked = ledger.get(task.task_id)
+    assert linked is not None
+    assert linked.provider_scan_id == "{SCAN}"
+    assert f"AIDA task record: {task.task_id}" in request.transcript_text
+    assert "not yet linked" not in request.transcript_text
+
+
 def test_confirmed_cancel_closes_durable_scan_record(tmp_path):
     memory, ledger, stand_down = _services(tmp_path)
     ledger.create(
