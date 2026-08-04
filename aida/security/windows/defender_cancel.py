@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import time
@@ -14,12 +13,28 @@ class DefenderCancelableScan(StrEnum):
     FULL = "full"
 
 
+class DefenderProviderScanState(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class ActiveDefenderScan:
     scan_id: str
     mode: DefenderCancelableScan
     started_at: str
     parameters: str
+
+
+@dataclass(frozen=True, slots=True)
+class DefenderScanStateResult:
+    scan_id: str
+    state: DefenderProviderScanState
+    event_id: int | None = None
+    event_time: str = ""
+    parameters: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +47,7 @@ class CancellationResult:
 
 
 class DefenderCancellationService:
-    """Provider-native cancellation for active Defender Quick and Full scans."""
+    """Provider-native state and cancellation for Defender Quick and Full scans."""
 
     def __init__(
         self,
@@ -64,6 +79,35 @@ class DefenderCancellationService:
             parameters=str(payload.get("Parameters") or ""),
         )
 
+    def scan_state(self, scan_id: str) -> DefenderScanStateResult:
+        clean_id = scan_id.strip()
+        if not clean_id:
+            return DefenderScanStateResult(
+                scan_id="",
+                state=DefenderProviderScanState.UNKNOWN,
+            )
+        payload = self.runner.run_json(
+            _SCAN_STATE_SCRIPT.replace("__AIDA_SCAN_ID__", _ps_literal(clean_id)),
+            timeout=20.0,
+        )
+        if not isinstance(payload, dict):
+            return DefenderScanStateResult(
+                scan_id=clean_id,
+                state=DefenderProviderScanState.UNKNOWN,
+            )
+        raw_state = str(payload.get("State") or "unknown").strip().lower()
+        try:
+            state = DefenderProviderScanState(raw_state)
+        except ValueError:
+            state = DefenderProviderScanState.UNKNOWN
+        return DefenderScanStateResult(
+            scan_id=clean_id,
+            state=state,
+            event_id=_optional_int(payload.get("EventId")),
+            event_time=str(payload.get("EventTime") or ""),
+            parameters=str(payload.get("Parameters") or ""),
+        )
+
     def request_cancel(
         self,
         scan: ActiveDefenderScan,
@@ -91,33 +135,36 @@ class DefenderCancellationService:
             )
 
         deadline = time.monotonic() + max(0.0, confirmation_timeout_seconds)
+        last_state = DefenderProviderScanState.UNKNOWN
         while time.monotonic() <= deadline:
-            status = self.runner.run_json(
-                _CONFIRM_CANCEL_SCRIPT.replace("__AIDA_SCAN_ID__", _ps_literal(scan.scan_id)),
-                timeout=20.0,
-            )
-            if isinstance(status, dict):
-                state = str(status.get("State") or "").upper()
-                if state == "CANCELLED":
+            try:
+                status = self.scan_state(scan.scan_id)
+                last_state = status.state
+            except (OSError, RuntimeError):
+                # A transient event-log read failure is not evidence that the
+                # provider cancelled or completed the scan. Continue polling.
+                status = None
+            if status is not None:
+                if status.state is DefenderProviderScanState.CANCELLED:
                     return CancellationResult(
                         requested=True,
                         confirmed=True,
                         scan=scan,
                         exit_code=exit_code,
                         detail=(
-                            "Microsoft Defender confirmed that the scan stopped "
-                            "before completion."
+                            "Microsoft Defender confirmed through event ID 1002 "
+                            "that the scan stopped before completion."
                         ),
                     )
-                if state == "COMPLETED":
+                if status.state is DefenderProviderScanState.COMPLETED:
                     return CancellationResult(
                         requested=True,
                         confirmed=False,
                         scan=scan,
                         exit_code=exit_code,
                         detail=(
-                            "The scan completed before cancellation could be "
-                            "confirmed."
+                            "Microsoft Defender published completion event ID 1001 "
+                            "before cancellation could be confirmed."
                         ),
                     )
             self.sleep(max(0.1, poll_interval_seconds))
@@ -129,14 +176,13 @@ class DefenderCancellationService:
             exit_code=exit_code,
             detail=(
                 "Cancellation was requested, but Microsoft Defender did not "
-                "publish a cancellation event within the confirmation window."
+                "publish event ID 1002 within the confirmation window. "
+                f"Last observed provider state: {last_state.value}."
             ),
         )
 
 
-_ACTIVE_SCAN_SCRIPT = r"""
-$ErrorActionPreference = 'Stop'
-
+_EVENT_HELPER = r"""
 function Convert-AidaDefenderScanEvent {
     param($EventRecord)
     [xml]$xml = $EventRecord.ToXml()
@@ -161,6 +207,11 @@ function Convert-AidaDefenderScanEvent {
         Parameters = [string]$parameters
     }
 }
+""".strip()
+
+
+_ACTIVE_SCAN_SCRIPT = (
+    "$ErrorActionPreference = 'Stop'\n" + _EVENT_HELPER + r"""
 
 $events = @(
     Get-WinEvent -FilterHashtable @{
@@ -171,7 +222,6 @@ $events = @(
         Sort-Object TimeCreated |
         ForEach-Object { Convert-AidaDefenderScanEvent $_ }
 )
-
 $starts = @($events | Where-Object { $_.Id -eq 1000 })
 $active = $null
 foreach ($start in $starts) {
@@ -184,7 +234,6 @@ foreach ($start in $starts) {
     ) | Select-Object -Last 1
     if ($null -eq $terminal) { $active = $start }
 }
-
 if ($null -eq $active) {
     $null | ConvertTo-Json -Compress
 } else {
@@ -202,7 +251,49 @@ if ($null -eq $active) {
         Parameters = $active.Parameters
     } | ConvertTo-Json -Compress
 }
-""".strip()
+"""
+).strip()
+
+
+_SCAN_STATE_SCRIPT = (
+    "$ErrorActionPreference = 'Stop'\n" + _EVENT_HELPER + r"""
+
+$scanId = __AIDA_SCAN_ID__
+$events = @(
+    Get-WinEvent -FilterHashtable @{
+        LogName = 'Microsoft-Windows-Windows Defender/Operational'
+        Id = 1000, 1001, 1002
+        StartTime = (Get-Date).AddDays(-7)
+    } -ErrorAction SilentlyContinue |
+        Sort-Object TimeCreated |
+        ForEach-Object { Convert-AidaDefenderScanEvent $_ } |
+        Where-Object { $_.ScanId -eq $scanId }
+)
+$start = @($events | Where-Object { $_.Id -eq 1000 }) | Select-Object -Last 1
+$terminal = @(
+    $events | Where-Object {
+        $_.Id -in @(1001, 1002) -and
+        ($null -eq $start -or $_.TimeCreated -ge $start.TimeCreated)
+    }
+) | Select-Object -Last 1
+$state = if ($null -ne $terminal -and $terminal.Id -eq 1002) {
+    'cancelled'
+} elseif ($null -ne $terminal -and $terminal.Id -eq 1001) {
+    'completed'
+} elseif ($null -ne $start) {
+    'running'
+} else {
+    'unknown'
+}
+$selected = if ($null -ne $terminal) { $terminal } else { $start }
+[PSCustomObject]@{
+    State = $state
+    EventId = if ($null -ne $selected) { $selected.Id } else { $null }
+    EventTime = if ($null -ne $selected) { $selected.TimeCreated.ToString('o') } else { '' }
+    Parameters = if ($null -ne $selected) { $selected.Parameters } else { '' }
+} | ConvertTo-Json -Compress
+"""
+).strip()
 
 
 _CANCEL_SCRIPT = r"""
@@ -229,35 +320,6 @@ $exitCode = $LASTEXITCODE
         'Microsoft Defender accepted the cancellation request.'
     } else {
         "MpCmdRun returned exit code $exitCode."
-    }
-} | ConvertTo-Json -Compress
-""".strip()
-
-
-_CONFIRM_CANCEL_SCRIPT = r"""
-$ErrorActionPreference = 'Stop'
-$scanId = __AIDA_SCAN_ID__
-$events = @(
-    Get-WinEvent -FilterHashtable @{
-        LogName = 'Microsoft-Windows-Windows Defender/Operational'
-        Id = 1001, 1002
-        StartTime = (Get-Date).AddDays(-2)
-    } -ErrorAction SilentlyContinue |
-        Sort-Object TimeCreated
-)
-$terminal = $null
-foreach ($event in $events) {
-    [xml]$xml = $event.ToXml()
-    $values = @($xml.Event.EventData.Data | ForEach-Object { [string]$_.'#text' })
-    if ($values -contains $scanId) { $terminal = $event }
-}
-[PSCustomObject]@{
-    State = if ($null -eq $terminal) {
-        'RUNNING'
-    } elseif ($terminal.Id -eq 1002) {
-        'CANCELLED'
-    } else {
-        'COMPLETED'
     }
 } | ConvertTo-Json -Compress
 """.strip()
