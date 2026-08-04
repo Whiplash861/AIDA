@@ -1,6 +1,8 @@
 from aida.security.windows.defender_cancel import (
+    ActiveDefenderScan,
     DefenderCancelableScan,
     DefenderCancellationService,
+    DefenderProviderScanState,
 )
 
 
@@ -11,7 +13,19 @@ class Runner:
 
     def run_json(self, script, timeout=15):
         self.scripts.append(script)
-        return self.payloads.pop(0)
+        payload = self.payloads.pop(0)
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
+
+
+def _scan(scan_id="{1}", mode=DefenderCancelableScan.FULL):
+    return ActiveDefenderScan(
+        scan_id=scan_id,
+        mode=mode,
+        started_at="2026-01-01T00:00:00Z",
+        parameters="Full Scan" if mode is DefenderCancelableScan.FULL else "Quick Scan",
+    )
 
 
 def test_active_scan_and_provider_confirmed_cancel():
@@ -24,7 +38,7 @@ def test_active_scan_and_provider_confirmed_cancel():
                 "Parameters": "Full Scan",
             },
             {"Requested": True, "ExitCode": 0},
-            {"State": "CANCELLED"},
+            {"State": "cancelled", "EventId": 1002},
         ]
     )
     service = DefenderCancellationService(runner, sleep=lambda _: None)
@@ -41,36 +55,65 @@ def test_active_scan_and_provider_confirmed_cancel():
     assert result.requested and result.confirmed
     assert "-Scan -Cancel" in runner.scripts[1]
     assert "{1}" in runner.scripts[2]
+    assert "1002" in result.detail
+
+
+def test_scan_state_distinguishes_running_completed_cancelled_and_unknown():
+    runner = Runner(
+        [
+            {"State": "running", "EventId": 1000},
+            {"State": "completed", "EventId": 1001},
+            {"State": "cancelled", "EventId": 1002},
+            {"State": "unknown"},
+        ]
+    )
+    service = DefenderCancellationService(runner, sleep=lambda _: None)
+
+    assert service.scan_state("{RUN}").state is DefenderProviderScanState.RUNNING
+    assert service.scan_state("{DONE}").state is DefenderProviderScanState.COMPLETED
+    assert service.scan_state("{STOP}").state is DefenderProviderScanState.CANCELLED
+    assert service.scan_state("{MISS}").state is DefenderProviderScanState.UNKNOWN
 
 
 def test_provider_completion_is_not_misreported_as_cancellation():
     runner = Runner(
         [
             {"Requested": True, "ExitCode": 0},
-            {"State": "COMPLETED"},
+            {"State": "completed", "EventId": 1001},
         ]
     )
     service = DefenderCancellationService(runner, sleep=lambda _: None)
-    scan = type(
-        "Scan",
-        (),
-        {
-            "scan_id": "{2}",
-            "mode": DefenderCancelableScan.QUICK,
-            "started_at": "2026-01-01T00:00:00Z",
-            "parameters": "Quick Scan",
-        },
-    )()
 
     result = service.request_cancel(
-        scan,
+        _scan("{2}", DefenderCancelableScan.QUICK),
         confirmation_timeout_seconds=1,
         poll_interval_seconds=0.1,
     )
 
     assert result.requested is True
     assert result.confirmed is False
-    assert "completed before cancellation" in result.detail
+    assert "1001" in result.detail
+    assert "before cancellation" in result.detail
+
+
+def test_transient_event_read_failure_does_not_fake_cancellation():
+    runner = Runner(
+        [
+            {"Requested": True, "ExitCode": 0},
+            RuntimeError("event log temporarily unavailable"),
+            {"State": "cancelled", "EventId": 1002},
+        ]
+    )
+    service = DefenderCancellationService(runner, sleep=lambda _: None)
+
+    result = service.request_cancel(
+        _scan("{TRANSIENT}"),
+        confirmation_timeout_seconds=1,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result.requested is True
+    assert result.confirmed is True
 
 
 def test_rejected_cancel_request_is_not_confirmed():
@@ -84,18 +127,8 @@ def test_rejected_cancel_request_is_not_confirmed():
         ]
     )
     service = DefenderCancellationService(runner, sleep=lambda _: None)
-    scan = type(
-        "Scan",
-        (),
-        {
-            "scan_id": "{3}",
-            "mode": DefenderCancelableScan.FULL,
-            "started_at": "2026-01-01T00:00:00Z",
-            "parameters": "Full Scan",
-        },
-    )()
 
-    result = service.request_cancel(scan)
+    result = service.request_cancel(_scan("{3}"))
 
     assert result.requested is False
     assert result.confirmed is False
