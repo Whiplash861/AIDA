@@ -83,7 +83,8 @@ def test_security_heartbeat_is_visible_but_excluded_from_context() -> None:
     message = history.messages[-1]
     assert message.sender is MessageSender.SYSTEM
     assert "still running" in message.text.lower()
-    assert "Elapsed time: 00:01:00." in message.text
+    assert "AIDA monitoring-session elapsed: 00:01:00." in message.text
+    assert "Provider-total elapsed: not yet available." in message.text
     assert message.include_in_context is False
     assert history.recent_context() == []
 
@@ -102,7 +103,10 @@ def test_security_heartbeat_suppresses_duplicate_interval_events() -> None:
     manager._emit_security_heartbeat()
 
     assert len(history.messages) == 1
-    assert "Elapsed time: 00:01:00." in history.messages[0].text
+    assert (
+        "AIDA monitoring-session elapsed: 00:01:00."
+        in history.messages[0].text
+    )
 
 
 def test_security_heartbeat_reports_exact_increasing_duration() -> None:
@@ -117,9 +121,9 @@ def test_security_heartbeat_reports_exact_increasing_duration() -> None:
         manager._emit_security_heartbeat()
 
     elapsed_lines = [message.text for message in history.messages]
-    assert "Elapsed time: 00:01:00." in elapsed_lines[0]
-    assert "Elapsed time: 00:02:00." in elapsed_lines[1]
-    assert "Elapsed time: 00:03:05." in elapsed_lines[2]
+    assert "AIDA monitoring-session elapsed: 00:01:00." in elapsed_lines[0]
+    assert "AIDA monitoring-session elapsed: 00:02:00." in elapsed_lines[1]
+    assert "AIDA monitoring-session elapsed: 00:03:05." in elapsed_lines[2]
 
 
 def test_security_heartbeat_uses_transcript_clock_when_clocks_diverge() -> None:
@@ -133,5 +137,8 @@ def test_security_heartbeat_uses_transcript_clock_when_clocks_diverge() -> None:
     manager._emit_security_heartbeat()
 
     assert len(history.messages) == 1
-    assert "Elapsed time: 00:05:00." in history.messages[0].text
+    assert (
+        "AIDA monitoring-session elapsed: 00:05:00."
+        in history.messages[0].text
+    )
     assert "00:07:00" not in history.messages[0].text
