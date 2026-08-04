@@ -108,7 +108,7 @@ def _detection(
 
 
 def test_restart_recovery_reattaches_to_matching_active_scan(tmp_path: Path):
-    database, _ = _memory(tmp_path)
+    database, memory = _memory(tmp_path)
     ledger = SecurityTaskLedger(database, user_id="Austin", device_id="AIDA-TEST-PC")
     started = datetime.now(timezone.utc) - timedelta(minutes=3)
     task = ledger.create(
@@ -128,6 +128,7 @@ def test_restart_recovery_reattaches_to_matching_active_scan(tmp_path: Path):
     candidate = SecurityStartupReconciler(
         ledger,
         ActiveDefender("{SURFACE}", started),
+        memory,
     ).reconcile()
 
     assert candidate is not None
@@ -139,7 +140,7 @@ def test_restart_recovery_reattaches_to_matching_active_scan(tmp_path: Path):
 
 
 def test_restart_recovery_closes_scan_completed_while_aida_was_closed(tmp_path: Path):
-    database, _ = _memory(tmp_path)
+    database, memory = _memory(tmp_path)
     ledger = SecurityTaskLedger(database, user_id="Austin", device_id="AIDA-TEST-PC")
     task = ledger.create(
         SecurityTaskRecord(
@@ -157,6 +158,7 @@ def test_restart_recovery_closes_scan_completed_while_aida_was_closed(tmp_path: 
     candidate = SecurityStartupReconciler(
         ledger,
         TerminalDefender(DefenderProviderScanState.COMPLETED),
+        memory,
     ).reconcile()
 
     assert candidate is None
@@ -165,10 +167,15 @@ def test_restart_recovery_closes_scan_completed_while_aida_was_closed(tmp_path: 
     assert record.provider_state is ProviderTaskState.COMPLETED
     assert record.tracking_state is TrackingState.TERMINAL
     assert "1001" in record.detail
+    assert any(
+        event.event_type == "PROCESS_SUCCEEDED"
+        and event.payload.get("provider_scan_id") == "{COMPLETED}"
+        for event in memory.list_events()
+    )
 
 
 def test_restart_recovery_closes_scan_cancelled_while_aida_was_closed(tmp_path: Path):
-    database, _ = _memory(tmp_path)
+    database, memory = _memory(tmp_path)
     ledger = SecurityTaskLedger(database, user_id="Austin", device_id="AIDA-TEST-PC")
     task = ledger.create(
         SecurityTaskRecord(
@@ -186,6 +193,7 @@ def test_restart_recovery_closes_scan_cancelled_while_aida_was_closed(tmp_path: 
     SecurityStartupReconciler(
         ledger,
         TerminalDefender(DefenderProviderScanState.CANCELLED),
+        memory,
     ).reconcile()
 
     record = ledger.get(task.task_id)
@@ -194,6 +202,11 @@ def test_restart_recovery_closes_scan_cancelled_while_aida_was_closed(tmp_path: 
     assert record.tracking_state is TrackingState.TERMINAL
     assert record.cancellation_confirmed_at is not None
     assert "1002" in record.detail
+    assert any(
+        event.event_type == "PROCESS_CANCELLED"
+        and event.payload.get("provider_scan_id") == "{CANCELLED}"
+        for event in memory.list_events()
+    )
 
 
 def test_stand_down_is_local_identity_bound_and_explicit_scan_overrides(tmp_path: Path):
@@ -221,7 +234,9 @@ def test_stand_down_is_local_identity_bound_and_explicit_scan_overrides(tmp_path
     assert changed.suppress_aida_recommendation is False
     assert changed.status is StandDownStatus.SUSPENDED
     assert "identity changed" in changed.reason.lower()
-    assert service.get(record.exception_id).status is StandDownStatus.SUSPENDED
+    stored = service.get(record.exception_id)
+    assert stored is not None
+    assert stored.status is StandDownStatus.SUSPENDED
 
 
 def test_stand_down_new_provider_alarm_suspends_trust(tmp_path: Path):
@@ -240,7 +255,9 @@ def test_stand_down_new_provider_alarm_suspends_trust(tmp_path: Path):
 
     assert evaluation.status is StandDownStatus.SUSPENDED
     assert evaluation.suppress_aida_recommendation is False
-    assert service.get(record.exception_id).status is StandDownStatus.SUSPENDED
+    stored = service.get(record.exception_id)
+    assert stored is not None
+    assert stored.status is StandDownStatus.SUSPENDED
 
 
 def test_detection_reconciliation_separates_new_existing_and_resolved(tmp_path: Path):
