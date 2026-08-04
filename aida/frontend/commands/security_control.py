@@ -132,6 +132,29 @@ class SecurityControlExecutor(CommandExecutor):
             if self.task_ledger is not None
             else None
         )
+        if ledger_task is None and self.task_ledger is not None:
+            expected_mode = {
+                "quick": "SURFACE",
+                "full": "FULL_SWEEP",
+            }[scan.mode.value]
+            candidates = [
+                task
+                for task in self.task_ledger.open_tasks()
+                if task.provider_id == "microsoft_defender"
+                and task.mode == expected_mode
+            ]
+            # Cancellation may be requested immediately after Defender publishes
+            # event 1000, before the foreground scan loop has copied that provider
+            # Scan ID into the durable row. Link only when one same-mode task exists.
+            if len(candidates) == 1:
+                ledger_task = self.task_ledger.update(
+                    candidates[0].task_id,
+                    provider_scan_id=scan.scan_id,
+                    detail=(
+                        "AIDA linked the provider Scan ID during the manual "
+                        "cancellation request."
+                    ),
+                )
         request = self.confirmations.create(
             action_id=_CANCEL_ACTION,
             summary=(
