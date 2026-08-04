@@ -185,7 +185,11 @@ def test_detection_details_are_rendered_for_local_transcript() -> None:
         sleep_function=lambda seconds: None,
     ).execute()
 
-    assert "Detections reported: 1" in result.transcript_text
+    assert (
+        "New or reactivated detections in this scan window: 1"
+        in result.transcript_text
+    )
+    assert "DETECTION DETAILS" in result.transcript_text
     assert "Test.Threat" in result.transcript_text
     assert "C:\\bad.exe" in result.transcript_text
 
