@@ -58,7 +58,7 @@ def render_decision_report(report: AutonomousDecisionReport) -> str:
         f"- Severity: {proposal.threat_severity or 'Not applicable'}",
         f"- Predicted classification: {proposal.predicted_threat or 'Not available'}",
         f"- Prediction confidence: {confidence}",
-        f"- Action risk: {proposal.risk.value.replace('_', ' ').title()}",
+        f"- Action risk: {proposal.risk.name.replace('_', ' ').title()}",
     ]
     if report.observed_evidence:
         lines.extend(["", "Observed evidence:"])
