@@ -115,7 +115,10 @@ class DefenderCancellationService:
         confirmation_timeout_seconds: float = 30.0,
         poll_interval_seconds: float = 2.0,
     ) -> CancellationResult:
-        payload = self.runner.run_json(_CANCEL_SCRIPT, timeout=30.0)
+        # The user has already supplied the exact, single-use confirmation
+        # phrase before this method is called. Windows may still require UAC
+        # approval because MpCmdRun cancellation must execute elevated.
+        payload = self.runner.run_json(_CANCEL_SCRIPT, timeout=120.0)
         if not isinstance(payload, dict):
             return CancellationResult(
                 requested=False,
@@ -310,17 +313,61 @@ $executable = $candidates | Where-Object { Test-Path $_ } | Select-Object -First
 if (-not $executable) {
     throw 'Microsoft Defender MpCmdRun.exe was not found.'
 }
-& $executable -Scan -Cancel | Out-Null
-$exitCode = $LASTEXITCODE
+
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+$isElevated = $principal.IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator
+)
+$elevationRequested = -not $isElevated
+$elevationAccepted = $isElevated
+$exitCode = $null
+$errorDetail = ''
+$cancelArguments = '-Scan -Cancel'
+
+try {
+    if ($isElevated) {
+        & $executable -Scan -Cancel | Out-Null
+        $exitCode = $LASTEXITCODE
+    } else {
+        $process = Start-Process \
+            -FilePath $executable \
+            -ArgumentList $cancelArguments \
+            -Verb RunAs \
+            -Wait \
+            -PassThru \
+            -ErrorAction Stop
+        $process.Refresh()
+        $exitCode = $process.ExitCode
+        $elevationAccepted = $true
+    }
+} catch {
+    $elevationAccepted = $false
+    $errorDetail = [string]$_.Exception.Message
+}
+
+$requested = (
+    $elevationAccepted -and
+    $null -ne $exitCode -and
+    $exitCode -eq 0
+)
+$detail = if ($requested) {
+    'Microsoft Defender accepted the elevated cancellation request.'
+} elseif ($elevationRequested -and -not $elevationAccepted) {
+    'Windows elevation was declined or could not be completed. Defender did not receive a cancellation request.'
+} elseif ($null -eq $exitCode) {
+    if ($errorDetail) { $errorDetail } else { 'No MpCmdRun exit code was returned.' }
+} else {
+    "MpCmdRun returned exit code $exitCode after the cancellation attempt."
+}
+
 [PSCustomObject]@{
-    Requested = ($exitCode -eq 0)
+    Requested = $requested
     ExitCode = $exitCode
     Executable = $executable
-    Detail = if ($exitCode -eq 0) {
-        'Microsoft Defender accepted the cancellation request.'
-    } else {
-        "MpCmdRun returned exit code $exitCode."
-    }
+    ElevationRequested = $elevationRequested
+    ElevationAccepted = $elevationAccepted
+    Detail = $detail
 } | ConvertTo-Json -Compress
 """.strip()
 
