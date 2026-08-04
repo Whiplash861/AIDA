@@ -85,7 +85,8 @@ class IntentResolver:
             )
 
         if (
-            margin < self.ambiguity_margin
+            not _has_exact_phrase_match(best)
+            and margin < self.ambiguity_margin
             and runner_up >= best.definition.clarification_threshold
         ):
             return IntentResolution(
@@ -156,10 +157,18 @@ class IntentResolver:
         context: IntentContext,
     ) -> _ScoreParts:
         reasons: list[str] = []
+        exact_aliases = [
+            alias
+            for alias in definition.aliases
+            if normalize_input(alias) == normalized
+        ]
         alias_matches = [
             alias for alias in definition.aliases if contains_phrase(normalized, alias)
         ]
-        if alias_matches:
+        if exact_aliases:
+            score = 1.0
+            reasons.append(f"exact phrase match: {exact_aliases[0]}")
+        elif alias_matches:
             score = 0.93 + min(0.05, 0.01 * (len(alias_matches) - 1))
             reasons.append(f"direct phrase match: {alias_matches[0]}")
         else:
@@ -234,6 +243,13 @@ class IntentResolver:
         if len(labels) == 1:
             return f"Did you mean {labels[0]}?"
         return f"Did you mean {labels[0]} or {labels[1]}?"
+
+
+def _has_exact_phrase_match(candidate: IntentCandidate) -> bool:
+    return any(
+        reason.startswith("exact phrase match:")
+        for reason in candidate.reasons
+    )
 
 
 def _is_unqualified_security_scan(normalized: str) -> bool:
