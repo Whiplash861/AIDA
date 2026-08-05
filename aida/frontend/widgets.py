@@ -138,6 +138,7 @@ class StatusDashboard(QFrame):
         self.speech_value = StatusValueLabel("IDLE")
         self.diagnostics_value = StatusValueLabel("IDLE")
         self.memory_value = StatusValueLabel("READY")
+        self.artificer_value = StatusValueLabel("READY")
         self.tasks_value = StatusValueLabel("0 ACTIVE")
 
         self.activity_list = QListWidget()
@@ -197,6 +198,13 @@ class StatusDashboard(QFrame):
         self._add_status_row(
             status_grid,
             row=5,
+            name="ARTIFICER",
+            value=self.artificer_value,
+        )
+
+        self._add_status_row(
+            status_grid,
+            row=6,
             name="TASKS",
             value=self.tasks_value,
         )
@@ -270,6 +278,12 @@ class StatusDashboard(QFrame):
         text: str,
     ) -> None:
         self.memory_value.set_status_text(text)
+
+    def set_artificer_status(
+        self,
+        text: str,
+    ) -> None:
+        self.artificer_value.set_status_text(text)
 
     def set_active_task_count(
         self,

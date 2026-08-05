@@ -14,6 +14,7 @@ from aida.autonomy.controller import AutonomyController
 from aida.autonomy.models import AutonomyLevel
 from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
+from aida.frontend.artificer_dialog import ArtificerCenterDialog
 from aida.frontend.bug_report_dialog import BugReportDialog
 from aida.frontend.command_manager import CommandManager
 from aida.frontend.command_router import CommandRouter, CommandType, RoutedCommand
@@ -159,6 +160,8 @@ def main() -> int:
         assistance_task_store,
         parent=window,
     )
+    artificer_dialog = ArtificerCenterDialog(parent=window)
+    window.set_artificer_status("READY")
 
     def activate_main_window() -> None:
         current_state = window.windowState()
@@ -199,11 +202,18 @@ def main() -> int:
         task_center_dialog.raise_()
         task_center_dialog.activateWindow()
 
+    def show_artificer_center() -> None:
+        artificer_dialog.refresh()
+        artificer_dialog.show()
+        artificer_dialog.raise_()
+        artificer_dialog.activateWindow()
+
     overlay.clicked.connect(restore_main_window)
     window.memory_requested.connect(show_memory_bank)
     window.bug_report_requested.connect(show_bug_report)
     window.threat_center_requested.connect(show_threat_center)
     window.task_center_requested.connect(show_task_center)
+    window.artificer_requested.connect(show_artificer_center)
 
     session_store = SessionStore()
     history = ChatHistory(message_saver=session_store.save_message)
@@ -408,10 +418,12 @@ def main() -> int:
         window.bug_report_requested.disconnect(show_bug_report)
         window.threat_center_requested.disconnect(show_threat_center)
         window.task_center_requested.disconnect(show_task_center)
+        window.artificer_requested.disconnect(show_artificer_center)
         threat_center_dialog.command_requested.disconnect(
             controller.handle_user_message
         )
         overlay.clicked.disconnect(restore_main_window)
+        artificer_dialog.close()
         task_center_dialog.close()
         threat_center_dialog.close()
         bug_report_dialog.close()
