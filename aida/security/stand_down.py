@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from aida.memory.database import MemoryDatabase
@@ -35,6 +36,9 @@ class StandDownRecord:
     status: StandDownStatus = StandDownStatus.ACTIVE
     signer: str | None = None
     publisher: str | None = None
+    signer_thumbprint: str | None = None
+    file_version: str | None = None
+    analysis_snapshot: dict[str, Any] | None = None
     alarm_count_at_creation: int = 0
     last_evaluated_at: datetime | None = None
     suspended_reason: str | None = None
@@ -49,6 +53,9 @@ class StandDownEvaluation:
     record: StandDownRecord | None
 
 
+IdentityInspector = Callable[[Path], object]
+
+
 class StandDownService:
     """AIDA-local trust exception; never creates Defender exclusions."""
 
@@ -56,6 +63,8 @@ class StandDownService:
         self,
         database: MemoryDatabase | str | Path,
         memory: MemoryService,
+        *,
+        identity_inspector: IdentityInspector | None = None,
     ) -> None:
         self.database = (
             database
@@ -63,6 +72,7 @@ class StandDownService:
             else MemoryDatabase(database)
         )
         self.memory = memory
+        self.identity_inspector = identity_inspector
 
     def create(
         self,
@@ -73,6 +83,9 @@ class StandDownService:
         expires_in_days: int = 30,
         signer: str | None = None,
         publisher: str | None = None,
+        signer_thumbprint: str | None = None,
+        file_version: str | None = None,
+        analysis_snapshot: dict[str, Any] | None = None,
         alarm_count: int = 0,
     ) -> StandDownRecord:
         target = Path(path).expanduser().resolve()
@@ -82,6 +95,21 @@ class StandDownService:
             raise ValueError("Stand Down requires a user-provided reason")
         if not authorized_by.strip():
             raise ValueError("Stand Down requires an identified user")
+
+        inspected = self._inspect_identity(target)
+        signer = signer or _identity_value(inspected, "signer_subject")
+        publisher = publisher or _identity_value(inspected, "publisher")
+        signer_thumbprint = signer_thumbprint or _identity_value(
+            inspected, "signer_thumbprint"
+        )
+        file_version = file_version or _identity_value(inspected, "file_version")
+        snapshot = dict(analysis_snapshot or {})
+        if inspected is not None:
+            snapshot.setdefault("detected_type", _identity_value(inspected, "detected_type"))
+            snapshot.setdefault("signature_state", _identity_value(inspected, "signature_state"))
+            snapshot.setdefault("publisher", publisher)
+            snapshot.setdefault("file_version", file_version)
+            snapshot = {key: value for key, value in snapshot.items() if value is not None}
 
         stat = target.stat()
         now = datetime.now(timezone.utc)
@@ -98,6 +126,9 @@ class StandDownService:
             modified_ns=stat.st_mtime_ns,
             signer=signer,
             publisher=publisher,
+            signer_thumbprint=signer_thumbprint,
+            file_version=file_version,
+            analysis_snapshot=snapshot,
             reason=reason.strip(),
             authorized_by=authorized_by.strip(),
             user_id=self.memory.user_id,
@@ -127,10 +158,11 @@ class StandDownService:
                 """
                 INSERT INTO stand_down_items (
                     exception_id, user_id, device_id, path, sha256, file_size,
-                    modified_ns, signer, publisher, reason, authorized_by,
+                    modified_ns, signer, publisher, signer_thumbprint,
+                    file_version, analysis_snapshot_json, reason, authorized_by,
                     created_at, expires_at, status, alarm_count_at_creation,
                     last_evaluated_at, suspended_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     record.exception_id,
@@ -142,6 +174,9 @@ class StandDownService:
                     record.modified_ns,
                     record.signer,
                     record.publisher,
+                    record.signer_thumbprint,
+                    record.file_version,
+                    json.dumps(record.analysis_snapshot or {}, sort_keys=True),
                     record.reason,
                     record.authorized_by,
                     _iso(record.created_at),
@@ -164,6 +199,10 @@ class StandDownService:
                 "expires_at": _iso_or_none(record.expires_at),
                 "reason": record.reason,
                 "authorized_by": record.authorized_by,
+                "signer": record.signer,
+                "signer_thumbprint": record.signer_thumbprint,
+                "file_version": record.file_version,
+                "analysis_snapshot": record.analysis_snapshot or {},
             },
             outcome=ProcessOutcome.SUCCEEDED,
             confidence=1.0,
@@ -195,27 +234,15 @@ class StandDownService:
                 StandDownStatus.EXPIRED,
                 "The Stand Down exception expired.",
             )
-            return StandDownEvaluation(
-                False,
-                expired.status,
-                expired.suspended_reason or "",
-                expired,
-            )
+            return StandDownEvaluation(False, expired.status, expired.suspended_reason or "", expired)
 
-        # New provider alarms and identity changes always invalidate trust before
-        # an explicit scan can temporarily override recommendation suppression.
         if current_alarm_count > record.alarm_count_at_creation:
             suspended = self._set_status(
                 record,
                 StandDownStatus.SUSPENDED,
                 "New security alarms were recorded after Stand Down.",
             )
-            return StandDownEvaluation(
-                False,
-                suspended.status,
-                suspended.suspended_reason or "",
-                suspended,
-            )
+            return StandDownEvaluation(False, suspended.status, suspended.suspended_reason or "", suspended)
 
         if not target.is_file():
             suspended = self._set_status(
@@ -223,12 +250,7 @@ class StandDownService:
                 StandDownStatus.SUSPENDED,
                 "The trusted file is no longer present at the recorded path.",
             )
-            return StandDownEvaluation(
-                False,
-                suspended.status,
-                suspended.suspended_reason or "",
-                suspended,
-            )
+            return StandDownEvaluation(False, suspended.status, suspended.suspended_reason or "", suspended)
 
         stat = target.stat()
         current_hash = _sha256(target)
@@ -242,12 +264,29 @@ class StandDownService:
                 StandDownStatus.SUSPENDED,
                 "The trusted file identity changed. AIDA resumed threat assessment.",
             )
-            return StandDownEvaluation(
-                False,
-                suspended.status,
-                suspended.suspended_reason or "",
-                suspended,
+            return StandDownEvaluation(False, suspended.status, suspended.suspended_reason or "", suspended)
+
+        inspected = self._inspect_identity(target)
+        signature_changes = []
+        for label, stored, attribute in (
+            ("signer", record.signer, "signer_subject"),
+            ("signer certificate", record.signer_thumbprint, "signer_thumbprint"),
+            ("file version", record.file_version, "file_version"),
+        ):
+            current_value = _identity_value(inspected, attribute)
+            if stored and current_value and stored != current_value:
+                signature_changes.append(label)
+        if signature_changes:
+            suspended = self._set_status(
+                record,
+                StandDownStatus.SUSPENDED,
+                (
+                    "The trusted "
+                    + ", ".join(signature_changes)
+                    + " changed. AIDA resumed threat assessment."
+                ),
             )
+            return StandDownEvaluation(False, suspended.status, suspended.suspended_reason or "", suspended)
 
         if explicit_scan:
             self._touch(record)
@@ -437,8 +476,20 @@ class StandDownService:
                 (_iso(datetime.now(timezone.utc)), record.exception_id),
             )
 
+    def _inspect_identity(self, path: Path) -> object | None:
+        if self.identity_inspector is None:
+            return None
+        try:
+            return self.identity_inspector(path)
+        except (OSError, RuntimeError, ValueError):
+            return None
+
 
 def _record_from_row(row: Any) -> StandDownRecord:
+    try:
+        snapshot = json.loads(row["analysis_snapshot_json"] or "{}")
+    except (KeyError, TypeError, json.JSONDecodeError):
+        snapshot = {}
     return StandDownRecord(
         exception_id=row["exception_id"],
         user_id=row["user_id"],
@@ -449,6 +500,15 @@ def _record_from_row(row: Any) -> StandDownRecord:
         modified_ns=int(row["modified_ns"]),
         signer=row["signer"],
         publisher=row["publisher"],
+        signer_thumbprint=(
+            row["signer_thumbprint"]
+            if "signer_thumbprint" in row.keys()
+            else None
+        ),
+        file_version=(
+            row["file_version"] if "file_version" in row.keys() else None
+        ),
+        analysis_snapshot=snapshot,
         reason=row["reason"],
         authorized_by=row["authorized_by"],
         created_at=_parse(row["created_at"]),
@@ -458,6 +518,18 @@ def _record_from_row(row: Any) -> StandDownRecord:
         last_evaluated_at=_parse_or_none(row["last_evaluated_at"]),
         suspended_reason=row["suspended_reason"],
     )
+
+
+def _identity_value(identity: object | None, name: str) -> str | None:
+    if identity is None:
+        return None
+    value = getattr(identity, name, None)
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        value = value.value
+    text = str(value).strip()
+    return text or None
 
 
 def _sha256(path: Path) -> str:

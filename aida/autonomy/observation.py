@@ -31,6 +31,7 @@ class SecurityObservation:
     active_scan_description: str | None
     detections: tuple[DetectionAssessment, ...]
     active_stand_down_count: int
+    threat_analysis_summaries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +111,11 @@ class AutonomyObservationService:
                 unresolved,
                 key=lambda item: item.detection.severity.value,
             )
+            impacts = tuple(
+                observation.threat_analysis_summaries[:3]
+            ) or (
+                "The unresolved item may continue affecting system security.",
+            )
             proposals.append(
                 ActionProposal(
                     action_kind=ActionKind.QUARANTINE,
@@ -128,9 +134,7 @@ class AutonomyObservationService:
                     threat_severity=highest.detection.severity.name,
                     predicted_threat=highest.detection.name,
                     prediction_confidence=1.0,
-                    potential_impacts=(
-                        "The unresolved item may continue affecting system security.",
-                    ),
+                    potential_impacts=impacts,
                 )
             )
         elif (
@@ -171,6 +175,12 @@ def _evidence_lines(observation: SecurityObservation) -> tuple[str, ...]:
     ]
     unresolved = [item for item in observation.detections if item.unresolved]
     lines.append(f"Unresolved provider detections: {len(unresolved)}")
+    if observation.threat_analysis_summaries:
+        lines.append("Read-only threat-analysis snapshots:")
+        lines.extend(
+            f"- {summary}"
+            for summary in observation.threat_analysis_summaries
+        )
     return tuple(lines)
 
 

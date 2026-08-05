@@ -21,10 +21,8 @@ CREATE TABLE IF NOT EXISTS event_journal (
     confidence REAL,
     created_at TEXT NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_event_journal_scope_time
 ON event_journal(user_id, device_id, created_at DESC);
-
 CREATE INDEX IF NOT EXISTS idx_event_journal_type
 ON event_journal(event_type, created_at DESC);
 
@@ -48,10 +46,8 @@ CREATE TABLE IF NOT EXISTS memory_items (
     expires_at TEXT,
     deleted_at TEXT
 );
-
 CREATE INDEX IF NOT EXISTS idx_memory_scope_status
 ON memory_items(user_id, device_id, status, updated_at DESC);
-
 CREATE INDEX IF NOT EXISTS idx_memory_category
 ON memory_items(category, updated_at DESC);
 
@@ -102,6 +98,9 @@ CREATE TABLE IF NOT EXISTS stand_down_items (
     modified_ns INTEGER NOT NULL,
     signer TEXT,
     publisher TEXT,
+    signer_thumbprint TEXT,
+    file_version TEXT,
+    analysis_snapshot_json TEXT NOT NULL DEFAULT '{}',
     reason TEXT NOT NULL,
     authorized_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -111,7 +110,6 @@ CREATE TABLE IF NOT EXISTS stand_down_items (
     last_evaluated_at TEXT,
     suspended_reason TEXT
 );
-
 CREATE INDEX IF NOT EXISTS idx_stand_down_scope_status
 ON stand_down_items(user_id, device_id, status, expires_at);
 
@@ -143,9 +141,52 @@ CREATE TABLE IF NOT EXISTS security_tasks (
     updated_at TEXT NOT NULL,
     terminal_at TEXT
 );
-
 CREATE INDEX IF NOT EXISTS idx_security_tasks_open
 ON security_tasks(provider_state, tracking_state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS threat_analyses (
+    analysis_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    sha256 TEXT,
+    provider_detection_id TEXT,
+    assessment TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    summary TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_threat_analyses_scope_time
+ON threat_analyses(user_id, device_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threat_analyses_path
+ON threat_analyses(user_id, device_id, path, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS assistance_tasks (
+    task_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    state TEXT NOT NULL,
+    risk TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    reversible INTEGER,
+    authorization_required INTEGER NOT NULL DEFAULT 0,
+    authorization_id TEXT,
+    progress_detail TEXT NOT NULL DEFAULT '',
+    result_summary TEXT NOT NULL DEFAULT '',
+    error_detail TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    terminal_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_assistance_tasks_scope_time
+ON assistance_tasks(user_id, device_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistance_tasks_state
+ON assistance_tasks(user_id, device_id, state, updated_at DESC);
 """
 
 
@@ -199,13 +240,13 @@ class MemoryDatabase:
     def _migrate(connection: sqlite3.Connection) -> None:
         """Applies additive migrations needed by prototype databases."""
 
-        columns = {
+        security_columns = {
             str(row[1])
             for row in connection.execute(
                 "PRAGMA table_info(security_tasks)"
             ).fetchall()
         }
-        additions = {
+        security_additions = {
             "user_id": "TEXT NOT NULL DEFAULT ''",
             "device_id": "TEXT NOT NULL DEFAULT ''",
             "monitoring_session_started_at": "TEXT NOT NULL DEFAULT ''",
@@ -214,8 +255,8 @@ class MemoryDatabase:
             "cancellation_requested_at": "TEXT",
             "cancellation_confirmed_at": "TEXT",
         }
-        for name, definition in additions.items():
-            if name not in columns:
+        for name, definition in security_additions.items():
+            if name not in security_columns:
                 connection.execute(
                     f"ALTER TABLE security_tasks ADD COLUMN {name} {definition}"
                 )
@@ -236,3 +277,20 @@ class MemoryDatabase:
             "user_id, device_id, provider_id, provider_scan_id, updated_at DESC"
             ")"
         )
+
+        stand_down_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(stand_down_items)"
+            ).fetchall()
+        }
+        stand_down_additions = {
+            "signer_thumbprint": "TEXT",
+            "file_version": "TEXT",
+            "analysis_snapshot_json": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        for name, definition in stand_down_additions.items():
+            if name not in stand_down_columns:
+                connection.execute(
+                    f"ALTER TABLE stand_down_items ADD COLUMN {name} {definition}"
+                )

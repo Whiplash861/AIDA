@@ -1,10 +1,10 @@
-
 from __future__ import annotations
 
 import getpass
+from collections import deque
 from typing import Callable, Optional
 
-from PySide6.QtCore import Slot
+from PySide6.QtCore import QTimer, Slot
 
 from aida.autonomy.controller import AutonomyController
 from aida.brain.llm_client import AIDABrain
@@ -41,17 +41,12 @@ class AIDAController:
 
         self._brain_failed = False
         self._speech_failed = False
+        self._pending_speech: deque[str] = deque(maxlen=12)
 
         self._connect_components()
-        self.task_manager.task_started.connect(
-            self._handle_task_started
-        )
-        self.task_manager.task_finished.connect(
-            self._handle_task_finished
-        )
-        self.task_manager.task_failed.connect(
-            self._handle_task_failed
-        )
+        self.task_manager.task_started.connect(self._handle_task_started)
+        self.task_manager.task_finished.connect(self._handle_task_finished)
+        self.task_manager.task_failed.connect(self._handle_task_failed)
         self._initialize_frontend()
 
     @Slot(str)
@@ -83,11 +78,7 @@ class AIDAController:
         self._update_task_count()
 
     @Slot(str, str)
-    def _handle_task_failed(
-        self,
-        task_name: str,
-        error_message: str,
-    ) -> None:
+    def _handle_task_failed(self, task_name: str, error_message: str) -> None:
         normalized_name = task_name.lower()
         if normalized_name == "brain":
             self.window.set_brain_status("ERROR")
@@ -100,33 +91,23 @@ class AIDAController:
         self.window.report_task_failed(task_name, error_message)
 
     def _update_task_count(self) -> None:
-        self.window.set_active_task_count(
-            len(self.task_manager.active_task_names)
-        )
+        self.window.set_active_task_count(len(self.task_manager.active_task_names))
 
     def _connect_components(self) -> None:
         self.window.set_submit_handler(self.handle_user_message)
         self.status_manager.subscribe(self._handle_status_changed)
         self.history.subscribe(self._handle_message_added)
-        self.command_manager.speech_requested.connect(
-            self._start_speech
-        )
+        self.command_manager.speech_requested.connect(self._start_speech)
         self.command_manager.input_enabled_requested.connect(
             self.window.set_input_enabled
         )
         self.command_manager.command_status_changed.connect(
             self._handle_command_status_changed
         )
-        self.command_manager.command_started.connect(
-            self._handle_command_started
-        )
-        self.command_manager.command_finished.connect(
-            self._handle_command_finished
-        )
+        self.command_manager.command_started.connect(self._handle_command_started)
+        self.command_manager.command_finished.connect(self._handle_command_finished)
         if self.autonomy_controller is not None:
-            self.window.autonomy_toggled.connect(
-                self._handle_autonomy_toggled
-            )
+            self.window.autonomy_toggled.connect(self._handle_autonomy_toggled)
 
     def _initialize_frontend(self) -> None:
         self.history.add_system(
@@ -135,10 +116,7 @@ class AIDAController:
         self.history.add_aida("State malfunction parameters.")
         if self.autonomy_controller is not None:
             settings = self.autonomy_controller.settings
-            self.window.set_autonomy_enabled(
-                settings.enabled,
-                emit_signal=False,
-            )
+            self.window.set_autonomy_enabled(settings.enabled, emit_signal=False)
             self.window.set_autonomy_status(
                 "LOCKED"
                 if settings.kill_switch_engaged
@@ -178,8 +156,7 @@ class AIDAController:
         self.history.add_user(
             clean_text,
             include_in_context=(
-                routed_command is None
-                or not routed_command.local_only
+                routed_command is None or not routed_command.local_only
             ),
         )
         self.window.set_input_enabled(False)
@@ -203,9 +180,7 @@ class AIDAController:
             on_finished=self._handle_brain_finished,
         )
         if not started:
-            self.history.add_system(
-                "AIDA brain task could not be started."
-            )
+            self.history.add_system("AIDA brain task could not be started.")
             self.status_manager.set(AIDAStatus.ERROR)
             self.window.set_input_enabled(True)
 
@@ -217,10 +192,7 @@ class AIDAController:
             enabled,
             changed_by=_local_user(),
         )
-        self.window.set_autonomy_enabled(
-            settings.enabled,
-            emit_signal=False,
-        )
+        self.window.set_autonomy_enabled(settings.enabled, emit_signal=False)
         self.window.set_autonomy_status(
             "LOCKED"
             if settings.kill_switch_engaged
@@ -244,10 +216,7 @@ class AIDAController:
                 "Autonomy is disabled. Every operational decision will be "
                 "routed to the user first, regardless of severity."
             )
-        self.history.add_aida(
-            message,
-            include_in_context=False,
-        )
+        self.history.add_aida(message, include_in_context=False)
 
     @Slot(str)
     def _handle_command_started(self, task_name: str) -> None:
@@ -263,12 +232,8 @@ class AIDAController:
             self.command_router.set_active_task(None)
 
     @Slot(str, str)
-    def _handle_command_status_changed(
-        self,
-        category: str,
-        status: str,
-    ) -> None:
-        if category in {"DIAGNOSTICS", "SECURITY", "APPLICATION"}:
+    def _handle_command_status_changed(self, category: str, status: str) -> None:
+        if category in {"DIAGNOSTICS", "SECURITY", "APPLICATION", "NAVIGATION"}:
             self.window.set_diagnostics_status(status)
         elif category == "MEMORY":
             self.window.set_memory_status(status)
@@ -293,9 +258,7 @@ class AIDAController:
         response = str(result).strip()
         if not response:
             self._brain_failed = True
-            self.history.add_system(
-                "AIDA brain returned an empty response."
-            )
+            self.history.add_system("AIDA brain returned an empty response.")
             self.status_manager.set(AIDAStatus.ERROR)
             return
         self.history.add_aida(response)
@@ -307,9 +270,7 @@ class AIDAController:
 
     def _handle_brain_error(self, error_message: str) -> None:
         self._brain_failed = True
-        self.history.add_system(
-            f"AIDA brain request failed: {error_message}"
-        )
+        self.history.add_system(f"AIDA brain request failed: {error_message}")
         self.status_manager.set(AIDAStatus.ERROR)
 
     def _handle_brain_finished(self) -> None:
@@ -318,10 +279,18 @@ class AIDAController:
             self.window.set_input_enabled(True)
 
     def _start_speech(self, text: str) -> None:
+        clean = text.strip()
+        if not clean:
+            return
         if self.speaker is None:
             if not self.command_manager.is_running:
                 self.status_manager.set(AIDAStatus.STANDBY)
             self.window.set_input_enabled(True)
+            return
+        if self.task_manager.is_running("speech"):
+            # Speech requests may arrive while a previous announcement is still
+            # playing. Queue them instead of emitting a false task-start error.
+            self._pending_speech.append(clean)
             return
         self._speech_failed = False
         self.status_manager.set(AIDAStatus.SPEAKING)
@@ -329,7 +298,7 @@ class AIDAController:
         assert speaker is not None
 
         def speak() -> None:
-            speaker(text)
+            speaker(clean)
 
         started = self.task_manager.run_task(
             name="speech",
@@ -338,19 +307,19 @@ class AIDAController:
             on_finished=self._handle_speech_finished,
         )
         if not started:
-            self._speech_failed = True
-            self.history.add_system(
-                "AIDA speech task could not be started."
-            )
-            if not self.command_manager.is_running:
-                self.status_manager.set(AIDAStatus.STANDBY)
-            self.window.set_input_enabled(True)
+            # A task can finish between the is_running check and run_task. Queue
+            # once and retry on the next Qt cycle rather than report a defect.
+            self._pending_speech.appendleft(clean)
+            QTimer.singleShot(0, self._drain_speech_queue)
+
+    def _drain_speech_queue(self) -> None:
+        if self.task_manager.is_running("speech") or not self._pending_speech:
+            return
+        self._start_speech(self._pending_speech.popleft())
 
     def _handle_speech_error(self, error_message: str) -> None:
         self._speech_failed = True
-        self.history.add_system(
-            f"AIDA speech failed: {error_message}"
-        )
+        self.history.add_system(f"AIDA speech failed: {error_message}")
         self.status_manager.set(AIDAStatus.ERROR)
 
     def _handle_speech_finished(self) -> None:
@@ -359,6 +328,8 @@ class AIDAController:
         else:
             self.status_manager.set(AIDAStatus.STANDBY)
         self.window.set_input_enabled(True)
+        # TaskManager removes the completed speech task after this callback.
+        QTimer.singleShot(0, self._drain_speech_queue)
 
     def _handle_message_added(self, message: ChatMessage) -> None:
         self.window.display_message(message)
@@ -371,22 +342,13 @@ class AIDAController:
         self.window.set_status(new_status)
 
     def shutdown(self) -> None:
-        self.status_manager.unsubscribe(
-            self._handle_status_changed
-        )
+        self._pending_speech.clear()
+        self.status_manager.unsubscribe(self._handle_status_changed)
         self.history.unsubscribe(self._handle_message_added)
-        self.task_manager.task_started.disconnect(
-            self._handle_task_started
-        )
-        self.task_manager.task_finished.disconnect(
-            self._handle_task_finished
-        )
-        self.task_manager.task_failed.disconnect(
-            self._handle_task_failed
-        )
-        self.command_manager.speech_requested.disconnect(
-            self._start_speech
-        )
+        self.task_manager.task_started.disconnect(self._handle_task_started)
+        self.task_manager.task_finished.disconnect(self._handle_task_finished)
+        self.task_manager.task_failed.disconnect(self._handle_task_failed)
+        self.command_manager.speech_requested.disconnect(self._start_speech)
         self.command_manager.input_enabled_requested.disconnect(
             self.window.set_input_enabled
         )
