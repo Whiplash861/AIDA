@@ -189,10 +189,7 @@ def main() -> int:
             "ARTIFICER_REVIEW",
             artificer_engine.run_review,
             on_result=artificer_dialog.apply_snapshot,
-            on_error=lambda message: artificer_dialog.show_operation_message(
-                f"Artificer review failed: {message}"
-            ),
-            on_finished=artificer_dialog.refresh,
+            on_error=artificer_dialog.show_review_error,
         )
         if not started:
             artificer_dialog.show_operation_message(
@@ -207,9 +204,7 @@ def main() -> int:
             "ARTIFICER_EXPORT",
             artificer_engine.export_report,
             on_result=artificer_dialog.show_export_result,
-            on_error=lambda message: artificer_dialog.show_operation_message(
-                f"Artificer export failed: {message}"
-            ),
+            on_error=artificer_dialog.show_export_error,
         )
         if not started:
             artificer_dialog.show_operation_message(
@@ -222,11 +217,11 @@ def main() -> int:
     window.perception_evidence_attached.connect(
         operational_bridge.record_perception_evidence
     )
-    window._voice.state_changed.connect(operational_bridge.record_voice_state)
-    window._voice.transcript_ready.connect(
+    window.voice_state_changed.connect(operational_bridge.record_voice_state)
+    window.voice_transcript_ready.connect(
         operational_bridge.record_voice_transcript
     )
-    window._voice.error_reported.connect(operational_bridge.record_voice_error)
+    window.voice_error_reported.connect(operational_bridge.record_voice_error)
     task_manager.task_started.connect(operational_bridge.record_task_started)
     task_manager.task_finished.connect(operational_bridge.record_task_finished)
     task_manager.task_failed.connect(operational_bridge.record_task_failed)
@@ -495,11 +490,11 @@ def main() -> int:
         window.perception_evidence_attached.disconnect(
             operational_bridge.record_perception_evidence
         )
-        window._voice.state_changed.disconnect(operational_bridge.record_voice_state)
-        window._voice.transcript_ready.disconnect(
+        window.voice_state_changed.disconnect(operational_bridge.record_voice_state)
+        window.voice_transcript_ready.disconnect(
             operational_bridge.record_voice_transcript
         )
-        window._voice.error_reported.disconnect(operational_bridge.record_voice_error)
+        window.voice_error_reported.disconnect(operational_bridge.record_voice_error)
         task_manager.task_started.disconnect(operational_bridge.record_task_started)
         task_manager.task_finished.disconnect(operational_bridge.record_task_finished)
         task_manager.task_failed.disconnect(operational_bridge.record_task_failed)
