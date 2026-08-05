@@ -7,6 +7,17 @@ from typing import Any
 from aida.artificer.ledger_records import finding_from_record, proposal_from_record
 from aida.artificer.models import ArtificerFinding, UpgradeProposal, utc_now
 
+_DETERMINISTIC_FINDING_PREFIXES = (
+    "unreadable:",
+    "empty:",
+    "syntax:",
+    "duplicates:",
+    "bare-except:",
+    "platform-leak:",
+    "metadata:version-drift:",
+    "capability:",
+)
+
 
 class LedgerFindingsMixin:
     def upsert_finding(self, finding: ArtificerFinding) -> ArtificerFinding:
@@ -18,6 +29,9 @@ class LedgerFindingsMixin:
             ).fetchone()
             if existing:
                 previous = finding_from_record(json.loads(existing["payload_json"]))
+                deterministic = fingerprint.startswith(
+                    _DETERMINISTIC_FINDING_PREFIXES
+                )
                 finding = ArtificerFinding(
                     finding_id=previous.finding_id,
                     category=finding.category,
@@ -28,9 +42,13 @@ class LedgerFindingsMixin:
                     affected_components=finding.affected_components,
                     first_seen_utc=previous.first_seen_utc,
                     last_seen_utc=finding.last_seen_utc,
-                    observation_count=max(
-                        previous.observation_count,
-                        finding.observation_count,
+                    observation_count=(
+                        finding.observation_count
+                        if deterministic
+                        else max(
+                            previous.observation_count,
+                            finding.observation_count,
+                        )
                     ),
                     finding=finding.finding,
                     evidence_summary=finding.evidence_summary,
@@ -109,7 +127,9 @@ class LedgerFindingsMixin:
                     row["finding_id"],
                     {
                         "status": "resolved",
-                        "reason": "Not reproduced by the latest deterministic review.",
+                        "reason": (
+                            "Not reproduced by the latest deterministic review."
+                        ),
                         "fingerprint": fingerprint,
                     },
                 )
@@ -128,7 +148,10 @@ class LedgerFindingsMixin:
         parameters.append(limit)
         with self._lock, self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
-        return [finding_from_record(json.loads(row["payload_json"])) for row in rows]
+        return [
+            finding_from_record(json.loads(row["payload_json"]))
+            for row in rows
+        ]
 
     def set_finding_status(self, finding_id: str, status: str) -> None:
         with self._lock, self._connect() as connection:
@@ -141,10 +164,16 @@ class LedgerFindingsMixin:
             payload = json.loads(row["payload_json"])
             payload["status"] = status
             connection.execute(
-                "UPDATE artificer_findings SET status=?,payload_json=? WHERE finding_id=?",
+                """UPDATE artificer_findings
+                SET status=?,payload_json=? WHERE finding_id=?""",
                 (status, self._json(payload), finding_id),
             )
-            self._chain(connection, "finding_status", finding_id, {"status": status})
+            self._chain(
+                connection,
+                "finding_status",
+                finding_id,
+                {"status": status},
+            )
 
     def store_proposal(self, proposal: UpgradeProposal) -> None:
         payload = proposal.to_record()
@@ -158,7 +187,12 @@ class LedgerFindingsMixin:
                     self._json(payload),
                 ),
             )
-            self._chain(connection, "upgrade_proposal", proposal.proposal_id, payload)
+            self._chain(
+                connection,
+                "upgrade_proposal",
+                proposal.proposal_id,
+                payload,
+            )
 
     def list_proposals(
         self, *, status: str | None = "pending"
@@ -171,7 +205,10 @@ class LedgerFindingsMixin:
         query += " ORDER BY created_at_utc DESC"
         with self._lock, self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
-        return [proposal_from_record(json.loads(row["payload_json"])) for row in rows]
+        return [
+            proposal_from_record(json.loads(row["payload_json"]))
+            for row in rows
+        ]
 
     def record_proposal_decision(
         self,
@@ -192,14 +229,21 @@ class LedgerFindingsMixin:
             payload = json.loads(row["payload_json"])
             payload["status"] = decision
             connection.execute(
-                "UPDATE upgrade_proposals SET status=?,payload_json=? WHERE proposal_id=?",
+                """UPDATE upgrade_proposals
+                SET status=?,payload_json=? WHERE proposal_id=?""",
                 (decision, self._json(payload), proposal_id),
             )
             connection.execute(
                 """INSERT INTO proposal_decisions(
                     proposal_id,decision,developer_id,reason,decided_at_utc
                 ) VALUES(?,?,?,?,?)""",
-                (proposal_id, decision, developer_id, reason, decided_at),
+                (
+                    proposal_id,
+                    decision,
+                    developer_id,
+                    reason,
+                    decided_at,
+                ),
             )
             self._chain(
                 connection,
