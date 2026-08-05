@@ -87,8 +87,26 @@ def test_artificer_center_exposes_live_review_and_export_controls() -> None:
     assert "export_requested = Signal()" in source
     assert 'QPushButton("Run Review")' in source
     assert 'QPushButton("Export Report")' in source
+    assert 'QPushButton("Open Last Export")' in source
     assert "self.engine.snapshot()" in source
     assert "apply_snapshot" in source
     assert "snapshot.open_findings" in source
     assert "snapshot.pending_proposals" in source
     assert "Automatic maintenance: DISABLED" in source
+
+
+def test_artificer_export_path_remains_visible_and_is_revealed() -> None:
+    source = DIALOG_PATH.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    result_start = source.index("def show_export_result(")
+    next_method = source.index("def open_last_export(", result_start)
+    result_source = source[result_start:next_method]
+
+    assert "self._last_export_path = target" in result_source
+    assert "self.apply_snapshot(self.engine.snapshot())" in result_source
+    assert "self.status_label.setText(" in result_source
+    assert "self._reveal_export(target)" in result_source
+    assert "self.refresh()" not in result_source
+    assert "self.engine.platform_adapter.reveal_path(target)" in source
+    assert "self.engine.platform_adapter.open_folder(target.parent)" in source
