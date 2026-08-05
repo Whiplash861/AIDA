@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "protected_paths": [
+    "aida/artificer/policy.py",
+    "aida/artificer/warden.py",
+    "aida/artificer/developer_registry.py",
+    "aida/artificer/consent.py",
+    "aida/artificer/sanitizer.py",
+    "aida/artificer/ledger.py",
+    "aida/artificer/ledger_records.py",
+    "aida/artificer/ledger_operations.py",
+    "aida/artificer/ledger_findings.py",
+    "aida/artificer/ledger_events.py",
+    "aida/artificer/ledger_schema.py",
+    "aida/artificer/ledger_core.py",
+    "aida/artificer/manifests/protected_paths.json",
+    ".env"
+  ]
+}
