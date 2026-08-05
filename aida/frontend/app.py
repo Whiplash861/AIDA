@@ -9,7 +9,6 @@ from PySide6.QtWidgets import QApplication
 
 from aida.artificer.bootstrap import build_artificer_engine
 from aida.artificer.integration import ArtificerOperationalBridge
-from aida.artificer.models import ArtificerSnapshot
 from aida.artificer.runtime import set_active_artificer
 from aida.assistance.planner import GuidedResponsePlanner
 from aida.assistance.store import AssistanceTaskStore
@@ -172,14 +171,8 @@ def main() -> int:
     )
     artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window)
     artificer_qt_bridge = ArtificerQtBridge(artificer_engine, parent=app)
-
-    def apply_artificer_snapshot(snapshot: object) -> None:
-        if not isinstance(snapshot, ArtificerSnapshot):
-            return
-        window.set_artificer_status(snapshot.status)
-        artificer_dialog.apply_snapshot(snapshot)
-
-    artificer_qt_bridge.snapshot_changed.connect(apply_artificer_snapshot)
+    artificer_qt_bridge.status_changed.connect(window.set_artificer_status)
+    artificer_qt_bridge.snapshot_changed.connect(artificer_dialog.apply_snapshot)
 
     def run_artificer_review() -> None:
         artificer_dialog.show_operation_message(
@@ -504,8 +497,9 @@ def main() -> int:
             controller.handle_user_message
         )
         overlay.clicked.disconnect(restore_main_window)
+        artificer_qt_bridge.status_changed.disconnect(window.set_artificer_status)
         artificer_qt_bridge.snapshot_changed.disconnect(
-            apply_artificer_snapshot
+            artificer_dialog.apply_snapshot
         )
         artificer_dialog.close()
         task_center_dialog.close()
