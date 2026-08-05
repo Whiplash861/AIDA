@@ -91,6 +91,13 @@ class VoiceInteractionCoordinator(QObject):
         if self._capture.is_recording:
             self._capture.cancel()
             self.recording_changed.emit(False)
+            self.state_changed.emit("READY")
+            return
+        # A running provider call may still have the file open on Windows.
+        # Keep the path until _handle_finished performs the final deletion.
+        if self.is_processing:
+            self.state_changed.emit("READY")
+            return
         self._capture.discard(self._audio_path)
         self._audio_path = None
         self.state_changed.emit("READY")
