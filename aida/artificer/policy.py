@@ -21,6 +21,7 @@ class MaintenanceRule:
 DEFAULT_PROTECTED_PATHS = (
     "aida/artificer/policy.py",
     "aida/artificer/warden.py",
+    "aida/artificer/codewright.py",
     "aida/artificer/developer_registry.py",
     "aida/artificer/consent.py",
     "aida/artificer/sanitizer.py",
@@ -32,6 +33,7 @@ DEFAULT_PROTECTED_PATHS = (
     "aida/artificer/ledger_operations.py",
     "aida/artificer/ledger_records.py",
     "aida/artificer/manifests/protected_paths.json",
+    "aida/artificer/manifests/source_expectations.json",
     ".env",
 )
 
@@ -64,7 +66,9 @@ DEFAULT_RULES = {
     ),
     "data.geofence_refresh": MaintenanceRule(
         rule_id="data.geofence_refresh",
-        description="Refresh approved geofencing boundary data without changing policy.",
+        description=(
+            "Refresh approved geofencing boundary data without changing policy."
+        ),
         authority=AuthorityLevel.BOUNDED_MAINTENANCE,
         allowed_extensions=(".json", ".geojson", ".csv"),
         allowed_roots=("aida/data/geofencing/",),
@@ -90,7 +94,9 @@ class ArtificerPolicy:
         rules: dict[str, MaintenanceRule] | None = None,
     ) -> None:
         self.source_root = Path(source_root).resolve()
-        self.protected_paths = tuple(self._normalize(path) for path in protected_paths)
+        self.protected_paths = tuple(
+            self._normalize(path) for path in protected_paths
+        )
         self.rules = dict(rules or DEFAULT_RULES)
 
     def _normalize(self, path: str | Path) -> str:
@@ -105,16 +111,26 @@ class ArtificerPolicy:
     def is_protected(self, path: str | Path) -> bool:
         normalized = self._normalize(path)
         for protected in self.protected_paths:
-            if normalized == protected or normalized.startswith(protected.rstrip("/") + "/"):
+            if (
+                normalized == protected
+                or normalized.startswith(protected.rstrip("/") + "/")
+            ):
                 return True
         return False
 
     def get_rule(self, rule_id: str) -> MaintenanceRule | None:
         return self.rules.get(rule_id)
 
-    def is_path_allowed(self, path: str | Path, rule: MaintenanceRule) -> bool:
+    def is_path_allowed(
+        self,
+        path: str | Path,
+        rule: MaintenanceRule,
+    ) -> bool:
         normalized = self._normalize(path)
         suffix = Path(normalized).suffix.lower()
         if suffix not in rule.allowed_extensions:
             return False
-        return any(normalized.startswith(root.lower()) for root in rule.allowed_roots)
+        return any(
+            normalized.startswith(root.lower())
+            for root in rule.allowed_roots
+        )
