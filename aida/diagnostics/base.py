@@ -1,8 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
 
-@dataclass
+
+@dataclass(slots=True)
 class Finding:
     id: str
     title: str
