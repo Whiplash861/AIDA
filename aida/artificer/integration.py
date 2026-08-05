@@ -16,6 +16,7 @@ class ArtificerOperationalBridge:
         self.engine = engine
         self._lock = threading.RLock()
         self._task_started_ns: dict[str, int] = {}
+        self._failed_tasks: set[str] = set()
         self._voice_started_ns: int | None = None
 
     def record_perception_evidence(self, evidence: PerceptionEvidence) -> None:
@@ -91,6 +92,7 @@ class ArtificerOperationalBridge:
     def record_task_started(self, task_name: str) -> None:
         with self._lock:
             self._task_started_ns[task_name] = time.monotonic_ns()
+            self._failed_tasks.discard(task_name)
         self._publish(
             source="frontend.task_manager",
             event_type="task_started",
@@ -99,6 +101,11 @@ class ArtificerOperationalBridge:
         )
 
     def record_task_finished(self, task_name: str) -> None:
+        with self._lock:
+            if task_name in self._failed_tasks:
+                self._failed_tasks.discard(task_name)
+                self._task_started_ns.pop(task_name, None)
+                return
         self._publish(
             source="frontend.task_manager",
             event_type="task_finished",
@@ -108,6 +115,8 @@ class ArtificerOperationalBridge:
         )
 
     def record_task_failed(self, task_name: str, message: str) -> None:
+        with self._lock:
+            self._failed_tasks.add(task_name)
         self._publish(
             source="frontend.task_manager",
             event_type="task_failed",
