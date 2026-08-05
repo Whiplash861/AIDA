@@ -2,15 +2,24 @@
 
 The Artificer Engine is AIDA's governed internal engineering, platform-concordance, and self-policing subsystem. It converts real operational behavior into durable evidence, identifies weaknesses in AIDA's own capabilities, recommends versioned improvements, and permits only narrowly defined, reversible internal maintenance.
 
-## Current integration boundary
+## Current integration state
 
-This branch provides the **Artificer backend foundation only**.
+The Artificer backend and the Perception/voice foundation are now integrated on `agent/artificer-perception-integration`.
 
-The canonical Early Alpha frontend remains unchanged from `agent/early-alpha-artificer-frontend`. Its Artificer button continues to open the existing read-only placeholder dialog. The backend is not constructed, started, scheduled, subscribed to the frontend, or connected to any button or status signal.
+At application startup AIDA explicitly:
 
-This separation is intentional while the Perception Engine is under parallel development. Future integration must explicitly construct the backend through `build_artificer_engine()` and define the shared event contract before any frontend or Perception Engine wiring is added.
+1. Builds one `ArtificerEngine` instance.
+2. Registers it as the active runtime instance.
+3. Captures the current platform profile.
+4. Starts the local Ledger, Watchtower, Liaison, and review scheduler.
+5. Connects live snapshots to the canonical Artificer status row and Artificer Center.
+6. Schedules the first source/platform/telemetry review outside the UI thread.
+7. Connects privacy-minimized Perception, voice, task, and Autonomy events.
+8. Stops the scheduler, disconnects listeners, and clears the active instance during shutdown.
 
-A standalone backend probe is available without launching the frontend:
+The canonical frontend remains intact. Report Bug, Memory, Threats, Tasks, Autonomy, Perception, Microphone, the transcript, Recent Activity, and the command interface retain their existing roles.
+
+A standalone backend probe remains available:
 
 ```powershell
 python -m aida.artificer
@@ -27,13 +36,25 @@ python -m aida.artificer --no-review
 5. Field telemetry is local-only by default.
 6. Outbound data must pass consent, sanitization, recipient authorization, and encryption policy.
 7. A change is not successful until post-change verification supports that conclusion.
-8. Importing or constructing the backend does not grant it frontend or operational authority.
+8. A frontend control never grants additional Artificer authority.
+9. Perception evidence and voice interaction are observed without storing their private contents in normal telemetry.
 
 ## Runtime flow
 
-AIDA subsystems will eventually publish structured `OperationalEvent` records to the shared `EventBus`. The `Watchtower` sanitizes and writes accepted events into the SQLite Artificer Ledger. The `Appraiser`, `Liaison`, and `Codewright` convert recurring operational patterns, platform capability probes, and deterministic source checks into `ArtificerFinding` records. The `Architect` can convert mature findings into `UpgradeProposal` records. The `Warden` independently evaluates every requested modification against protected paths and maintenance rules. The `Forge` performs only authorized, minimal, validated, atomic, and reversible changes.
+AIDA subsystems publish structured `OperationalEvent` records to the shared `EventBus`. The `Watchtower` sanitizes and writes accepted events into the SQLite Artificer Ledger. The `Appraiser`, `Liaison`, and `Codewright` convert recurring operational patterns, platform capability probes, and deterministic source checks into `ArtificerFinding` records. The `Architect` can convert mature findings into `UpgradeProposal` records. The `Warden` independently evaluates every requested modification against protected paths and maintenance rules. The `Forge` performs only authorized, minimal, validated, atomic, and reversible changes.
 
-On this branch, the backend can be exercised independently, but no production AIDA subsystem publishes into it yet.
+The current production bridge records:
+
+- Perception evidence attachment outcomes.
+- Evidence kind and source.
+- Media type, byte size, confidence, and evidence-field counts.
+- Voice lifecycle state and elapsed duration.
+- Voice transcript character and word counts.
+- Voice error category without raw error text.
+- Background task start, duration, completion, and failure.
+- Autonomy enabled/disabled state.
+
+The bridge does not record image bytes, extracted image content, personal file paths, SHA-256 values, voice recordings, transcript text, raw task error messages, or user conversation content.
 
 ## Major components
 
@@ -48,6 +69,8 @@ On this branch, the backend can be exercised independently, but no production AI
 - **Developer Registry** — restricts who may receive reports and decide proposals.
 - **Dispatch** — queues sanitized local exports or encrypted HTTPS reports.
 - **Platform adapters** — normalize Windows, Linux, macOS, and unsupported-platform behavior.
+- **Operational Bridge** — translates live frontend, Perception, voice, task, and Autonomy state into privacy-minimized events.
+- **Qt Bridge** — safely moves Artificer snapshots from worker threads onto the frontend thread.
 
 ## Authority model
 
@@ -70,7 +93,7 @@ The initial bounded rules cover:
 - Approved timezone-data refreshes.
 - Future approved geofencing-data refreshes that do not change policy.
 
-Syntax repair requires owner approval even when the candidate compiles. Automatic maintenance is disabled by default and is not invoked by application startup on this branch.
+Syntax repair requires owner approval even when the candidate compiles. Automatic maintenance is disabled by default and is not invoked by application startup.
 
 ### Protected governance
 
@@ -98,7 +121,7 @@ Telemetry levels are:
 - `pseudonymous`
 - `full_diagnostic`
 
-Early Alpha defaults to `local_only`. Raw conversations, file contents, credentials, tokens, exact personal paths, email addresses, IP addresses, voice recordings, and precise location are not included in normal operational telemetry. Full diagnostic bundles require a separate explicit user submission.
+Early Alpha defaults to `local_only`. Raw conversations, file contents, credentials, tokens, exact personal paths, email addresses, IP addresses, voice recordings, transcript text, and precise location are not included in normal operational telemetry. Full diagnostic bundles require a separate explicit user submission.
 
 Remote dispatch requires:
 
@@ -129,23 +152,27 @@ The directory contains the Ledger, consent state, developer registry, rollback a
 - `AIDA_ARTIFICER_DISPATCH_ENDPOINT`
 - `AIDA_ARTIFICER_AUTO_MAINTENANCE_ENABLED`
 
-Safe defaults are enabled backend availability, local-only telemetry, six-hour review interval, local exports, no remote endpoint, and automatic maintenance disabled.
+Safe defaults are enabled engine availability, local-only telemetry, a six-hour review interval, local exports, no remote endpoint, and automatic maintenance disabled.
 
-## Frontend status
+## Frontend
 
-The canonical desktop currently includes:
+The canonical desktop now provides a live Artificer Center with:
 
-- An `ARTIFICER` header button.
-- An Artificer subsystem row in the status dashboard.
-- A read-only Artificer Center placeholder.
+- Overview of state, platform, review time, findings, proposals, queue depth, and telemetry level.
+- Evidence-backed Findings display.
+- Platform Compatibility display.
+- Pending Proposals display.
+- Governance and privacy boundaries.
+- Background `Run Review` control.
+- Local `Export Report` control.
 
-Those controls are intentionally **not connected to this backend on this branch**. No changes were made to `aida/frontend/app.py`, `window.py`, `widgets.py`, the controller, command router, or button behavior while adding the backend.
+The Artificer status row is driven by real engine snapshots. Reviews and exports run through AIDA's shared `TaskManager` rather than blocking the Qt event loop.
 
-Backend-to-frontend integration will occur only after the Perception Engine work is complete and a shared event and lifecycle contract is reviewed.
+The current interface does not expose autonomous deployment or maintenance controls. Proposal existence is not treated as approval.
 
 ## Validation
 
-The backend test package covers:
+The combined test suite covers:
 
 - Event-bus listener isolation.
 - Ledger persistence and chain verification.
@@ -156,9 +183,14 @@ The backend test package covers:
 - Consent-gated dispatch.
 - Platform profiling and report export.
 - Proposal governance.
-- Safe configuration defaults.
-- User-data storage location.
-- Explicit proof that frontend startup does not construct or start the backend.
+- Safe configuration defaults and user-data storage.
+- Explicit engine startup and shutdown lifecycle.
+- Canonical frontend preservation.
+- Live Artificer review and export controls.
+- Perception telemetry privacy.
+- Voice transcript-content exclusion.
+- Background-task duration tracking.
+- Prevention of false completion events after task failure.
 
 Run validation with:
 
@@ -166,14 +198,16 @@ Run validation with:
 python -m pytest -q
 python -m compileall -q aida tests
 python -m aida.artificer --export
+python -m aida.frontend
 ```
 
 ## Known Early Alpha boundaries
 
 - The Ledger hash chain verifies audit linkage and audit-record hashes. It is not a remote notarization service.
 - AIDA does not yet include a hosted developer receiver API.
-- Production diagnostics, autonomy, security, Perception Engine, speech, memory, and task telemetry are not yet attached to the Artificer Event Bus.
-- The frontend is not yet driven by live Artificer snapshots.
+- Production security, diagnostic, memory, command-routing, brain, and speech-output telemetry are not yet comprehensively instrumented.
+- Perception Phase 1 records image evidence metadata but does not yet perform complete visual interpretation.
+- Voice transcription depends on the separately configured transcription provider.
 - macOS on-demand provider scanning is not implemented.
 - iOS and Android require separate native applications and platform-specific permission models.
 - Major refactors, model changes, dependency replacements, permissions, and security-policy changes remain owner-approved work.
