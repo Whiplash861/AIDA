@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
+from aida.artificer.bootstrap import build_artificer_engine
+from aida.artificer.integration import ArtificerOperationalBridge
+from aida.artificer.models import ArtificerSnapshot
+from aida.artificer.runtime import set_active_artificer
 from aida.assistance.planner import GuidedResponsePlanner
 from aida.assistance.store import AssistanceTaskStore
 from aida.authorization.confirmation import ConfirmationService
@@ -14,6 +18,7 @@ from aida.autonomy.controller import AutonomyController
 from aida.autonomy.models import AutonomyLevel
 from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
+from aida.frontend.artificer_bridge import ArtificerQtBridge
 from aida.frontend.artificer_dialog import ArtificerCenterDialog
 from aida.frontend.bug_report_dialog import BugReportDialog
 from aida.frontend.command_manager import CommandManager
@@ -79,6 +84,10 @@ def main() -> int:
     apply_theme(app)
 
     config = get_config()
+    artificer_engine = build_artificer_engine(config)
+    set_active_artificer(artificer_engine)
+    operational_bridge = ArtificerOperationalBridge(artificer_engine)
+
     database = MemoryDatabase(config.memory_db_path)
     memory_service = MemoryService(database)
     autonomy_controller = AutonomyController(memory_service)
@@ -144,6 +153,7 @@ def main() -> int:
 
     window = AIDAWindow()
     overlay = AIDAOverlay()
+    task_manager = TaskManager()
     memory_dialog = MemoryBankDialog(memory_service, parent=window)
     bug_report_dialog = BugReportDialog(
         bug_report_service,
@@ -160,8 +170,70 @@ def main() -> int:
         assistance_task_store,
         parent=window,
     )
-    artificer_dialog = ArtificerCenterDialog(parent=window)
-    window.set_artificer_status("READY")
+    artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window)
+    artificer_qt_bridge = ArtificerQtBridge(artificer_engine, parent=app)
+
+    def apply_artificer_snapshot(snapshot: object) -> None:
+        if not isinstance(snapshot, ArtificerSnapshot):
+            return
+        window.set_artificer_status(snapshot.status)
+        artificer_dialog.apply_snapshot(snapshot)
+
+    artificer_qt_bridge.snapshot_changed.connect(apply_artificer_snapshot)
+
+    def run_artificer_review() -> None:
+        artificer_dialog.show_operation_message(
+            "Artificer review is running in the background."
+        )
+        started = task_manager.run_task(
+            "ARTIFICER_REVIEW",
+            artificer_engine.run_review,
+            on_result=artificer_dialog.apply_snapshot,
+            on_error=lambda message: artificer_dialog.show_operation_message(
+                f"Artificer review failed: {message}"
+            ),
+            on_finished=artificer_dialog.refresh,
+        )
+        if not started:
+            artificer_dialog.show_operation_message(
+                "An Artificer review is already running."
+            )
+
+    def export_artificer_report() -> None:
+        artificer_dialog.show_operation_message(
+            "Artificer report export is running in the background."
+        )
+        started = task_manager.run_task(
+            "ARTIFICER_EXPORT",
+            artificer_engine.export_report,
+            on_result=artificer_dialog.show_export_result,
+            on_error=lambda message: artificer_dialog.show_operation_message(
+                f"Artificer export failed: {message}"
+            ),
+        )
+        if not started:
+            artificer_dialog.show_operation_message(
+                "An Artificer report export is already running."
+            )
+
+    artificer_dialog.review_requested.connect(run_artificer_review)
+    artificer_dialog.export_requested.connect(export_artificer_report)
+
+    window.perception_evidence_attached.connect(
+        operational_bridge.record_perception_evidence
+    )
+    window._voice.state_changed.connect(operational_bridge.record_voice_state)
+    window._voice.transcript_ready.connect(
+        operational_bridge.record_voice_transcript
+    )
+    window._voice.error_reported.connect(operational_bridge.record_voice_error)
+    task_manager.task_started.connect(operational_bridge.record_task_started)
+    task_manager.task_finished.connect(operational_bridge.record_task_finished)
+    task_manager.task_failed.connect(operational_bridge.record_task_failed)
+    window.autonomy_toggled.connect(operational_bridge.record_autonomy_state)
+
+    artificer_engine.start(run_startup_review=False)
+    artificer_qt_bridge.emit_current()
 
     def activate_main_window() -> None:
         current_state = window.windowState()
@@ -217,7 +289,6 @@ def main() -> int:
 
     session_store = SessionStore()
     history = ChatHistory(message_saver=session_store.save_message)
-    task_manager = TaskManager()
     command_router = CommandRouter()
     status_manager = StatusManager(initial_status=AIDAStatus.STARTUP)
     brain = AIDABrain()
@@ -402,6 +473,7 @@ def main() -> int:
     overlay.move_to_default_position()
     overlay.show()
     QTimer.singleShot(300, resume_provider_owned_scan)
+    QTimer.singleShot(1800, run_artificer_review)
     if autonomy_controller.settings.enabled:
         QTimer.singleShot(2500, run_observation_if_idle)
 
@@ -411,6 +483,7 @@ def main() -> int:
         observation_timer.stop()
         observation_timer.timeout.disconnect(run_observation_if_idle)
         window.autonomy_toggled.disconnect(handle_autonomy_observation_schedule)
+        window.autonomy_toggled.disconnect(operational_bridge.record_autonomy_state)
         confirmation_service.invalidate_all()
         status_manager.unsubscribe(update_overlay)
         window.message_displayed.disconnect(handle_message_displayed)
@@ -419,10 +492,26 @@ def main() -> int:
         window.threat_center_requested.disconnect(show_threat_center)
         window.task_center_requested.disconnect(show_task_center)
         window.artificer_requested.disconnect(show_artificer_center)
+        window.perception_evidence_attached.disconnect(
+            operational_bridge.record_perception_evidence
+        )
+        window._voice.state_changed.disconnect(operational_bridge.record_voice_state)
+        window._voice.transcript_ready.disconnect(
+            operational_bridge.record_voice_transcript
+        )
+        window._voice.error_reported.disconnect(operational_bridge.record_voice_error)
+        task_manager.task_started.disconnect(operational_bridge.record_task_started)
+        task_manager.task_finished.disconnect(operational_bridge.record_task_finished)
+        task_manager.task_failed.disconnect(operational_bridge.record_task_failed)
+        artificer_dialog.review_requested.disconnect(run_artificer_review)
+        artificer_dialog.export_requested.disconnect(export_artificer_report)
         threat_center_dialog.command_requested.disconnect(
             controller.handle_user_message
         )
         overlay.clicked.disconnect(restore_main_window)
+        artificer_qt_bridge.snapshot_changed.disconnect(
+            apply_artificer_snapshot
+        )
         artificer_dialog.close()
         task_center_dialog.close()
         threat_center_dialog.close()
@@ -430,6 +519,9 @@ def main() -> int:
         memory_dialog.close()
         overlay.close()
         controller.shutdown()
+        artificer_qt_bridge.close()
+        artificer_engine.stop()
+        set_active_artificer(None)
 
 
 def _format_elapsed(total_seconds: int) -> str:
