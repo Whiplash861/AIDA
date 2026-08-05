@@ -28,7 +28,7 @@ __pycache__/
 .coverage.*
 htmlcov/
 
-# AIDA runtime logs, conversations, and learned local state
+# AIDA runtime logs, conversations, learned state, and Artificer records
 /logs/
 /memory/
 *.log
@@ -37,6 +37,16 @@ htmlcov/
 *.db-wal
 *.sqlite
 *.sqlite3
+
+# Artificer workspaces, rollback assets, queues, and local reports
+.artificer/
+artificer-workspace/
+artificer-rollback/
+artificer-dispatch/
+artificer-exports/
+*.artificer.tmp
+*.rollback.tmp
+*.bak
 
 # Build and packaging output
 build/
@@ -55,6 +65,5 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 *.tmp
-*.bak
 *.swp
 *~

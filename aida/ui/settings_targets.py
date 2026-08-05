@@ -1,10 +1,6 @@
-SETTINGS_URIS = {
-    "bluetooth": "ms-settings:bluetooth",
-    "wifi": "ms-settings:network-wifi",
-    "network": "ms-settings:network",
-    "windows_update": "ms-settings:windowsupdate",
-    "apps_features": "ms-settings:appsfeatures",
-    "display": "ms-settings:display",
-    "sound": "ms-settings:sound",
-    "privacy": "ms-settings:privacy",
-}
+from __future__ import annotations
+
+from aida.platform.windows import WindowsAdapter
+
+# Backward-compatible alias. New navigation code resolves targets through the active adapter.
+SETTINGS_URIS = dict(WindowsAdapter.SETTINGS_URIS)

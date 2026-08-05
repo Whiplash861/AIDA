@@ -1,374 +1,227 @@
 from __future__ import annotations
-import os
+
 import platform
-from pathlib import Path
+import time
+
 import psutil
+
+from aida.artificer.runtime import get_active_artificer
+from aida.diagnostics.base import Finding
+from aida.diagnostics.performance_scan import run_performance_diagnostics
 from aida.logging_utils import get_logger
-from aida.diagnostics.base import Finding as Finding
+from aida.platform.registry import get_platform_adapter
 
 log = get_logger(__name__)
 
-def run_full_diagnostics(config) -> list[Finding]:
-    findings: list[Finding] = []
-
-    try:
-        # ----------------------------
-        # SYSTEM INFO (existing)
-        # ----------------------------
-        os_name = platform.system()
-        os_version = platform.version()
-        cpu_count = psutil.cpu_count(logical=True) or 0
-        total_ram_gb = round(psutil.virtual_memory().total / (1024**3), 2)
-
-        # ----------------------------
-        # MEMORY USAGE ANALYSIS
-        # ----------------------------
-        vm = psutil.virtual_memory()
-
-        used_ram_gb = round(vm.used / (1024**3), 2)
-        available_ram_gb = round(vm.available / (1024**3), 2)
-        memory_percent = vm.percent
-
-        # Base memory reading
-        detail = f"{memory_percent}% ({used_ram_gb} GB used, {available_ram_gb} GB available)"
-
-        # Add interpretation
-        if memory_percent >= 85:
-            detail += " | Critical load condition"
-        elif memory_percent >= 70:
-            detail += " | Moderate memory pressure"
-        else:
-            detail += " | Operating within normal parameters"
-
-        findings.append(Finding(
-            id="perf.ram_usage",
-            title="Memory usage",
-            severity="info",
-            detail=detail,
-        ))
-
-        # ----------------------------
-        # TOP MEMORY PROCESSES
-        # ----------------------------
-        try:
-            processes = []
-
-            for proc in psutil.process_iter(["name", "memory_info"]):
-                try:
-                    mem = proc.info["memory_info"]
-                    if mem:
-                        processes.append((proc.info["name"], mem.rss))
-                except Exception:
-                    continue
-
-            # Sort by memory usage (descending)
-            processes.sort(key=lambda x: x[1], reverse=True)
-
-            top_procs = processes[:5]
-
-            for name, mem in top_procs:
-                mem_mb = round(mem / (1024**2), 1)
-                findings.append(Finding(
-                    id="perf.top_process",
-                    title="High memory process",
-                    severity="info",
-                    detail=f"{name} using {mem_mb} MB RAM",
-                ))
-
-        except Exception as exc:
-            log.warning("Process memory scan failed: %s", exc)
-
-        findings.append(Finding(id="sys.os", title="Operating system", severity="info", detail=f"{os_name} ({os_version})"))
-        findings.append(Finding(id="sys.cpu_cores", title="CPU logical cores", severity="info", detail=str(cpu_count)))
-        findings.append(Finding(id="sys.ram_total", title="Installed memory", severity="info", detail=f"{total_ram_gb} GB"))
-    
-        # ----------------------------
-        # DEFENDER STATUS (Windows)
-        # ----------------------------
-        if os_name == "Windows":
-            try:
-                import subprocess
-
-                result = subprocess.run(
-                    ["powershell", "-Command", "Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-
-                output = result.stdout.lower()
-
-                if "true" in output:
-                    findings.append(Finding(
-                        id="sec.defender",
-                        title="Defender real-time protection",
-                        severity="info",
-                        detail="Enabled",
-                    ))
-                else:
-                    findings.append(Finding(
-                        id="sec.defender",
-                        title="Defender real-time protection",
-                        severity="high",
-                        detail="Disabled",
-                        recommended_next="Enable real-time protection in Windows Security.",
-                    ))
-
-            except Exception as exc:
-                log.warning("Defender check failed: %s", exc)
-
-        # ----------------------------
-        # PROCESS SCAN (light heuristic)
-        # ----------------------------
-        suspicious_count = 0
-
-        for proc in psutil.process_iter(["name", "exe"]):
-            try:
-                exe_path = proc.info.get("exe") or ""
-                name = proc.info.get("name") or "unknown"
-
-                exe_lower = exe_path.lower()
-
-                if any(x in exe_lower for x in ["\\temp\\", "\\appdata\\"]):
-                    suspicious_count += 1
-
-                    findings.append(Finding(
-                        id="proc.suspicious_location",
-                        title="Process running from suspicious location",
-                        severity="medium",
-                        detail=f"{name} ({exe_path})",
-                        recommended_next="Verify legitimacy of this process.",
-                    ))
-
-                    if suspicious_count >= 5:
-                        break
-
-            except Exception:
-                continue
-
-        # ----------------------------
-        # STARTUP FOLDER CHECK
-        # ----------------------------
-        try:
-            startup_path = Path(os.getenv("APPDATA", "")) / "Microsoft\\Windows\\Start Menu\\Programs\\Startup"
-
-            if startup_path.exists():
-                for item in startup_path.iterdir():
-                    if item.suffix.lower() in {".exe", ".lnk"}:
-                        findings.append(Finding(
-                            id="startup.entry",
-                            title="Startup entry detected",
-                            severity="info",
-                            detail=str(item),
-                        ))
-
-        except Exception as exc:
-            log.warning("Startup check failed: %s", exc)
-
-        log.info("Enhanced system diagnostics complete.")
-
-    except Exception as exc:
-        log.exception("System diagnostics failed: %s", exc)
-        findings.append(
-            Finding(
-                id="sys.error",
-                title="System diagnostics error",
-                severity="high",
-                detail="Diagnostics encountered an unexpected error.",
-                evidence=str(exc),
-                recommended_next="Review logs and rerun diagnostics.",
-            )
-        )
-
-    Finding(
-        id="...",
-        title="...",
-        severity="info | medium | high",
-        detail="...",
-        recommended_next="..."  # optional but preferred
-    )
-    return findings
-
-def run_file_scan(config) -> list:
-    findings = []
-
-    try:
-        import subprocess
-        import time
-        import os
-
-        startupinfo = None
-        creationflags = 0
-
-        if os.name == "nt":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            creationflags = subprocess.CREATE_NO_WINDOW
-
-        # Start Defender quick scan without waiting for full completion
-        subprocess.Popen(
-            [
-                "powershell",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "$ProgressPreference='SilentlyContinue'; Start-MpScan -ScanType QuickScan | Out-Null"
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            startupinfo=startupinfo,
-            creationflags=creationflags,
-        )
-
-        # Give Defender a moment to initialize
-        time.sleep(5)
-
-        # Check for detections
-        result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "$ProgressPreference='SilentlyContinue'; Get-MpThreatDetection | Out-String"
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            startupinfo=startupinfo,
-            creationflags=creationflags,
-        )
-
-        output = (result.stdout or "").strip()
-
-        if not output:
-            findings.append(Finding(
-                id="sec.no_threats",
-                title="Threat scan result",
-                severity="info",
-                detail="No active threats detected",
-            ))
-        else:
-            # Extract threat names (basic parsing)
-            threats = []
-
-            for line in output.splitlines():
-                line = line.strip()
-                if line and "ThreatName" not in line:
-                    threats.append(line)
-
-            if threats:
-                for threat in threats[:3]:  # limit output
-                    findings.append(Finding(
-                        id="sec.threat_detail",
-                        title="Threat detected",
-                        severity="high",
-                        detail=threat,
-                        recommended_next="Review and quarantine in Windows Security.",
-                    ))
-            else:
-                findings.append(Finding(
-                    id="sec.threat_detected",
-                    title="Threats detected",
-                    severity="high",
-                    detail="Threats detected but could not parse details",
-                ))
-
-    except Exception as exc:
-        findings.append(Finding(
-            id="sec.scan_error",
-            title="Antivirus scan failed",
-            severity="high",
-            detail=str(exc),
-        ))
-
-    Finding(
-        id="...",
-        title="...",
-        severity="info | medium | high",
-        detail="...",
-        recommended_next="..."  # optional but preferred
-    )
-    return findings
 
 def run_quickscan(config) -> list[Finding]:
+    del config
+    started = time.monotonic()
+    status = "completed"
+    error: str | None = None
     findings: list[Finding] = []
-
     try:
-        os_name = platform.system()
-        os_version = platform.version()
-        cpu_count = psutil.cpu_count(logical=True) or 0
-
-        vm = psutil.virtual_memory()
-        total_ram_gb = round(vm.total / (1024**3), 2)
-        available_ram_gb = round(vm.available / (1024**3), 2)
-
-        findings.append(Finding(
-            id="sys.os",
-            title="Operating system",
-            severity="info",
-            detail=f"{os_name} ({os_version})",
-        ))
-
-        findings.append(Finding(
-            id="sys.cpu",
-            title="CPU logical cores",
-            severity="info",
-            detail=str(cpu_count),
-        ))
-
-        findings.append(Finding(
-            id="sys.ram",
-            title="Memory",
-            severity="info",
-            detail=f"{total_ram_gb} GB total, {available_ram_gb} GB available",
-        ))
-
-        if os_name == "Windows":
-            import subprocess
-
-            result = subprocess.run(
-                ["powershell", "-Command", "Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled"],
-                capture_output=True,
-                text=True,
-                timeout=5,
+        adapter = get_platform_adapter()
+        memory = psutil.virtual_memory()
+        findings.extend(
+            [
+                Finding(
+                    id="sys.os",
+                    title="Operating system",
+                    detail=(
+                        f"{platform.system()} {platform.release()} "
+                        f"({platform.version()})"
+                    ),
+                    evidence=f"Architecture: {platform.machine() or 'unknown'}",
+                ),
+                Finding(
+                    id="sys.cpu",
+                    title="CPU logical cores",
+                    detail=str(psutil.cpu_count(logical=True) or 0),
+                ),
+                Finding(
+                    id="sys.ram",
+                    title="Memory",
+                    severity=(
+                        "high" if memory.percent >= 85
+                        else "medium" if memory.percent >= 70
+                        else "info"
+                    ),
+                    detail=f"{memory.percent:.1f}% utilization",
+                    evidence=(
+                        f"{memory.total / (1024 ** 3):.2f} GB installed; "
+                        f"{memory.available / (1024 ** 3):.2f} GB available"
+                    ),
+                    recommended_next=(
+                        "Review high-memory processes."
+                        if memory.percent >= 70
+                        else ""
+                    ),
+                ),
+            ]
+        )
+        provider = adapter.security_provider_status()
+        findings.append(
+            Finding(
+                id="sec.provider",
+                title=f"Security provider: {provider.provider}",
+                severity=(
+                    "high" if provider.available and provider.enabled is False
+                    else "medium" if not provider.available
+                    else "info"
+                ),
+                detail=provider.detail,
+                evidence=f"Adapter: {adapter.name}",
+                recommended_next=(
+                    "Verify the installed security provider and platform adapter."
+                    if not provider.available
+                    else "Enable real-time protection through the security provider."
+                    if provider.enabled is False
+                    else ""
+                ),
             )
-
-            if "true" in result.stdout.lower():
-                findings.append(Finding(
-                    id="sec.defender",
-                    title="Defender status",
-                    severity="info",
-                    detail="Real-time protection enabled",
-                ))
-            else:
-                findings.append(Finding(
-                    id="sec.defender",
-                    title="Defender status",
-                    severity="high",
-                    detail="Real-time protection disabled",
-                ))
-
-        log.info("Quickscan complete.")
-
+        )
+        log.info("Quickscan complete on %s.", adapter.name)
     except Exception as exc:
+        status = "failed"
+        error = str(exc)
         log.exception("Quickscan failed: %s", exc)
-        findings.append(Finding(
-            id="sys.quickscan_error",
-            title="Quickscan error",
-            severity="high",
-            detail=str(exc),
-        ))
+        findings.append(
+            Finding(
+                id="sys.quickscan_error",
+                title="Quickscan error",
+                severity="high",
+                detail="Quickscan encountered an unexpected error.",
+                evidence=str(exc),
+                recommended_next="Review AIDA logs and rerun the quickscan.",
+            )
+        )
+    engine = get_active_artificer()
+    if engine is not None:
+        engine.record_diagnostic_run(
+            scan_type="quickscan",
+            status=status,
+            findings_count=len(findings),
+            duration_ms=(time.monotonic() - started) * 1000.0,
+            error=error,
+        )
+    return findings
 
-    Finding(
-        id="...",
-        title="...",
-        severity="info | medium | high",
-        detail="...",
-        recommended_next="..."  # optional but preferred
+
+def run_full_diagnostics(config) -> list[Finding]:
+    started = time.monotonic()
+    status = "completed"
+    error: str | None = None
+    findings = run_quickscan(config)
+    try:
+        findings.extend(run_performance_diagnostics())
+        findings.extend(_scan_suspicious_process_locations())
+        log.info("Full diagnostics complete.")
+    except Exception as exc:
+        status = "failed"
+        error = str(exc)
+        log.exception("Full diagnostics failed: %s", exc)
+        findings.append(
+            Finding(
+                id="sys.full_scan_error",
+                title="Full diagnostics error",
+                severity="high",
+                detail="Full diagnostics encountered an unexpected error.",
+                evidence=str(exc),
+                recommended_next="Review AIDA logs and rerun full diagnostics.",
+            )
+        )
+    engine = get_active_artificer()
+    if engine is not None:
+        engine.record_diagnostic_run(
+            scan_type="full_diagnostics",
+            status=status,
+            findings_count=len(findings),
+            duration_ms=(time.monotonic() - started) * 1000.0,
+            error=error,
+        )
+    return findings
+
+
+def run_file_scan(config) -> list[Finding]:
+    del config
+    started = time.monotonic()
+    adapter = get_platform_adapter()
+    result = adapter.request_security_scan("quick")
+    severity = {
+        "completed": "high" if result.threats else "info",
+        "unsupported": "medium",
+        "unknown": "medium",
+        "failed": "high",
+    }.get(result.state, "medium")
+    findings = [
+        Finding(
+            id="sec.scan_state",
+            title=f"{result.provider} scan",
+            severity=severity,
+            detail=f"State: {result.state}. {result.detail}",
+            evidence=(
+                "\n".join(result.threats)
+                if result.threats
+                else f"Platform adapter: {adapter.name}"
+            ),
+            recommended_next=(
+                "Review detections in the active security provider."
+                if result.threats
+                else "Verify provider compatibility or run the scan manually."
+                if result.state != "completed"
+                else ""
+            ),
+        )
+    ]
+    for index, threat in enumerate(result.threats, start=1):
+        findings.append(
+            Finding(
+                id=f"sec.threat.{index}",
+                title="Threat detection returned",
+                severity="high",
+                detail=threat,
+                recommended_next="Review and remediate through the active security provider.",
+            )
+        )
+    engine = get_active_artificer()
+    if engine is not None:
+        engine.record_diagnostic_run(
+            scan_type="security_scan",
+            status=result.state,
+            findings_count=len(findings),
+            duration_ms=(time.monotonic() - started) * 1000.0,
+            provider=result.provider,
+            error=result.detail if result.state == "failed" else None,
+        )
+    return findings
+
+
+def _scan_suspicious_process_locations(limit: int = 5) -> list[Finding]:
+    findings: list[Finding] = []
+    suspicious_markers = (
+        "/tmp/",
+        "\\temp\\",
+        "\\appdata\\local\\temp\\",
     )
+    for process in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            executable = str(process.info.get("exe") or "")
+            normalized = executable.lower()
+            if not executable or not any(marker in normalized for marker in suspicious_markers):
+                continue
+            findings.append(
+                Finding(
+                    id=f"proc.suspicious_location.{process.info.get('pid', 0)}",
+                    title="Process running from a temporary location",
+                    severity="medium",
+                    detail=str(process.info.get("name") or "unknown"),
+                    evidence=executable,
+                    recommended_next="Verify the process publisher, signature, and expected installation path.",
+                )
+            )
+            if len(findings) >= limit:
+                break
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
     return findings
