@@ -30,6 +30,19 @@ class AidaConfig:
     voice_enabled: bool
     bug_report_recipient: str = DEFAULT_BUG_REPORT_RECIPIENT
     bug_report_outbox_dir: str = ""
+    artificer_enabled: bool = True
+    artificer_mode: str = "early_alpha"
+    artificer_data_dir: str = ""
+    artificer_ledger_path: str = ""
+    artificer_consent_path: str = ""
+    artificer_developer_registry_path: str = ""
+    artificer_export_dir: str = ""
+    artificer_dispatch_endpoint: str = ""
+    artificer_local_export_enabled: bool = True
+    artificer_review_interval_seconds: int = 21_600
+    artificer_telemetry_level: str = "local_only"
+    artificer_source_root: str = ""
+    artificer_auto_maintenance_enabled: bool = False
 
 
 def get_config() -> AidaConfig:
@@ -48,6 +61,8 @@ def get_config() -> AidaConfig:
     memory_dir.mkdir(parents=True, exist_ok=True)
     support_dir = user_data_root / "support"
     support_dir.mkdir(parents=True, exist_ok=True)
+    artificer_dir = user_data_root / "artificer"
+    artificer_dir.mkdir(parents=True, exist_ok=True)
 
     elevenlabs_api_key = os.getenv(
         "ELEVENLABS_API_KEY"
@@ -79,7 +94,64 @@ def get_config() -> AidaConfig:
             or DEFAULT_BUG_REPORT_RECIPIENT
         ).strip(),
         bug_report_outbox_dir=str(support_dir / "bug_reports"),
+        artificer_enabled=_env_bool("AIDA_ARTIFICER_ENABLED", True),
+        artificer_mode=(
+            os.getenv("AIDA_ARTIFICER_MODE")
+            or "early_alpha"
+        ).strip(),
+        artificer_data_dir=str(artificer_dir),
+        artificer_ledger_path=str(artificer_dir / "artificer.db"),
+        artificer_consent_path=str(artificer_dir / "consent.json"),
+        artificer_developer_registry_path=str(
+            artificer_dir / "developers.json"
+        ),
+        artificer_export_dir=str(artificer_dir / "exports"),
+        artificer_dispatch_endpoint=(
+            os.getenv("AIDA_ARTIFICER_DISPATCH_ENDPOINT")
+            or ""
+        ).strip(),
+        artificer_local_export_enabled=_env_bool(
+            "AIDA_ARTIFICER_LOCAL_EXPORT_ENABLED",
+            True,
+        ),
+        artificer_review_interval_seconds=_env_int(
+            "AIDA_ARTIFICER_REVIEW_INTERVAL_SECONDS",
+            21_600,
+            minimum=300,
+        ),
+        artificer_telemetry_level=(
+            os.getenv("AIDA_ARTIFICER_TELEMETRY_LEVEL")
+            or "local_only"
+        ).strip().lower(),
+        artificer_source_root=base_dir,
+        artificer_auto_maintenance_enabled=_env_bool(
+            "AIDA_ARTIFICER_AUTO_MAINTENANCE_ENABLED",
+            False,
+        ),
     )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
 
 
 def _user_data_root() -> Path:

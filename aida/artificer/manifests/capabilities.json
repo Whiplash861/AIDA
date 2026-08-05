@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "capability": "process.telemetry",
+      "requirements": ["psutil"],
+      "expected_statuses": ["native", "compatible", "degraded", "blocked", "unverified"]
+    },
+    {
+      "capability": "security.quick_scan",
+      "requirements": ["platform security provider adapter"],
+      "expected_results": ["completed", "failed", "unsupported", "unknown"]
+    },
+    {
+      "capability": "system.settings",
+      "requirements": ["platform settings adapter"],
+      "expected_statuses": ["native", "compatible", "degraded", "unsupported"]
+    },
+    {
+      "capability": "filesystem.reveal",
+      "requirements": ["platform file manager adapter"],
+      "expected_statuses": ["native", "compatible", "unsupported"]
+    }
+  ]
+}
