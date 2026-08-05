@@ -82,6 +82,7 @@ def main() -> int:
         speaker=lambda text: aida_say_text(text, config),
         event_bus=event_bus,
         config=config,
+        artificer=artificer,
     )
 
     artificer_panel = ArtificerPanel(artificer, parent=window)

@@ -4,6 +4,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import Slot
 
+from aida.artificer.engine import ArtificerEngine
 from aida.artificer.event_bus import EventBus
 from aida.artificer.events import make_event
 from aida.brain.llm_client import AIDABrain
@@ -29,6 +30,7 @@ class AIDAController:
         speaker: Optional[Callable[[str], None]] = None,
         event_bus: EventBus | None = None,
         config: AidaConfig | None = None,
+        artificer: ArtificerEngine | None = None,
     ) -> None:
         self.window = window
         self.history = history
@@ -40,6 +42,7 @@ class AIDAController:
         self.command_router = command_router
         self.event_bus = event_bus
         self.config = config
+        self.artificer = artificer
         self._brain_failed = False
         self._speech_failed = False
         self._connect_components()
@@ -76,7 +79,9 @@ class AIDAController:
         elif normalized == "memory":
             self.window.set_memory_status("READY")
         elif normalized.startswith("artificer"):
-            self.window.set_artificer_status("READY")
+            self.window.set_artificer_status(
+                self.artificer.status.value if self.artificer is not None else "READY"
+            )
         self.window.report_task_finished(task_name)
         self._update_task_count()
 
@@ -167,7 +172,12 @@ class AIDAController:
         elif category == "MEMORY":
             self.window.set_memory_status(status)
         elif category == "ARTIFICER":
-            self.window.set_artificer_status(status)
+            if status == "RUNNING":
+                self.window.set_artificer_status("WORKING")
+            else:
+                self.window.set_artificer_status(
+                    self.artificer.status.value if self.artificer is not None else status
+                )
 
     def _handle_brain_response(self, result: object) -> None:
         response = str(result).strip()
@@ -233,4 +243,16 @@ class AIDAController:
     def shutdown(self) -> None:
         self.status_manager.unsubscribe(self._handle_status_changed)
         self.history.unsubscribe(self._handle_message_added)
+        for signal, handler in (
+            (self.task_manager.task_started, self._handle_task_started),
+            (self.task_manager.task_finished, self._handle_task_finished),
+            (self.task_manager.task_failed, self._handle_task_failed),
+            (self.command_manager.speech_requested, self._start_speech),
+            (self.command_manager.input_enabled_requested, self.window.set_input_enabled),
+            (self.command_manager.command_status_changed, self._handle_command_status_changed),
+        ):
+            try:
+                signal.disconnect(handler)
+            except RuntimeError:
+                pass
         self.task_manager.wait_for_done(timeout_ms=5000)
