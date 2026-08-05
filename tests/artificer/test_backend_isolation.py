@@ -41,5 +41,5 @@ def test_backend_is_not_connected_to_frontend_startup() -> None:
     assert "set_active_artificer" not in source
     assert ".run_review(" not in source
 
-    # The existing read-only Artificer dialog remains allowed.
-    assert "ArtificerDialog" in source
+    # The existing read-only Artificer Center remains allowed.
+    assert "ArtificerCenterDialog" in source
