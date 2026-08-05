@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import re
@@ -25,12 +24,29 @@ def extract_slots(
     quoted = [match.group("value").strip() for match in _QUOTED.finditer(source_text)]
     path_match = _WINDOWS_PATH.search(source_text)
 
+    path_intent = (
+        intent_id == "security.scan.deep"
+        or intent_id.startswith("security.stand_down")
+        or intent_id.startswith("security.threat.")
+        or intent_id.startswith("navigation.evidence.")
+    )
     if path_match:
         slots["target_path"] = path_match.group("path").strip()
-    elif intent_id == "security.scan.deep" and quoted:
+    elif path_intent and quoted:
         slots["target_path"] = quoted[-1]
-    elif intent_id == "security.scan.deep" and context.last_path:
-        if any(term in normalized_text for term in (" it", "that folder", "that file", "previous path")):
+    elif path_intent and context.last_path:
+        if any(
+            term in normalized_text
+            for term in (
+                " it",
+                " that",
+                "that folder",
+                "that file",
+                "previous path",
+                "last threat",
+                "last file",
+            )
+        ):
             slots["target_path"] = context.last_path
 
     if intent_id == "memory.search":
@@ -55,11 +71,6 @@ def extract_slots(
             revision = source_text.split(":", 1)[1].strip()
             if revision:
                 slots["revision_text"] = revision
-    elif intent_id.startswith("security.stand_down"):
-        if path_match:
-            slots["target_path"] = path_match.group("path").strip()
-        elif quoted:
-            slots["target_path"] = quoted[-1]
 
     if intent_id.startswith("application."):
         application = _after_any(

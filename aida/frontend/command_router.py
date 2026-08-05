@@ -5,6 +5,7 @@ from enum import Enum, auto
 from typing import Any
 
 from aida.intent.defaults import build_default_intent_registry
+from aida.intent.early_alpha import register_early_alpha_intents
 from aida.intent.models import IntentContext
 from aida.intent.resolver import IntentResolver
 
@@ -36,6 +37,16 @@ class CommandType(Enum):
     APPLICATION_REPAIR_PLAN = auto()
     APPLICATION_CACHE_PLAN = auto()
     APPLICATION_RESTART_PLAN = auto()
+    THREAT_ANALYZE = auto()
+    EVIDENCE_LOCATE = auto()
+    EVIDENCE_OPEN_FOLDER = auto()
+    EVIDENCE_SELECT = auto()
+    THREAT_RESPONSE_PLAN = auto()
+    THREAT_REMEDIATE_REQUEST = auto()
+    THREAT_REMEDIATE_CONFIRM = auto()
+    THREAT_DELETE_BLOCKED = auto()
+    THREAT_CENTER_SHOW = auto()
+    TASK_CENTER_SHOW = auto()
     INTENT_CLARIFICATION = auto()
 
 
@@ -60,15 +71,19 @@ class CommandRouter:
         {
             CommandType.SECURITY_CANCEL_REQUEST,
             CommandType.SECURITY_CANCEL_CONFIRM,
+            CommandType.THREAT_REMEDIATE_CONFIRM,
             CommandType.AUTONOMY_DISABLE,
             CommandType.AUTONOMY_STATUS,
+            CommandType.TASK_CENTER_SHOW,
         }
     )
 
     def __init__(self, resolver: IntentResolver | None = None) -> None:
-        self.resolver = resolver or IntentResolver(
-            build_default_intent_registry()
-        )
+        if resolver is None:
+            registry = build_default_intent_registry()
+            register_early_alpha_intents(registry)
+            resolver = IntentResolver(registry)
+        self.resolver = resolver
         self._context = IntentContext()
 
     @property

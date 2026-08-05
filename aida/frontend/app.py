@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
+from aida.assistance.planner import GuidedResponsePlanner
+from aida.assistance.store import AssistanceTaskStore
 from aida.authorization.confirmation import ConfirmationService
 from aida.autonomy.controller import AutonomyController
 from aida.autonomy.models import AutonomyLevel
@@ -14,32 +16,31 @@ from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
 from aida.frontend.bug_report_dialog import BugReportDialog
 from aida.frontend.command_manager import CommandManager
-from aida.frontend.command_router import (
-    CommandRouter,
-    CommandType,
-    RoutedCommand,
-)
+from aida.frontend.command_router import CommandRouter, CommandType, RoutedCommand
 from aida.frontend.commands.registry import CommandRegistry
 from aida.frontend.controller import AIDAController
 from aida.frontend.memory_dialog import MemoryBankDialog
-from aida.frontend.models import (
-    ChatHistory,
-    ChatMessage,
-    MessageSender,
-)
+from aida.frontend.models import ChatHistory, ChatMessage, MessageSender
 from aida.frontend.overlay import AIDAOverlay
 from aida.frontend.session_store import SessionStore
 from aida.frontend.status import AIDAStatus, StatusManager
+from aida.frontend.task_center_dialog import TaskCenterDialog
 from aida.frontend.task_manager import TaskManager
 from aida.frontend.theme import apply_theme
+from aida.frontend.threat_center_dialog import ThreatCenterDialog
 from aida.frontend.window import AIDAWindow
 from aida.memory.database import MemoryDatabase
 from aida.memory.models import ProcessOutcome
 from aida.memory.service import MemoryService
+from aida.navigation.service import EvidenceNavigationService
 from aida.security.continuity import SecurityTaskLedger
+from aida.security.defender_remediation import DefenderRemediationService
+from aida.security.models import ProviderDetection
 from aida.security.startup_recovery import SecurityStartupReconciler
 from aida.security.stand_down import StandDownService
+from aida.security.threat_analysis import ThreatAnalysisService
 from aida.security.windows.defender_cancel import DefenderCancellationService
+from aida.security.windows.discovery import WindowsAntivirusDiscovery
 from aida.support.reporting import (
     BugReportOutbox,
     BugReportService,
@@ -70,7 +71,7 @@ def _get_application() -> QApplication:
 
 
 def main() -> int:
-    """Launches AIDA's production desktop frontend."""
+    """Launch AIDA's production desktop frontend."""
 
     load_dotenv()
     app = _get_application()
@@ -87,10 +88,45 @@ def main() -> int:
         device_id=memory_service.device_id,
     )
     cancellation_service = DefenderCancellationService()
+    threat_analysis_service = ThreatAnalysisService(database, memory_service)
     stand_down_service = StandDownService(
         database,
         memory_service,
+        identity_inspector=threat_analysis_service.inspect_identity,
     )
+    navigation_service = EvidenceNavigationService(memory_service)
+    assistance_task_store = AssistanceTaskStore(
+        database,
+        user_id=memory_service.user_id,
+        device_id=memory_service.device_id,
+    )
+    response_planner = GuidedResponsePlanner()
+
+    def read_defender_detections() -> tuple[ProviderDetection, ...]:
+        discovery = WindowsAntivirusDiscovery().discover()
+        getter = getattr(discovery.provider, "get_detection_snapshot", None)
+        if not callable(getter):
+            return ()
+        return tuple(getter() or ())
+
+    remediation_service = DefenderRemediationService(
+        snapshot_reader=read_defender_detections
+    )
+    interrupted_assistance = assistance_task_store.mark_startup_interrupted()
+    if interrupted_assistance:
+        memory_service.log_event(
+            "ASSISTANCE_TASKS_INTERRUPTED",
+            "assistance.continuity",
+            (
+                f"AIDA marked {interrupted_assistance} nonterminal assistance "
+                "task(s) interrupted during startup reconciliation."
+            ),
+            payload={"task_count": interrupted_assistance},
+            outcome=ProcessOutcome.PARTIAL,
+            confidence=1.0,
+            promote=True,
+        )
+
     outbox = BugReportOutbox(config.bug_report_outbox_dir)
     bug_report_service = BugReportService(
         version=config.version,
@@ -107,13 +143,20 @@ def main() -> int:
 
     window = AIDAWindow()
     overlay = AIDAOverlay()
-    memory_dialog = MemoryBankDialog(
-        memory_service,
-        parent=window,
-    )
+    memory_dialog = MemoryBankDialog(memory_service, parent=window)
     bug_report_dialog = BugReportDialog(
         bug_report_service,
         recipient_address=config.bug_report_recipient,
+        parent=window,
+    )
+    threat_center_dialog = ThreatCenterDialog(
+        threat_analysis_service,
+        stand_down_service,
+        navigation_service,
+        parent=window,
+    )
+    task_center_dialog = TaskCenterDialog(
+        assistance_task_store,
         parent=window,
     )
 
@@ -144,9 +187,23 @@ def main() -> int:
         bug_report_dialog.raise_()
         bug_report_dialog.activateWindow()
 
+    def show_threat_center() -> None:
+        threat_center_dialog.refresh()
+        threat_center_dialog.show()
+        threat_center_dialog.raise_()
+        threat_center_dialog.activateWindow()
+
+    def show_task_center() -> None:
+        task_center_dialog.refresh()
+        task_center_dialog.show()
+        task_center_dialog.raise_()
+        task_center_dialog.activateWindow()
+
     overlay.clicked.connect(restore_main_window)
     window.memory_requested.connect(show_memory_bank)
     window.bug_report_requested.connect(show_bug_report)
+    window.threat_center_requested.connect(show_threat_center)
+    window.task_center_requested.connect(show_task_center)
 
     session_store = SessionStore()
     history = ChatHistory(message_saver=session_store.save_message)
@@ -163,6 +220,12 @@ def main() -> int:
         cancellation_service=cancellation_service,
         stand_down_service=stand_down_service,
         task_ledger=task_ledger,
+        threat_analysis_service=threat_analysis_service,
+        navigation_service=navigation_service,
+        assistance_task_store=assistance_task_store,
+        response_planner=response_planner,
+        remediation_service=remediation_service,
+        detection_reader=read_defender_detections,
     )
     command_manager = CommandManager(
         registry=command_registry,
@@ -185,6 +248,9 @@ def main() -> int:
         command_manager=command_manager,
         speaker=frontend_speaker,
         autonomy_controller=autonomy_controller,
+    )
+    threat_center_dialog.command_requested.connect(
+        controller.handle_user_message
     )
 
     def update_overlay(
@@ -303,7 +369,9 @@ def main() -> int:
         command_manager.execute(
             RoutedCommand(
                 command_type=CommandType.AUTONOMY_OBSERVE_SECURITY,
-                original_text="Scheduled Observation-mode security posture check",
+                original_text=(
+                    "Scheduled Observation-mode security posture check"
+                ),
                 local_only=True,
                 intent_id="autonomy.observe.security",
                 confidence=1.0,
@@ -338,7 +406,14 @@ def main() -> int:
         window.message_displayed.disconnect(handle_message_displayed)
         window.memory_requested.disconnect(show_memory_bank)
         window.bug_report_requested.disconnect(show_bug_report)
+        window.threat_center_requested.disconnect(show_threat_center)
+        window.task_center_requested.disconnect(show_task_center)
+        threat_center_dialog.command_requested.disconnect(
+            controller.handle_user_message
+        )
         overlay.clicked.disconnect(restore_main_window)
+        task_center_dialog.close()
+        threat_center_dialog.close()
         bug_report_dialog.close()
         memory_dialog.close()
         overlay.close()

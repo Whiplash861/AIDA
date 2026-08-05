@@ -30,20 +30,20 @@ class AIDAWindow(QMainWindow):
     autonomy_toggled = Signal(bool)
     memory_requested = Signal()
     bug_report_requested = Signal()
+    threat_center_requested = Signal()
+    task_center_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self._submit_handler: Optional[Callable[[str], None]] = None
 
         self.setWindowTitle("AIDA")
-        self.resize(1080, 720)
-        self.setMinimumSize(820, 560)
+        self.resize(1180, 760)
+        self.setMinimumSize(900, 600)
 
         self.app_title = QLabel("AIDA")
         self.app_title.setObjectName("appTitle")
-        self.app_subtitle = QLabel(
-            "SYSTEMS DIAGNOSTIC CORE"
-        )
+        self.app_subtitle = QLabel("SYSTEMS DIAGNOSTIC CORE")
         self.app_subtitle.setObjectName("appSubtitle")
 
         self.bug_report_button = QPushButton("REPORT BUG")
@@ -58,37 +58,39 @@ class AIDAWindow(QMainWindow):
             "Open user-specific fixes, findings, preferences, authorizations, and procedure history."
         )
 
+        self.threat_center_button = QPushButton("THREATS")
+        self.threat_center_button.setObjectName("threatCenterButton")
+        self.threat_center_button.setToolTip(
+            "Open local threat analyses, Stand Down records, evidence navigation, and response plans."
+        )
+
+        self.task_center_button = QPushButton("TASKS")
+        self.task_center_button.setObjectName("taskCenterButton")
+        self.task_center_button.setToolTip(
+            "Review durable background assistance tasks and request cooperative cancellation."
+        )
+
         self.autonomy_switch = QCheckBox("AUTONOMY")
         self.autonomy_switch.setObjectName("autonomySwitch")
         self.autonomy_switch.setToolTip(
             "When disabled, every operational decision is routed to the user first."
         )
         self.autonomy_state_label = QLabel("MANUAL")
-        self.autonomy_state_label.setObjectName(
-            "autonomyStateLabel"
-        )
+        self.autonomy_state_label.setObjectName("autonomyStateLabel")
         self.autonomy_state_label.setMinimumWidth(72)
-        self.autonomy_state_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self.autonomy_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.status_label = QLabel("STARTUP")
         self.status_label.setObjectName("statusLabel")
-        self.status_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setMinimumWidth(110)
 
         self.transcript = MessageFeed()
         self.transcript.setMinimumWidth(420)
         self.dashboard = StatusDashboard()
 
-        self.workspace_splitter = QSplitter(
-            Qt.Orientation.Horizontal
-        )
-        self.workspace_splitter.setObjectName(
-            "workspaceSplitter"
-        )
+        self.workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.workspace_splitter.setObjectName("workspaceSplitter")
         self.workspace_splitter.setChildrenCollapsible(False)
         self.workspace_splitter.setHandleWidth(6)
 
@@ -97,15 +99,12 @@ class AIDAWindow(QMainWindow):
         self.composer_hint = QLabel("ENTER TO SEND")
         self.composer_hint.setObjectName("composerHint")
         self.composer_hint.setAlignment(
-            Qt.AlignmentFlag.AlignRight
-            | Qt.AlignmentFlag.AlignVCenter
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
         self.input_box = QLineEdit()
         self.input_box.setObjectName("commandInput")
-        self.input_box.setPlaceholderText(
-            "State malfunction parameters..."
-        )
+        self.input_box.setPlaceholderText("State malfunction parameters...")
         self.input_box.setMinimumHeight(42)
 
         self.send_button = QPushButton("Send")
@@ -135,11 +134,13 @@ class AIDAWindow(QMainWindow):
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(14, 10, 14, 10)
-        header_layout.setSpacing(12)
+        header_layout.setSpacing(9)
         header_layout.addLayout(identity_layout)
         header_layout.addStretch()
         header_layout.addWidget(self.bug_report_button)
         header_layout.addWidget(self.memory_button)
+        header_layout.addWidget(self.threat_center_button)
+        header_layout.addWidget(self.task_center_button)
         header_layout.addLayout(autonomy_layout)
         header_layout.addWidget(self.status_label)
         header.setLayout(header_layout)
@@ -195,18 +196,14 @@ class AIDAWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         self.send_button.clicked.connect(self._submit_input)
-        self.input_box.returnPressed.connect(
-            self._submit_input
+        self.input_box.returnPressed.connect(self._submit_input)
+        self.autonomy_switch.toggled.connect(self._emit_autonomy_toggled)
+        self.memory_button.clicked.connect(self._emit_memory_requested)
+        self.bug_report_button.clicked.connect(self._emit_bug_report_requested)
+        self.threat_center_button.clicked.connect(
+            self._emit_threat_center_requested
         )
-        self.autonomy_switch.toggled.connect(
-            self._emit_autonomy_toggled
-        )
-        self.memory_button.clicked.connect(
-            self._emit_memory_requested
-        )
-        self.bug_report_button.clicked.connect(
-            self._emit_bug_report_requested
-        )
+        self.task_center_button.clicked.connect(self._emit_task_center_requested)
 
     @Slot(bool)
     def _emit_autonomy_toggled(self, enabled: bool) -> None:
@@ -221,6 +218,14 @@ class AIDAWindow(QMainWindow):
         self.bug_report_requested.emit()
 
     @Slot()
+    def _emit_threat_center_requested(self) -> None:
+        self.threat_center_requested.emit()
+
+    @Slot()
+    def _emit_task_center_requested(self) -> None:
+        self.task_center_requested.emit()
+
+    @Slot()
     def _submit_input(self) -> None:
         text = self.input_box.text().strip()
         if not text:
@@ -228,38 +233,21 @@ class AIDAWindow(QMainWindow):
         self.input_box.clear()
         self.message_submitted.emit(text)
 
-    def set_submit_handler(
-        self,
-        handler: Callable[[str], None],
-    ) -> None:
+    def set_submit_handler(self, handler: Callable[[str], None]) -> None:
         if self._submit_handler is not None:
             try:
-                self.message_submitted.disconnect(
-                    self._submit_handler
-                )
+                self.message_submitted.disconnect(self._submit_handler)
             except RuntimeError:
                 pass
         self._submit_handler = handler
         self.message_submitted.connect(handler)
 
-    def display_message(
-        self,
-        message: ChatMessage,
-    ) -> None:
-        self.transcript.add_message(
-            message,
-            animate=True,
-        )
+    def display_message(self, message: ChatMessage) -> None:
+        self.transcript.add_message(message, animate=True)
         self.message_displayed.emit(message)
 
-    def set_status(
-        self,
-        status: AIDAStatus,
-    ) -> None:
-        apply_status_tone(
-            self.status_label,
-            status.name,
-        )
+    def set_status(self, status: AIDAStatus) -> None:
+        apply_status_tone(self.status_label, status.name)
         self.dashboard.set_agent_status(status)
 
     def set_autonomy_enabled(
@@ -298,15 +286,11 @@ class AIDAWindow(QMainWindow):
         self.input_box.setEnabled(enabled)
         self.send_button.setEnabled(enabled)
         if enabled:
-            self.input_box.setPlaceholderText(
-                "State malfunction parameters..."
-            )
+            self.input_box.setPlaceholderText("State malfunction parameters...")
             self.composer_hint.setText("ENTER TO SEND")
             self.input_box.setFocus()
         else:
-            self.input_box.setPlaceholderText(
-                "AIDA is processing..."
-            )
+            self.input_box.setPlaceholderText("AIDA is processing...")
             self.composer_hint.setText("COMMAND LOCKED")
 
     def report_task_started(self, task_name: str) -> None:
@@ -315,12 +299,5 @@ class AIDAWindow(QMainWindow):
     def report_task_finished(self, task_name: str) -> None:
         self.dashboard.report_task_finished(task_name)
 
-    def report_task_failed(
-        self,
-        task_name: str,
-        error_message: str,
-    ) -> None:
-        self.dashboard.report_task_failed(
-            task_name,
-            error_message,
-        )
+    def report_task_failed(self, task_name: str, error_message: str) -> None:
+        self.dashboard.report_task_failed(task_name, error_message)
