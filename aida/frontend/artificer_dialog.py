@@ -106,11 +106,21 @@ class ArtificerCenterDialog(QDialog):
         self.review_button.setEnabled(not busy)
         self.export_button.setEnabled(not busy)
 
+    @Slot(str)
     def show_operation_message(self, message: str) -> None:
         clean = message.strip()
         if clean:
             self.status_label.setText(clean)
 
+    @Slot(str)
+    def show_review_error(self, message: str) -> None:
+        self.show_operation_message(f"Artificer review failed: {message}")
+
+    @Slot(str)
+    def show_export_error(self, message: str) -> None:
+        self.show_operation_message(f"Artificer export failed: {message}")
+
+    @Slot(object)
     def show_export_result(self, path: object) -> None:
         target = Path(str(path))
         self.status_label.setText(f"Artificer report exported locally: {target}")
