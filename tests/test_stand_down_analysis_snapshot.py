@@ -36,4 +36,5 @@ def test_stand_down_captures_analysis_identity_and_suspends_on_signer_change(tmp
     evaluation = service.evaluate(target)
     assert evaluation.status is StandDownStatus.SUSPENDED
     assert evaluation.suppress_aida_recommendation is False
-    assert "thumbprint" in evaluation.reason
+    assert "signer certificate changed" in evaluation.reason.lower()
+    assert "resumed threat assessment" in evaluation.reason.lower()
