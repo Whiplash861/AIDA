@@ -32,6 +32,7 @@ class ArtificerCenterDialog(QDialog):
         super().__init__(parent)
         self.engine = engine
         self._snapshot: ArtificerSnapshot | None = None
+        self._last_export_path: Path | None = None
 
         self.setWindowTitle("AIDA Artificer Center")
         self.resize(960, 660)
@@ -39,6 +40,9 @@ class ArtificerCenterDialog(QDialog):
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
+        self.status_label.setTextInteractionFlags(
+            self.status_label.textInteractionFlags()
+        )
 
         self.tabs = QTabWidget()
         self.overview_text = self._read_only_text()
@@ -56,12 +60,15 @@ class ArtificerCenterDialog(QDialog):
         self.refresh_button = QPushButton("Refresh")
         self.review_button = QPushButton("Run Review")
         self.export_button = QPushButton("Export Report")
+        self.open_export_button = QPushButton("Open Last Export")
+        self.open_export_button.setEnabled(False)
         self.close_button = QPushButton("Close")
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.refresh_button)
         buttons.addWidget(self.review_button)
         buttons.addWidget(self.export_button)
+        buttons.addWidget(self.open_export_button)
         buttons.addStretch()
         buttons.addWidget(self.close_button)
 
@@ -73,6 +80,7 @@ class ArtificerCenterDialog(QDialog):
         self.refresh_button.clicked.connect(self.refresh)
         self.review_button.clicked.connect(self.review_requested.emit)
         self.export_button.clicked.connect(self.export_requested.emit)
+        self.open_export_button.clicked.connect(self.open_last_export)
         self.close_button.clicked.connect(self.close)
         self.refresh()
 
@@ -122,9 +130,53 @@ class ArtificerCenterDialog(QDialog):
 
     @Slot(object)
     def show_export_result(self, path: object) -> None:
-        target = Path(str(path))
-        self.status_label.setText(f"Artificer report exported locally: {target}")
-        self.refresh()
+        target = Path(str(path)).expanduser()
+        self._last_export_path = target
+        self.apply_snapshot(self.engine.snapshot())
+
+        if not target.is_file():
+            self.open_export_button.setEnabled(False)
+            self.status_label.setText(
+                "Artificer reported an export, but the file could not be found at:\n"
+                f"{target}"
+            )
+            return
+
+        self.open_export_button.setEnabled(True)
+        self.status_label.setText(
+            "Artificer report exported locally and revealed in File Explorer:\n"
+            f"{target}"
+        )
+        self._reveal_export(target)
+
+    @Slot()
+    def open_last_export(self) -> None:
+        target = self._last_export_path
+        if target is None:
+            self.show_operation_message("No Artificer report has been exported yet.")
+            return
+        if not target.is_file():
+            self.open_export_button.setEnabled(False)
+            self.show_operation_message(
+                f"The last Artificer export is no longer available at: {target}"
+            )
+            return
+        self._reveal_export(target)
+
+    def _reveal_export(self, target: Path) -> None:
+        try:
+            self.engine.platform_adapter.reveal_path(target)
+        except (OSError, RuntimeError, ValueError) as reveal_error:
+            try:
+                self.engine.platform_adapter.open_folder(target.parent)
+            except (OSError, RuntimeError, ValueError) as folder_error:
+                self.status_label.setText(
+                    "Artificer report exported successfully, but the operating "
+                    "system could not open its location.\n"
+                    f"Report: {target}\n"
+                    f"Reveal error: {reveal_error}\n"
+                    f"Folder error: {folder_error}"
+                )
 
     @staticmethod
     def _render_overview(snapshot: ArtificerSnapshot) -> str:
