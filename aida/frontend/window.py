@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal, Slot
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFileDialog,
     QFrame,
@@ -46,11 +49,14 @@ class AIDAWindow(QMainWindow):
     voice_transcript_ready = Signal(str)
     voice_error_reported = Signal(str)
 
+    _MAX_ATTACHMENTS = 5
+
     def __init__(self) -> None:
         super().__init__()
         self._submit_handler: Optional[Callable[[str], None]] = None
         self._perception = PerceptionService()
         self._attached_evidence: list[PerceptionEvidence] = []
+        self._clipboard_temp_paths: list[Path] = []
         self._voice = VoiceInteractionCoordinator(
             VoiceCaptureService(),
             OpenAITranscriptionProvider(),
@@ -111,7 +117,6 @@ class AIDAWindow(QMainWindow):
         self.transcript = MessageFeed()
         self.transcript.setMinimumWidth(420)
         self.dashboard = StatusDashboard()
-
         self.workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.workspace_splitter.setObjectName("workspaceSplitter")
         self.workspace_splitter.setChildrenCollapsible(False)
@@ -124,36 +129,36 @@ class AIDAWindow(QMainWindow):
         self.composer_hint.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-
         self.attachment_label = QLabel("")
         self.attachment_label.setObjectName("composerHint")
         self.attachment_label.setVisible(False)
 
-        self.microphone_button = QPushButton("MIC")
-        self.microphone_button.setObjectName("taskCenterButton")
-        self.microphone_button.setMinimumHeight(42)
-        self.microphone_button.setToolTip(
-            "Start or stop push-to-talk voice capture. Transcript remains editable before sending."
+        self.microphone_button = self._composer_button(
+            "MIC", "Push to talk. Shortcut: Ctrl+Space."
         )
-
-        self.attachment_button = QPushButton("IMAGE")
-        self.attachment_button.setObjectName("taskCenterButton")
-        self.attachment_button.setMinimumHeight(42)
-        self.attachment_button.setToolTip(
-            "Attach a screenshot or photograph as local diagnostic evidence."
+        self.attachment_button = self._composer_button(
+            "IMAGE", "Attach a screenshot or photograph as local evidence."
         )
+        self.clipboard_button = self._composer_button(
+            "PASTE", "Attach the image currently on the clipboard."
+        )
+        self.clear_evidence_button = self._composer_button(
+            "CLEAR", "Remove all currently attached evidence."
+        )
+        self.clear_evidence_button.setVisible(False)
 
         self.input_box = QLineEdit()
         self.input_box.setObjectName("commandInput")
         self.input_box.setPlaceholderText("State malfunction parameters...")
         self.input_box.setMinimumHeight(42)
-
         self.send_button = QPushButton("Send")
         self.send_button.setObjectName("sendButton")
         self.send_button.setMinimumHeight(42)
 
         self._build_layout()
         self._connect_signals()
+        self._push_to_talk_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
+        self._push_to_talk_shortcut.activated.connect(self._voice.toggle_recording)
         self.set_status(AIDAStatus.STARTUP)
         self.set_perception_status("READY")
         self.set_microphone_status("READY")
@@ -163,6 +168,14 @@ class AIDAWindow(QMainWindow):
     def _header_button(text: str, tooltip: str, object_name: str) -> QPushButton:
         button = QPushButton(text)
         button.setObjectName(object_name)
+        button.setToolTip(tooltip)
+        return button
+
+    @staticmethod
+    def _composer_button(text: str, tooltip: str) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("taskCenterButton")
+        button.setMinimumHeight(42)
         button.setToolTip(tooltip)
         return button
 
@@ -211,14 +224,15 @@ class AIDAWindow(QMainWindow):
         workspace_layout.addWidget(self.workspace_splitter)
         workspace.setLayout(workspace_layout)
 
-        composer = QFrame()
-        composer.setObjectName("composer")
+        self._composer = QFrame()
+        self._composer.setObjectName("composer")
         composer_header = QHBoxLayout()
         composer_header.setContentsMargins(0, 0, 0, 0)
         composer_header.setSpacing(8)
         composer_header.addWidget(self.composer_title)
         composer_header.addWidget(self.attachment_label)
         composer_header.addStretch()
+        composer_header.addWidget(self.clear_evidence_button)
         composer_header.addWidget(self.composer_hint)
 
         input_layout = QHBoxLayout()
@@ -227,6 +241,7 @@ class AIDAWindow(QMainWindow):
         input_layout.addWidget(self.microphone_button)
         input_layout.addWidget(self.input_box, stretch=1)
         input_layout.addWidget(self.attachment_button)
+        input_layout.addWidget(self.clipboard_button)
         input_layout.addWidget(self.send_button)
 
         composer_layout = QVBoxLayout()
@@ -234,14 +249,14 @@ class AIDAWindow(QMainWindow):
         composer_layout.setSpacing(7)
         composer_layout.addLayout(composer_header)
         composer_layout.addLayout(input_layout)
-        composer.setLayout(composer_layout)
+        self._composer.setLayout(composer_layout)
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(12)
         main_layout.addWidget(header)
         main_layout.addWidget(workspace, stretch=1)
-        main_layout.addWidget(composer)
+        main_layout.addWidget(self._composer)
         container = QWidget()
         container.setObjectName("appRoot")
         container.setLayout(main_layout)
@@ -258,9 +273,12 @@ class AIDAWindow(QMainWindow):
         self.artificer_button.clicked.connect(self.artificer_requested.emit)
         self.microphone_button.clicked.connect(self._voice.toggle_recording)
         self.attachment_button.clicked.connect(self._choose_image)
+        self.clipboard_button.clicked.connect(self._attach_clipboard_image)
+        self.clear_evidence_button.clicked.connect(self._clear_evidence)
         self._voice.state_changed.connect(self.set_microphone_status)
         self._voice.state_changed.connect(self.voice_state_changed.emit)
         self._voice.recording_changed.connect(self._handle_recording_changed)
+        self._voice.processing_changed.connect(self._handle_processing_changed)
         self._voice.transcript_ready.connect(self._insert_transcript)
         self._voice.transcript_ready.connect(self.voice_transcript_ready.emit)
         self._voice.error_reported.connect(self._report_voice_error)
@@ -272,52 +290,138 @@ class AIDAWindow(QMainWindow):
 
     @Slot()
     def _choose_image(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Attach diagnostic image",
+            "Attach diagnostic images",
             "",
             "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp)",
         )
-        if path:
+        for path in paths:
             self._attach_image(Path(path), EvidenceSource.FILE_PICKER)
 
+    @Slot()
+    def _attach_clipboard_image(self) -> None:
+        image = QApplication.clipboard().image()
+        if image.isNull():
+            self.dashboard.add_activity("PERCEPTION clipboard contains no image")
+            return
+        path = Path(tempfile.gettempdir()) / f"aida_clipboard_{uuid.uuid4().hex}.png"
+        if not image.save(str(path), "PNG"):
+            self.dashboard.add_activity("PERCEPTION could not stage clipboard image")
+            return
+        self._clipboard_temp_paths.append(path)
+        self._attach_image(path, EvidenceSource.CLIPBOARD)
+
     def _attach_image(self, path: Path, source: EvidenceSource) -> None:
+        if len(self._attached_evidence) >= self._MAX_ATTACHMENTS:
+            self.dashboard.add_activity(
+                f"PERCEPTION attachment limit is {self._MAX_ATTACHMENTS}"
+            )
+            return
         try:
             evidence = self._perception.observe_image(path, source=source)
         except (OSError, ValueError) as exc:
             self.set_perception_status("ERROR")
             self.dashboard.add_activity(f"PERCEPTION failed: {exc}")
             return
+        if self._perception.is_duplicate(evidence, self._attached_evidence):
+            self.dashboard.add_activity(f"PERCEPTION ignored duplicate {path.name}")
+            return
         self._attached_evidence.append(evidence)
         self.set_perception_status("EVIDENCE READY")
-        self.attachment_label.setText(f"ATTACHED: {path.name}")
-        self.attachment_label.setVisible(True)
+        self._refresh_attachment_display()
         self.perception_evidence_attached.emit(evidence)
         self.dashboard.add_activity(f"PERCEPTION attached {path.name}")
 
+    def _refresh_attachment_display(self) -> None:
+        count = len(self._attached_evidence)
+        if count == 0:
+            self.attachment_label.clear()
+            self.attachment_label.setVisible(False)
+            self.clear_evidence_button.setVisible(False)
+            return
+        names = ", ".join(
+            item.local_path.name for item in self._attached_evidence if item.local_path
+        )
+        self.attachment_label.setText(f"ATTACHED {count}: {names}")
+        self.attachment_label.setToolTip(names)
+        self.attachment_label.setVisible(True)
+        self.clear_evidence_button.setVisible(True)
+
+    @Slot()
+    def _clear_evidence(self) -> None:
+        self._attached_evidence.clear()
+        for path in self._clipboard_temp_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._clipboard_temp_paths.clear()
+        self._refresh_attachment_display()
+        self.set_perception_status("READY")
+        self.dashboard.add_activity("PERCEPTION attachments cleared")
+
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        urls = event.mimeData().urls()
-        if any(url.isLocalFile() for url in urls):
+        if any(url.isLocalFile() for url in event.mimeData().urls()):
+            self._set_drag_highlight(True)
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._set_drag_highlight(False)
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event: QDropEvent) -> None:
+        self._set_drag_highlight(False)
+        accepted = False
         for url in event.mimeData().urls():
             if url.isLocalFile():
                 self._attach_image(Path(url.toLocalFile()), EvidenceSource.DRAG_DROP)
-                event.acceptProposedAction()
-                return
+                accepted = True
+        if accepted:
+            event.acceptProposedAction()
+            return
         super().dropEvent(event)
+
+    def _set_drag_highlight(self, enabled: bool) -> None:
+        self._composer.setStyleSheet(
+            "QFrame#composer { border: 2px solid rgba(88, 207, 255, 210); }"
+            if enabled
+            else ""
+        )
 
     @Slot(bool)
     def _handle_recording_changed(self, recording: bool) -> None:
         self.microphone_button.setText("STOP" if recording else "MIC")
+        self.microphone_button.setToolTip(
+            "Stop recording and begin transcription."
+            if recording
+            else "Push to talk. Shortcut: Ctrl+Space."
+        )
         self.input_box.setPlaceholderText(
             "Listening... click STOP when finished."
             if recording
             else "State malfunction parameters..."
         )
+
+    @Slot(bool)
+    def _handle_processing_changed(self, processing: bool) -> None:
+        self.microphone_button.setText("CANCEL" if processing else "MIC")
+        if processing:
+            try:
+                self.microphone_button.clicked.disconnect(self._voice.toggle_recording)
+            except RuntimeError:
+                pass
+            self.microphone_button.clicked.connect(self._voice.cancel)
+            self.composer_hint.setText("TRANSCRIBING")
+        else:
+            try:
+                self.microphone_button.clicked.disconnect(self._voice.cancel)
+            except RuntimeError:
+                pass
+            self.microphone_button.clicked.connect(self._voice.toggle_recording)
+            self.composer_hint.setText("ENTER TO SEND")
 
     @Slot(str)
     def _insert_transcript(self, transcript: str) -> None:
@@ -338,15 +442,11 @@ class AIDAWindow(QMainWindow):
             return
         if self._attached_evidence:
             evidence_context = " | ".join(
-                evidence.compact_summary()
-                for evidence in self._attached_evidence
+                evidence.compact_summary() for evidence in self._attached_evidence
             )
             text = f"{text}\n\nAttached perception evidence: {evidence_context}"
         self.input_box.clear()
-        self._attached_evidence.clear()
-        self.attachment_label.clear()
-        self.attachment_label.setVisible(False)
-        self.set_perception_status("READY")
+        self._clear_evidence()
         self.message_submitted.emit(text)
 
     def set_submit_handler(self, handler: Callable[[str], None]) -> None:
@@ -406,6 +506,7 @@ class AIDAWindow(QMainWindow):
         self.send_button.setEnabled(enabled)
         self.microphone_button.setEnabled(enabled)
         self.attachment_button.setEnabled(enabled)
+        self.clipboard_button.setEnabled(enabled)
         if enabled:
             self.input_box.setPlaceholderText("State malfunction parameters...")
             self.composer_hint.setText("ENTER TO SEND")
@@ -425,4 +526,5 @@ class AIDAWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._voice.shutdown()
+        self._clear_evidence()
         super().closeEvent(event)
