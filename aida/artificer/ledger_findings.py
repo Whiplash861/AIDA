@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import Any
 
 from aida.artificer.ledger_records import finding_from_record, proposal_from_record
@@ -27,7 +28,10 @@ class LedgerFindingsMixin:
                     affected_components=finding.affected_components,
                     first_seen_utc=previous.first_seen_utc,
                     last_seen_utc=finding.last_seen_utc,
-                    observation_count=previous.observation_count + finding.observation_count,
+                    observation_count=max(
+                        previous.observation_count,
+                        finding.observation_count,
+                    ),
                     finding=finding.finding,
                     evidence_summary=finding.evidence_summary,
                     reasoning_summary=finding.reasoning_summary,
@@ -36,7 +40,9 @@ class LedgerFindingsMixin:
                     implementation_risk=finding.implementation_risk,
                     regression_risk=finding.regression_risk,
                     authority_required=finding.authority_required,
-                    status=previous.status,
+                    status=(
+                        "open" if previous.status == "resolved" else previous.status
+                    ),
                     fingerprint=fingerprint,
                 )
             payload = finding.to_record()
@@ -52,14 +58,63 @@ class LedgerFindingsMixin:
                     observation_count=excluded.observation_count,status=excluded.status,
                     payload_json=excluded.payload_json""",
                 (
-                    finding.finding_id, fingerprint, finding.category, finding.title,
-                    finding.severity, finding.confidence, finding.evidence_quality,
-                    finding.first_seen_utc.isoformat(), finding.last_seen_utc.isoformat(),
-                    finding.observation_count, finding.status, self._json(payload),
+                    finding.finding_id,
+                    fingerprint,
+                    finding.category,
+                    finding.title,
+                    finding.severity,
+                    finding.confidence,
+                    finding.evidence_quality,
+                    finding.first_seen_utc.isoformat(),
+                    finding.last_seen_utc.isoformat(),
+                    finding.observation_count,
+                    finding.status,
+                    self._json(payload),
                 ),
             )
             self._chain(connection, "artificer_finding", finding.finding_id, payload)
         return finding
+
+    def resolve_absent_findings(
+        self,
+        *,
+        active_fingerprints: Iterable[str],
+        fingerprint_prefixes: Iterable[str],
+    ) -> int:
+        active = {value for value in active_fingerprints if value}
+        prefixes = tuple(value for value in fingerprint_prefixes if value)
+        if not prefixes:
+            return 0
+
+        resolved = 0
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """SELECT finding_id,fingerprint,payload_json
+                FROM artificer_findings WHERE status='open'"""
+            ).fetchall()
+            for row in rows:
+                fingerprint = str(row["fingerprint"] or "")
+                if not fingerprint.startswith(prefixes) or fingerprint in active:
+                    continue
+                payload = json.loads(row["payload_json"])
+                payload["status"] = "resolved"
+                connection.execute(
+                    """UPDATE artificer_findings
+                    SET status='resolved',payload_json=? WHERE finding_id=?""",
+                    (self._json(payload), row["finding_id"]),
+                )
+                self._chain(
+                    connection,
+                    "finding_status",
+                    row["finding_id"],
+                    {
+                        "status": "resolved",
+                        "reason": "Not reproduced by the latest deterministic review.",
+                        "fingerprint": fingerprint,
+                    },
+                )
+                resolved += 1
+        return resolved
 
     def list_findings(
         self, *, status: str | None = "open", limit: int = 100
@@ -97,8 +152,10 @@ class LedgerFindingsMixin:
             connection.execute(
                 "INSERT OR REPLACE INTO upgrade_proposals VALUES(?,?,?,?)",
                 (
-                    proposal.proposal_id, proposal.status,
-                    proposal.created_at_utc.isoformat(), self._json(payload),
+                    proposal.proposal_id,
+                    proposal.status,
+                    proposal.created_at_utc.isoformat(),
+                    self._json(payload),
                 ),
             )
             self._chain(connection, "upgrade_proposal", proposal.proposal_id, payload)
@@ -145,10 +202,14 @@ class LedgerFindingsMixin:
                 (proposal_id, decision, developer_id, reason, decided_at),
             )
             self._chain(
-                connection, "proposal_decision", proposal_id,
+                connection,
+                "proposal_decision",
+                proposal_id,
                 {
-                    "proposal_id": proposal_id, "decision": decision,
-                    "developer_id": developer_id, "reason": reason,
+                    "proposal_id": proposal_id,
+                    "decision": decision,
+                    "developer_id": developer_id,
+                    "reason": reason,
                     "decided_at_utc": decided_at,
                 },
             )
