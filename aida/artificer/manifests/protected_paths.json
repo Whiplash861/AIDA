@@ -3,6 +3,7 @@
   "protected_paths": [
     "aida/artificer/policy.py",
     "aida/artificer/warden.py",
+    "aida/artificer/codewright.py",
     "aida/artificer/developer_registry.py",
     "aida/artificer/consent.py",
     "aida/artificer/sanitizer.py",
@@ -14,6 +15,7 @@
     "aida/artificer/ledger_schema.py",
     "aida/artificer/ledger_core.py",
     "aida/artificer/manifests/protected_paths.json",
+    "aida/artificer/manifests/source_expectations.json",
     ".env"
   ]
 }
