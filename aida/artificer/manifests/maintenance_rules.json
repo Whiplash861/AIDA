@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "rule_id": "python.format_only",
+      "authority": "bounded_maintenance",
+      "requires_ast_equivalence": true,
+      "maximum_changed_lines": 30
+    },
+    {
+      "rule_id": "python.syntax_repair",
+      "authority": "owner_approval",
+      "requires_owner_approval": true,
+      "maximum_changed_lines": 12
+    },
+    {
+      "rule_id": "data.timezone_refresh",
+      "authority": "bounded_maintenance",
+      "allowed_root": "aida/data/timezones"
+    },
+    {
+      "rule_id": "data.geofence_refresh",
+      "authority": "bounded_maintenance",
+      "allowed_root": "aida/data/geofencing"
+    }
+  ]
+}
