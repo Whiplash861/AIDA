@@ -21,26 +21,35 @@ def test_ledger_persists_events_and_verifies_chain(tmp_path) -> None:
     assert ledger.verify_integrity() is True
 
 
-def test_unchanged_deterministic_finding_does_not_inflate_count(
+def test_deterministic_finding_count_reflects_current_review(
     tmp_path,
 ) -> None:
     ledger = ArtificerLedger(tmp_path / "artificer.db")
+    fingerprint = "platform-leak:aida/ui/navigation.py"
 
-    first = ledger.upsert_finding(
-        _finding("platform-leak:aida/ui/navigation.py", count=1)
-    )
-    repeated = ledger.upsert_finding(
-        _finding("platform-leak:aida/ui/navigation.py", count=1)
-    )
+    legacy = ledger.upsert_finding(_finding(fingerprint, count=6))
+    current = ledger.upsert_finding(_finding(fingerprint, count=1))
+    repeated = ledger.upsert_finding(_finding(fingerprint, count=1))
 
-    assert first.observation_count == 1
+    assert legacy.observation_count == 6
+    assert current.observation_count == 1
     assert repeated.observation_count == 1
     assert ledger.list_findings()[0].observation_count == 1
 
-    increased = ledger.upsert_finding(
-        _finding("platform-leak:aida/ui/navigation.py", count=4)
-    )
-    assert increased.observation_count == 4
+
+def test_operational_finding_retains_highest_measured_count(
+    tmp_path,
+) -> None:
+    ledger = ArtificerLedger(tmp_path / "artificer.db")
+    fingerprint = "failures:interaction.voice"
+
+    first = ledger.upsert_finding(_finding(fingerprint, count=4))
+    lower_window = ledger.upsert_finding(_finding(fingerprint, count=2))
+    higher_window = ledger.upsert_finding(_finding(fingerprint, count=7))
+
+    assert first.observation_count == 4
+    assert lower_window.observation_count == 4
+    assert higher_window.observation_count == 7
 
 
 def test_absent_deterministic_findings_resolve_and_reopen(
