@@ -59,12 +59,21 @@ class ArtificerEngine:
         self.enabled = bool(getattr(config, "artificer_enabled", True))
         self.version = str(getattr(config, "version", "1.0.0"))
         self.source_root = Path(
-            getattr(config, "artificer_source_root", getattr(config, "base_dir", "."))
+            getattr(
+                config,
+                "artificer_source_root",
+                getattr(config, "base_dir", "."),
+            )
         ).resolve()
         data_dir = Path(
-            getattr(config, "artificer_data_dir", self.source_root / "memory" / "artificer")
+            getattr(
+                config,
+                "artificer_data_dir",
+                self.source_root / "memory" / "artificer",
+            )
         )
         data_dir.mkdir(parents=True, exist_ok=True)
+
         self.event_bus = event_bus or EventBus()
         self.ledger = ArtificerLedger(
             getattr(config, "artificer_ledger_path", data_dir / "artificer.db")
@@ -72,11 +81,13 @@ class ArtificerEngine:
         self.sanitizer = PayloadSanitizer()
         self.watchtower = Watchtower(self.ledger, self.sanitizer)
         self.event_bus.subscribe(self.watchtower.observe)
+
         self.platform_adapter = platform_adapter or detect_platform_adapter()
         self.liaison = Liaison(self.platform_adapter)
         self.codewright = Codewright(self.source_root)
         self.appraiser = Appraiser(self.ledger)
         self.architect = Architect()
+
         self.policy = ArtificerPolicy(self.source_root)
         self.warden = Warden(self.policy)
         self.validator = Validator()
@@ -89,6 +100,7 @@ class ArtificerEngine:
             validator=self.validator,
             rollback=self.rollback,
         )
+
         self.consent = ConsentManager(
             getattr(config, "artificer_consent_path", data_dir / "consent.json")
         )
@@ -100,6 +112,7 @@ class ArtificerEngine:
                     self.consent.set_level(desired_level)
             except ValueError:
                 pass
+
         self.developers = DeveloperRegistry(
             getattr(
                 config,
@@ -107,7 +120,9 @@ class ArtificerEngine:
                 data_dir / "developers.json",
             )
         )
-        endpoint = str(getattr(config, "artificer_dispatch_endpoint", "") or "").strip()
+        endpoint = str(
+            getattr(config, "artificer_dispatch_endpoint", "") or ""
+        ).strip()
         export_dir = getattr(config, "artificer_export_dir", data_dir / "exports")
         if endpoint:
             transport = HTTPSDispatchTransport(endpoint)
@@ -122,9 +137,16 @@ class ArtificerEngine:
             developers=self.developers,
             transport=transport,
         )
-        interval = int(getattr(config, "artificer_review_interval_seconds", 21600))
+
+        interval = int(
+            getattr(config, "artificer_review_interval_seconds", 21_600)
+        )
         self.scheduler = ArtificerScheduler(self.run_review, interval)
-        self._status = ArtificerStatus.DISABLED if not self.enabled else ArtificerStatus.READY
+        self._status = (
+            ArtificerStatus.DISABLED
+            if not self.enabled
+            else ArtificerStatus.READY
+        )
         self._last_review_utc: str | None = None
         self._platform_profile: PlatformProfile | None = None
         self._listeners: list[SnapshotListener] = []
@@ -142,6 +164,7 @@ class ArtificerEngine:
         if not self.enabled:
             self._set_status(ArtificerStatus.DISABLED)
             return
+
         self._platform_profile = self.liaison.capture_profile()
         self.ledger.store_platform_profile(self._platform_profile)
         self.ledger.append_capability_results(
@@ -154,7 +177,11 @@ class ArtificerEngine:
                 status="completed",
                 aida_version=self.version,
                 platform_profile_id=self._platform_profile.profile_id,
-                metadata={"mode": str(getattr(self.config, "artificer_mode", "early_alpha"))},
+                metadata={
+                    "mode": str(
+                        getattr(self.config, "artificer_mode", "early_alpha")
+                    )
+                },
             )
         )
         self._set_status(ArtificerStatus.OBSERVING)
@@ -173,15 +200,22 @@ class ArtificerEngine:
                 status="completed",
                 aida_version=self.version,
                 platform_profile_id=(
-                    self._platform_profile.profile_id if self._platform_profile else "unknown"
+                    self._platform_profile.profile_id
+                    if self._platform_profile
+                    else "unknown"
                 ),
             )
         )
-        self._set_status(ArtificerStatus.READY if self.enabled else ArtificerStatus.DISABLED)
+        self._set_status(
+            ArtificerStatus.READY
+            if self.enabled
+            else ArtificerStatus.DISABLED
+        )
 
     def run_review(self) -> ArtificerSnapshot:
         if not self.enabled:
             return self.snapshot()
+
         with self._lock:
             self._set_status(ArtificerStatus.REVIEWING)
             operation_id = str(uuid.uuid4())
@@ -192,21 +226,42 @@ class ArtificerEngine:
                     status="started",
                     aida_version=self.version,
                     platform_profile_id=(
-                        self._platform_profile.profile_id if self._platform_profile else "unknown"
+                        self._platform_profile.profile_id
+                        if self._platform_profile
+                        else "unknown"
                     ),
                     operation_id=operation_id,
                 )
             )
+
             try:
                 profile = self.liaison.capture_profile()
                 self._platform_profile = profile
                 self.ledger.store_platform_profile(profile)
                 capability_results = self.liaison.verify_capabilities(profile)
                 self.ledger.append_capability_results(capability_results)
-                findings = self.codewright.inspect()
+
+                source_findings = self.codewright.inspect()
+                active_source_fingerprints = {
+                    finding.fingerprint
+                    for finding in source_findings
+                    if finding.fingerprint
+                }
+                resolved_source_findings = self.ledger.resolve_absent_findings(
+                    active_fingerprints=active_source_fingerprints,
+                    fingerprint_prefixes=(
+                        Codewright.MANAGED_FINGERPRINT_PREFIXES
+                    ),
+                )
+
+                findings = list(source_findings)
                 findings.extend(self._compatibility_findings(profile))
                 findings.extend(self.appraiser.review())
-                stored = [self.ledger.upsert_finding(finding) for finding in findings]
+                stored = [
+                    self.ledger.upsert_finding(finding)
+                    for finding in findings
+                ]
+
                 self._last_review_utc = utc_now().isoformat()
                 self.event_bus.publish(
                     make_event(
@@ -216,11 +271,18 @@ class ArtificerEngine:
                         aida_version=self.version,
                         platform_profile_id=profile.profile_id,
                         operation_id=operation_id,
-                        metadata={"findings_returned": len(stored)},
+                        metadata={
+                            "findings_returned": len(stored),
+                            "source_findings_resolved": (
+                                resolved_source_findings
+                            ),
+                        },
                     )
                 )
                 self._set_status(
-                    ArtificerStatus.FINDINGS if self.ledger.list_findings() else ArtificerStatus.READY
+                    ArtificerStatus.FINDINGS
+                    if self.ledger.list_findings()
+                    else ArtificerStatus.READY
                 )
             except Exception as exc:
                 self.event_bus.publish(
@@ -230,7 +292,9 @@ class ArtificerEngine:
                         status="failed",
                         aida_version=self.version,
                         platform_profile_id=(
-                            self._platform_profile.profile_id if self._platform_profile else "unknown"
+                            self._platform_profile.profile_id
+                            if self._platform_profile
+                            else "unknown"
                         ),
                         operation_id=operation_id,
                         error_category=type(exc).__name__,
@@ -239,14 +303,21 @@ class ArtificerEngine:
                 )
                 self._set_status(ArtificerStatus.ERROR)
                 raise
+
             return self.snapshot()
 
     def create_proposal(self, finding_id: str) -> UpgradeProposal:
-        findings = {finding.finding_id: finding for finding in self.ledger.list_findings(status=None)}
+        findings = {
+            finding.finding_id: finding
+            for finding in self.ledger.list_findings(status=None)
+        }
         finding = findings.get(finding_id)
         if finding is None:
             raise KeyError(finding_id)
-        proposal = self.architect.propose(finding, current_version=self.version)
+        proposal = self.architect.propose(
+            finding,
+            current_version=self.version,
+        )
         self.ledger.store_proposal(proposal)
         self._set_status(ArtificerStatus.PROPOSAL)
         return proposal
@@ -259,17 +330,29 @@ class ArtificerEngine:
         developer_id: str = "owner",
         reason: str = "",
     ) -> None:
-        active = {record.developer_id: record for record in self.developers.list_active()}
+        active = {
+            record.developer_id: record
+            for record in self.developers.list_active()
+        }
         developer = active.get(developer_id)
-        if developer is None or developer.role not in {"owner", "lead_developer"}:
-            raise PermissionError("Only an authorized owner or lead developer may decide proposals")
+        if (
+            developer is None
+            or developer.role not in {"owner", "lead_developer"}
+        ):
+            raise PermissionError(
+                "Only an authorized owner or lead developer may decide proposals"
+            )
         self.ledger.record_proposal_decision(
             proposal_id=proposal_id,
             decision=decision,
             developer_id=developer_id,
             reason=reason,
         )
-        self._set_status(ArtificerStatus.PROPOSAL if self.ledger.list_proposals() else ArtificerStatus.READY)
+        self._set_status(
+            ArtificerStatus.PROPOSAL
+            if self.ledger.list_proposals()
+            else ArtificerStatus.READY
+        )
 
     def set_telemetry_level(
         self,
@@ -300,11 +383,14 @@ class ArtificerEngine:
             status=self._status.value,
             last_review_utc=self._last_review_utc,
             platform_summary=(
-                f"{profile.os_family} {profile.os_release} ({profile.architecture})"
+                f"{profile.os_family} {profile.os_release} "
+                f"({profile.architecture})"
                 if profile
                 else "Platform profile unavailable"
             ),
-            compatibility_summary=(dict(profile.capabilities) if profile else {}),
+            compatibility_summary=(
+                dict(profile.capabilities) if profile else {}
+            ),
             open_findings=findings,
             pending_proposals=proposals,
             dispatch_queue_depth=self.ledger.dispatch_queue_depth(),
@@ -321,9 +407,21 @@ class ArtificerEngine:
             self._listeners.remove(listener)
 
     def export_report(self, path: str | Path | None = None) -> Path:
-        target = Path(path) if path else Path(
-            getattr(self.config, "artificer_export_dir", self.source_root / "memory" / "artificer" / "exports")
-        ) / f"artificer_report_{utc_now().strftime('%Y%m%dT%H%M%SZ')}.json"
+        target = (
+            Path(path)
+            if path
+            else Path(
+                getattr(
+                    self.config,
+                    "artificer_export_dir",
+                    self.source_root / "memory" / "artificer" / "exports",
+                )
+            )
+            / (
+                "artificer_report_"
+                f"{utc_now().strftime('%Y%m%dT%H%M%SZ')}.json"
+            )
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         snapshot = self.snapshot()
         payload = {
@@ -333,14 +431,23 @@ class ArtificerEngine:
             "last_review_utc": snapshot.last_review_utc,
             "platform": snapshot.platform_summary,
             "compatibility": dict(snapshot.compatibility_summary),
-            "findings": [finding.to_record() for finding in snapshot.open_findings],
-            "proposals": [proposal.to_record() for proposal in snapshot.pending_proposals],
+            "findings": [
+                finding.to_record()
+                for finding in snapshot.open_findings
+            ],
+            "proposals": [
+                proposal.to_record()
+                for proposal in snapshot.pending_proposals
+            ],
             "dispatch_queue_depth": snapshot.dispatch_queue_depth,
             "telemetry_level": snapshot.telemetry_level,
             "ledger_integrity": self.ledger.verify_integrity(),
         }
         temporary = target.with_suffix(target.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporary.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
         temporary.replace(target)
         return target
 
@@ -361,7 +468,9 @@ class ArtificerEngine:
                 status=status,
                 aida_version=self.version,
                 platform_profile_id=(
-                    self._platform_profile.profile_id if self._platform_profile else "unknown"
+                    self._platform_profile.profile_id
+                    if self._platform_profile
+                    else "unknown"
                 ),
                 duration_ms=duration_ms,
                 error_category="DiagnosticError" if error else None,
@@ -383,12 +492,24 @@ class ArtificerEngine:
             except Exception:
                 continue
 
-    def _compatibility_findings(self, profile: PlatformProfile) -> list[ArtificerFinding]:
+    def _compatibility_findings(
+        self,
+        profile: PlatformProfile,
+    ) -> list[ArtificerFinding]:
         findings: list[ArtificerFinding] = []
         for capability, status in profile.capabilities.items():
-            if status not in {"blocked", "unsupported", "degraded", "unverified"}:
+            if status not in {
+                "blocked",
+                "unsupported",
+                "degraded",
+                "unverified",
+            }:
                 continue
-            severity = "moderate" if status in {"blocked", "unsupported"} else "minor"
+            severity = (
+                "moderate"
+                if status in {"blocked", "unsupported"}
+                else "minor"
+            )
             now = utc_now()
             findings.append(
                 ArtificerFinding(
@@ -398,21 +519,41 @@ class ArtificerEngine:
                     severity=severity,
                     confidence=0.99,
                     evidence_quality=0.95,
-                    affected_components=(capability, self.platform_adapter.name),
+                    affected_components=(
+                        capability,
+                        self.platform_adapter.name,
+                    ),
                     first_seen_utc=now,
                     last_seen_utc=now,
                     observation_count=1,
-                    finding=f"{capability} is {status} on the current operating platform.",
-                    evidence_summary=(
-                        f"The {self.platform_adapter.name} adapter reported {status} during a live capability probe."
+                    finding=(
+                        f"{capability} is {status} on the current "
+                        "operating platform."
                     ),
-                    reasoning_summary="AIDA cannot assume a capability works when the active platform adapter cannot verify native or compatible behavior.",
-                    recommended_change="Implement or improve the platform adapter while retaining explicit fallback behavior.",
-                    expected_outcomes=("Clear platform behavior", "Reduced unsupported command failures"),
+                    evidence_summary=(
+                        f"The {self.platform_adapter.name} adapter reported "
+                        f"{status} during a live capability probe."
+                    ),
+                    reasoning_summary=(
+                        "AIDA cannot assume a capability works when the active "
+                        "platform adapter cannot verify native or compatible "
+                        "behavior."
+                    ),
+                    recommended_change=(
+                        "Implement or improve the platform adapter while "
+                        "retaining explicit fallback behavior."
+                    ),
+                    expected_outcomes=(
+                        "Clear platform behavior",
+                        "Reduced unsupported command failures",
+                    ),
                     implementation_risk=0.35,
                     regression_risk=0.30,
                     authority_required="recommend",
-                    fingerprint=f"capability:{profile.os_family}:{capability}:{status}",
+                    fingerprint=(
+                        f"capability:{profile.os_family}:"
+                        f"{capability}:{status}"
+                    ),
                 )
             )
         return findings
