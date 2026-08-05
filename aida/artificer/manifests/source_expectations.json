@@ -1,0 +1,11 @@
+{
+  "approved_platform_roots": [
+    "aida/platform/",
+    "aida/security/windows/"
+  ],
+  "intentional_empty_modules": {
+    "aida/diagnostics/deep_scan.py": "Reserved for the future deep-diagnostics implementation; no runtime import currently depends on this module.",
+    "aida/frontend/events.py": "Reserved for future shared frontend event contracts; the current Qt signal contracts remain colocated with their owning widgets.",
+    "utils/system_info.py": "Legacy compatibility placeholder retained while system information is provided by active diagnostic and platform services."
+  }
+}
