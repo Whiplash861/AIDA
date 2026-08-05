@@ -42,6 +42,9 @@ class AIDAWindow(QMainWindow):
     task_center_requested = Signal()
     artificer_requested = Signal()
     perception_evidence_attached = Signal(object)
+    voice_state_changed = Signal(str)
+    voice_transcript_ready = Signal(str)
+    voice_error_reported = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -256,9 +259,12 @@ class AIDAWindow(QMainWindow):
         self.microphone_button.clicked.connect(self._voice.toggle_recording)
         self.attachment_button.clicked.connect(self._choose_image)
         self._voice.state_changed.connect(self.set_microphone_status)
+        self._voice.state_changed.connect(self.voice_state_changed.emit)
         self._voice.recording_changed.connect(self._handle_recording_changed)
         self._voice.transcript_ready.connect(self._insert_transcript)
+        self._voice.transcript_ready.connect(self.voice_transcript_ready.emit)
         self._voice.error_reported.connect(self._report_voice_error)
+        self._voice.error_reported.connect(self.voice_error_reported.emit)
 
     @Slot(bool)
     def _emit_autonomy_toggled(self, enabled: bool) -> None:
