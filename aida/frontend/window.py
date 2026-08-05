@@ -32,6 +32,7 @@ class AIDAWindow(QMainWindow):
     bug_report_requested = Signal()
     threat_center_requested = Signal()
     task_center_requested = Signal()
+    artificer_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -68,6 +69,13 @@ class AIDAWindow(QMainWindow):
         self.task_center_button.setObjectName("taskCenterButton")
         self.task_center_button.setToolTip(
             "Review durable background assistance tasks and request cooperative cancellation."
+        )
+
+        self.artificer_button = QPushButton("ARTIFICER")
+        # Reuse the canonical header-button style without altering the theme.
+        self.artificer_button.setObjectName("taskCenterButton")
+        self.artificer_button.setToolTip(
+            "Open Artificer status, findings, platform compatibility, proposals, and governance."
         )
 
         self.autonomy_switch = QCheckBox("AUTONOMY")
@@ -141,6 +149,7 @@ class AIDAWindow(QMainWindow):
         header_layout.addWidget(self.memory_button)
         header_layout.addWidget(self.threat_center_button)
         header_layout.addWidget(self.task_center_button)
+        header_layout.addWidget(self.artificer_button)
         header_layout.addLayout(autonomy_layout)
         header_layout.addWidget(self.status_label)
         header.setLayout(header_layout)
@@ -204,6 +213,7 @@ class AIDAWindow(QMainWindow):
             self._emit_threat_center_requested
         )
         self.task_center_button.clicked.connect(self._emit_task_center_requested)
+        self.artificer_button.clicked.connect(self._emit_artificer_requested)
 
     @Slot(bool)
     def _emit_autonomy_toggled(self, enabled: bool) -> None:
@@ -224,6 +234,10 @@ class AIDAWindow(QMainWindow):
     @Slot()
     def _emit_task_center_requested(self) -> None:
         self.task_center_requested.emit()
+
+    @Slot()
+    def _emit_artificer_requested(self) -> None:
+        self.artificer_requested.emit()
 
     @Slot()
     def _submit_input(self) -> None:
@@ -278,6 +292,9 @@ class AIDAWindow(QMainWindow):
 
     def set_memory_status(self, text: str) -> None:
         self.dashboard.set_memory_status(text)
+
+    def set_artificer_status(self, text: str) -> None:
+        self.dashboard.set_artificer_status(text)
 
     def set_active_task_count(self, count: int) -> None:
         self.dashboard.set_active_task_count(count)
