@@ -10,6 +10,7 @@ class ArtificerQtBridge(QObject):
     """Marshals Artificer snapshots from worker threads onto the Qt thread."""
 
     snapshot_changed = Signal(object)
+    status_changed = Signal(str)
 
     def __init__(self, engine: ArtificerEngine, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -18,12 +19,14 @@ class ArtificerQtBridge(QObject):
         self.engine.subscribe(self._receive_snapshot)
 
     def _receive_snapshot(self, snapshot: ArtificerSnapshot) -> None:
-        if not self._closed:
-            self.snapshot_changed.emit(snapshot)
+        if self._closed:
+            return
+        self.status_changed.emit(snapshot.status)
+        self.snapshot_changed.emit(snapshot)
 
     @Slot()
     def emit_current(self) -> None:
-        self.snapshot_changed.emit(self.engine.snapshot())
+        self._receive_snapshot(self.engine.snapshot())
 
     def close(self) -> None:
         if self._closed:
