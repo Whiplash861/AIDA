@@ -57,3 +57,37 @@ class Capability(BaseModel):
 class CapabilitiesResponse(BaseModel):
     platform: str = "mobile"
     capabilities: list[Capability]
+
+
+class SubsystemStatus(BaseModel):
+    id: str
+    label: str
+    value: str
+    tone: Literal["ready", "active", "warning", "error", "idle", "offline"]
+
+
+class AutonomySnapshot(BaseModel):
+    enabled: bool
+    label: str
+
+
+class OperationalStatusResponse(BaseModel):
+    host_platform: str
+    desktop_online: bool
+    updated_at: datetime
+    heartbeat_at: datetime
+    statuses: list[SubsystemStatus]
+    autonomy: AutonomySnapshot
+
+
+class ActivityItem(BaseModel):
+    id: str
+    category: str
+    message: str
+    severity: Literal["info", "warning", "error"]
+    source: str
+    created_at: datetime
+
+
+class ActivityResponse(BaseModel):
+    items: list[ActivityItem]
