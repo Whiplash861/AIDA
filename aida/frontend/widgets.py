@@ -1,38 +1,12 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from typing import Callable
+
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QListWidget, QVBoxLayout
 
 from aida.frontend.status import AIDAStatus
-
-
-def status_tone(text: str) -> str:
-    normalized = text.strip().upper()
-    if any(token in normalized for token in ("ERROR", "FAILED", "CRITICAL", "HIGH")):
-        return "error"
-    if any(token in normalized for token in ("WARNING", "ELEVATED", "MEDIUM")):
-        return "warning"
-    if normalized in {"STANDBY", "READY", "COMPLETE", "COMPLETED", "EVIDENCE READY"}:
-        return "ready"
-    if normalized == "0 ACTIVE":
-        return "idle"
-    if any(
-        token in normalized
-        for token in (
-            "STARTUP",
-            "LISTENING",
-            "ANALYZING",
-            "PROCESSING",
-            "SPEAKING",
-            "RUNNING",
-            "WORKING",
-            "ACTIVE",
-            "CAPTURING",
-            "EXTRACTING",
-        )
-    ):
-        return "active"
-    return "idle"
+from aida.operational_state import OperationalStateStore, status_tone
 
 
 def apply_status_tone(label: QLabel, text: str) -> None:
@@ -60,8 +34,12 @@ class StatusValueLabel(QLabel):
 class StatusDashboard(QFrame):
     """Displays AIDA's operational and subsystem states."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        state_store: OperationalStateStore | None = None,
+    ) -> None:
         super().__init__()
+        self._state_store = state_store or OperationalStateStore()
         self.setObjectName("statusDashboard")
         self.setMinimumWidth(220)
         self.setMaximumWidth(380)
@@ -82,6 +60,12 @@ class StatusDashboard(QFrame):
         self.activity_list.setMaximumHeight(220)
         self.activity_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._build_layout()
+        self._state_store.mark_online("STARTUP")
+        self._publish_initial_state()
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.setInterval(30_000)
+        self._heartbeat_timer.timeout.connect(self._heartbeat)
+        self._heartbeat_timer.start()
 
     def _build_layout(self) -> None:
         title = QLabel("SYSTEM STATUS")
@@ -132,30 +116,40 @@ class StatusDashboard(QFrame):
 
     def set_agent_status(self, status: AIDAStatus) -> None:
         self.agent_value.set_status_text(status.name)
+        self._publish(lambda store: store.set_status("agent", status.name))
 
     def set_brain_status(self, text: str) -> None:
         self.brain_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("brain", text))
 
     def set_speech_status(self, text: str) -> None:
         self.speech_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("speech", text))
 
     def set_diagnostics_status(self, text: str) -> None:
         self.diagnostics_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("diagnostics", text))
 
     def set_memory_status(self, text: str) -> None:
         self.memory_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("memory", text))
 
     def set_artificer_status(self, text: str) -> None:
         self.artificer_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("artificer", text))
 
     def set_perception_status(self, text: str) -> None:
         self.perception_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("perception", text))
 
     def set_microphone_status(self, text: str) -> None:
         self.microphone_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("microphone", text))
 
     def set_active_task_count(self, count: int) -> None:
-        self.tasks_value.set_status_text(f"{max(0, count)} ACTIVE")
+        text = f"{max(0, count)} ACTIVE"
+        self.tasks_value.set_status_text(text)
+        self._publish(lambda store: store.set_status("tasks", text))
 
     def add_activity(self, text: str) -> None:
         clean_text = text.strip()
@@ -164,6 +158,7 @@ class StatusDashboard(QFrame):
         self.activity_list.insertItem(0, clean_text)
         while self.activity_list.count() > 8:
             self.activity_list.takeItem(self.activity_list.count() - 1)
+        self._publish(lambda store: store.add_activity(clean_text))
 
     def report_task_started(self, task_name: str) -> None:
         self.add_activity(f"{task_name.upper()} started")
@@ -173,3 +168,36 @@ class StatusDashboard(QFrame):
 
     def report_task_failed(self, task_name: str, error_message: str) -> None:
         self.add_activity(f"{task_name.upper()} failed: {error_message}")
+
+    def _publish_initial_state(self) -> None:
+        initial = {
+            "agent": self.agent_value.text(),
+            "brain": self.brain_value.text(),
+            "speech": self.speech_value.text(),
+            "diagnostics": self.diagnostics_value.text(),
+            "memory": self.memory_value.text(),
+            "artificer": self.artificer_value.text(),
+            "perception": self.perception_value.text(),
+            "microphone": self.microphone_value.text(),
+            "tasks": self.tasks_value.text(),
+        }
+        for name, value in initial.items():
+            self._publish(lambda store, key=name, text=value: store.set_status(key, text))
+
+    def _heartbeat(self) -> None:
+        self._publish(lambda store: store.heartbeat())
+
+    def closeEvent(self, event) -> None:
+        self._heartbeat_timer.stop()
+        self._publish(lambda store: store.mark_offline())
+        super().closeEvent(event)
+
+    def _publish(
+        self,
+        operation: Callable[[OperationalStateStore], None],
+    ) -> None:
+        try:
+            operation(self._state_store)
+        except (OSError, ValueError):
+            # Runtime mirroring must never interrupt the desktop interface.
+            return
