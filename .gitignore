@@ -58,3 +58,13 @@ Desktop.ini
 *.bak
 *.swp
 *~
+# Node.js and Expo
+**/node_modules/
+**/.expo/
+**/.expo-shared/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary SDK backup
+/mobile-sdk57-backup/
