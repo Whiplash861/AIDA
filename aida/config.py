@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 APP_NAME = "AIDA"
-APP_FULL_NAME = "Analytical Intelligence & Diagnostic Agent"
+APP_FULL_NAME = "Analytical Intelligent Diagnostic Agent"
 VERSION = "1.0.0"
 DEFAULT_BUG_REPORT_RECIPIENT = "AIDAdeveloper@outlook.com"
 

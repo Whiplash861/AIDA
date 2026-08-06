@@ -1,50 +1,29 @@
-# Welcome to your Expo app 👋
+# AIDA Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+React Native / Expo frontend for **AIDA — Analytical Intelligent Diagnostic Agent**.
 
-## Get started
+## Local Early Alpha connection
 
-1. Install dependencies
+1. Copy the repository root `.env.example` to `.env` and configure Azure OpenAI.
+2. Set a long random `AIDA_MOBILE_TOKEN` in the root `.env`.
+3. Start the local bridge from the repository root:
 
-   ```bash
-   npm install
+   ```powershell
+   python -m aida.mobile_api
    ```
 
-2. Start the app
+4. Find the desktop's LAN IPv4 address with `ipconfig`.
+5. Copy `mobile/.env.example` to `mobile/.env.local`.
+6. Set `EXPO_PUBLIC_AIDA_API_URL` to `http://<desktop-ip>:8765`.
+7. Set `EXPO_PUBLIC_AIDA_PAIRING_TOKEN` to the same pairing token.
+8. Start Expo from `mobile/`:
 
-   ```bash
+   ```powershell
    npx expo start
    ```
 
-In the output, you'll find options to open the app in a
+The iPhone or iPad and desktop must be able to reach one another on the local network. Windows may ask for firewall permission when the bridge first starts; allow private networks only.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## Current scope
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+The mobile bridge supports authenticated text conversation with AIDA's existing reasoning backend. Remote desktop commands, system-wide mobile scans, voice capture, and image analysis remain disabled until their permission and authorization layers are implemented.
