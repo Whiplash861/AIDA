@@ -47,32 +47,37 @@ export function StatusCore({ status }: StatusCoreProps) {
 
   return (
     <View style={styles.wrapper}>
-      <Animated.View
-        style={[
-          styles.ambient,
-          {
-            backgroundColor: tone.foreground,
-            opacity,
-            transform: [{ scale }],
-          },
-        ]}
-      />
-      <View style={[styles.outerRing, { borderColor: tone.border }]}>
-        <View style={[styles.middleRing, { borderColor: tone.foreground }]}>
-          <Animated.View
-            style={[
-              styles.core,
-              {
-                backgroundColor: tone.foreground,
-                shadowColor: tone.foreground,
-                transform: [{ scale }],
-              },
-            ]}
-          >
-            <View style={styles.coreHighlight} />
-          </Animated.View>
+      <View style={styles.coreStage}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.ambient,
+            {
+              backgroundColor: tone.foreground,
+              opacity,
+              transform: [{ scale }],
+            },
+          ]}
+        />
+
+        <View style={[styles.outerRing, { borderColor: tone.border }]}>
+          <View style={[styles.middleRing, { borderColor: tone.foreground }]}>
+            <Animated.View
+              style={[
+                styles.core,
+                {
+                  backgroundColor: tone.foreground,
+                  shadowColor: tone.foreground,
+                  transform: [{ scale }],
+                },
+              ]}
+            >
+              <View style={styles.coreHighlight} />
+            </Animated.View>
+          </View>
         </View>
       </View>
+
       <Text style={[styles.label, { color: tone.foreground }]}>
         MOBILE INTERFACE ACTIVE
       </Text>
@@ -84,11 +89,18 @@ const styles = StyleSheet.create({
   wrapper: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 18,
+    paddingVertical: 14,
+  },
+  coreStage: {
+    width: 132,
+    height: 132,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   ambient: {
     position: 'absolute',
-    top: 28,
+    top: 7,
+    left: 7,
     width: 118,
     height: 118,
     borderRadius: 59,
@@ -130,7 +142,7 @@ const styles = StyleSheet.create({
     opacity: 0.78,
   },
   label: {
-    marginTop: 14,
+    marginTop: 10,
     fontFamily: AIDA_FONTS.mono,
     fontSize: 10,
     fontWeight: '700',
