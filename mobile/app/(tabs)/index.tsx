@@ -44,7 +44,7 @@ const INITIAL_MESSAGES: MobileMessage[] = [
   {
     id: 'welcome',
     sender: 'aida',
-    text: 'AIDA mobile interface online. Establishing secure local bridge.',
+    text: 'AIDA mobile interface online. Establishing paired local bridge.',
   },
 ];
 
@@ -70,7 +70,7 @@ export default function HomeScreen() {
       const health = await getHealth();
       if (health.status === 'ready') {
         setStatus('STANDBY');
-        setConnectionNote(`SECURE BRIDGE READY • AIDA ${health.version}`);
+        setConnectionNote(`PAIRED LOCAL BRIDGE READY • AIDA ${health.version}`);
       } else {
         setStatus('WARNING');
         setConnectionNote(
@@ -134,7 +134,7 @@ export default function HomeScreen() {
         },
       ]);
       setStatus('STANDBY');
-      setConnectionNote('SECURE BRIDGE READY');
+      setConnectionNote('LOCAL BRIDGE READY');
     } catch (error) {
       setMessages((current) => [
         ...current,

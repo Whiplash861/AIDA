@@ -22,7 +22,7 @@ React Native / Expo frontend for **AIDA — Analytical Intelligent Diagnostic Ag
    npx expo start
    ```
 
-The iPhone or iPad and desktop must be able to reach one another on the local network. Windows may ask for firewall permission when the bridge first starts; allow private networks only.
+The iPhone or iPad and desktop must be able to reach one another on the local network. Windows may ask for firewall permission when the bridge first starts; allow private networks only. The Early Alpha bridge uses bearer-token pairing over plain local HTTP, so test it only on a trusted private network. Transport encryption and device-bound credentials are required before public distribution.
 
 ## Current scope
 
