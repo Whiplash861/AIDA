@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import os
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from aida.config import APP_FULL_NAME, VERSION
 
 from .models import (
+    ActivityResponse,
     CapabilitiesResponse,
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    OperationalStatusResponse,
 )
 from .security import verify_mobile_access
 from .service import MobileAidaService, MobileBrainUnavailable
@@ -48,6 +50,24 @@ def create_app(service: MobileAidaService | None = None) -> FastAPI:
     def capabilities() -> CapabilitiesResponse:
         return mobile_service.capabilities()
 
+    @application.get(
+        "/v1/status",
+        response_model=OperationalStatusResponse,
+        dependencies=[Depends(verify_mobile_access)],
+    )
+    def operational_status() -> OperationalStatusResponse:
+        return mobile_service.operational_status()
+
+    @application.get(
+        "/v1/activity",
+        response_model=ActivityResponse,
+        dependencies=[Depends(verify_mobile_access)],
+    )
+    def activity(
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> ActivityResponse:
+        return mobile_service.activity(limit)
+
     @application.post(
         "/v1/chat",
         response_model=ChatResponse,
@@ -70,6 +90,7 @@ def _allowed_origins() -> list[str]:
     if not configured:
         return [
             "http://localhost:8081",
+            "http://localhost:8082",
             "http://localhost:19006",
         ]
     return [item.strip() for item in configured.split(",") if item.strip()]
