@@ -24,6 +24,46 @@ export type ChatResponse = {
   created_at: string;
 };
 
+export type StatusTone =
+  | 'ready'
+  | 'active'
+  | 'warning'
+  | 'error'
+  | 'idle'
+  | 'offline';
+
+export type SubsystemStatus = {
+  id: string;
+  label: string;
+  value: string;
+  tone: StatusTone;
+};
+
+export type OperationalStatusResponse = {
+  host_platform: string;
+  desktop_online: boolean;
+  updated_at: string;
+  heartbeat_at: string;
+  statuses: SubsystemStatus[];
+  autonomy: {
+    enabled: boolean;
+    label: string;
+  };
+};
+
+export type ActivityItem = {
+  id: string;
+  category: string;
+  message: string;
+  severity: 'info' | 'warning' | 'error';
+  source: string;
+  created_at: string;
+};
+
+export type ActivityResponse = {
+  items: ActivityItem[];
+};
+
 const API_URL = (process.env.EXPO_PUBLIC_AIDA_API_URL ?? '')
   .trim()
   .replace(/\/$/, '');
@@ -38,6 +78,23 @@ export function configuredApiUrl() {
 
 export async function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>('/health', { method: 'GET' }, false);
+}
+
+export async function getOperationalStatus(): Promise<OperationalStatusResponse> {
+  return request<OperationalStatusResponse>(
+    '/v1/status',
+    { method: 'GET' },
+    true,
+  );
+}
+
+export async function getActivity(limit = 20): Promise<ActivityResponse> {
+  const safeLimit = Math.max(1, Math.min(50, Math.trunc(limit)));
+  return request<ActivityResponse>(
+    `/v1/activity?limit=${safeLimit}`,
+    { method: 'GET' },
+    true,
+  );
 }
 
 export async function sendChat(input: {
