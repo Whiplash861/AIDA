@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from aida.mobile_api.models import ChatRequest, ConversationMessage, MobileDevice
 from aida.mobile_api.security import verify_mobile_access
 from aida.mobile_api.service import MobileAidaService
+from aida.operational_state import OperationalStateStore
 
 
 class StubBrain:
@@ -17,9 +18,12 @@ class StubBrain:
         return "Mobile bridge response."
 
 
-def test_mobile_service_forwards_history_and_device_context() -> None:
+def test_mobile_service_forwards_history_and_device_context(tmp_path) -> None:
     brain = StubBrain()
-    service = MobileAidaService(brain_factory=lambda: brain)  # type: ignore[arg-type]
+    service = MobileAidaService(
+        brain_factory=lambda: brain,  # type: ignore[arg-type]
+        state_store=OperationalStateStore(tmp_path / "state.json"),
+    )
 
     response = service.chat(
         ChatRequest(
@@ -42,6 +46,28 @@ def test_mobile_service_forwards_history_and_device_context() -> None:
     assert "ios 19" in rendered_context
     assert "Previous question" in rendered_context
     assert "desktop diagnostic command" in rendered_context
+
+
+def test_mobile_service_returns_operational_status_and_activity(tmp_path) -> None:
+    store = OperationalStateStore(tmp_path / "state.json")
+    store.mark_online("STANDBY")
+    store.set_status("artificer", "REVIEWING")
+    store.add_activity("ARTIFICER review started")
+
+    service = MobileAidaService(
+        brain_factory=StubBrain,  # type: ignore[arg-type]
+        state_store=store,
+    )
+
+    snapshot = service.operational_status()
+    activity = service.activity(10)
+
+    assert snapshot.desktop_online is True
+    artificer = next(item for item in snapshot.statuses if item.id == "artificer")
+    assert artificer.value == "REVIEWING"
+    assert artificer.tone == "active"
+    assert activity.items[0].category == "ARTIFICER"
+    assert activity.items[0].message == "ARTIFICER review started"
 
 
 def test_mobile_access_requires_pairing_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
