@@ -9,6 +9,7 @@ import {
 } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -53,6 +54,7 @@ export default function HomeScreen() {
   const [messages, setMessages] = useState<MobileMessage[]>(INITIAL_MESSAGES);
   const [status, setStatus] = useState<AidaRuntimeStatus>('CONNECTING');
   const [connectionNote, setConnectionNote] = useState('CONTACTING LOCAL BRIDGE');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const tone = AIDA_STATUS_TONES[status];
@@ -60,6 +62,12 @@ export default function HomeScreen() {
   const apiLabel = useMemo(() => {
     const url = configuredApiUrl();
     return url ? url.replace(/^https?:\/\//, '') : 'NOT CONFIGURED';
+  }, []);
+
+  const scrollMessagesToEnd = useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollToEnd({ animated });
+    });
   }, []);
 
   const checkConnection = useCallback(async () => {
@@ -88,6 +96,28 @@ export default function HomeScreen() {
   useEffect(() => {
     void checkConnection();
   }, [checkConnection]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSubscription = Keyboard.addListener(showEvent, () => {
+      setKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardVisible(false);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (keyboardVisible) {
+      scrollMessagesToEnd(false);
+    }
+  }, [keyboardVisible, scrollMessagesToEnd]);
 
   async function submitMessage() {
     const clean = draft.trim();
@@ -157,15 +187,21 @@ export default function HomeScreen() {
 
       <KeyboardAvoidingView
         style={styles.keyboardArea}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
       >
         <View style={styles.contentFrame}>
-          <GlassPanel variant="header" style={styles.header}>
+          <GlassPanel
+            variant="header"
+            style={[styles.header, keyboardVisible && styles.headerKeyboard]}
+          >
             <View style={styles.titleBlock}>
               <Text style={styles.title}>AIDA</Text>
-              <Text style={styles.subtitle}>
-                ANALYTICAL INTELLIGENT DIAGNOSTIC AGENT
-              </Text>
+              {!keyboardVisible ? (
+                <Text style={styles.subtitle}>
+                  ANALYTICAL INTELLIGENT DIAGNOSTIC AGENT
+                </Text>
+              ) : null}
             </View>
 
             <Pressable
@@ -193,11 +229,11 @@ export default function HomeScreen() {
             </Pressable>
           </GlassPanel>
 
-          <StatusCore status={status} />
+          {!keyboardVisible ? <StatusCore status={status} /> : null}
 
           <GlassPanel variant="deep" style={styles.feedPanel}>
             <View style={styles.feedHeader}>
-              <View>
+              <View style={styles.feedTitleBlock}>
                 <Text style={styles.sectionTitle}>COMMUNICATION FEED</Text>
                 <Text style={styles.connectionNote} numberOfLines={1}>
                   {connectionNote}
@@ -212,10 +248,9 @@ export default function HomeScreen() {
               ref={scrollRef}
               style={styles.messageArea}
               contentContainerStyle={styles.messageContent}
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               keyboardShouldPersistTaps="handled"
-              onContentSizeChange={() =>
-                scrollRef.current?.scrollToEnd({ animated: true })
-              }
+              onContentSizeChange={() => scrollMessagesToEnd(true)}
             >
               {messages.map((item) => (
                 <MessageCard key={item.id} message={item} />
@@ -223,21 +258,31 @@ export default function HomeScreen() {
             </ScrollView>
           </GlassPanel>
 
-          <GlassPanel variant="panel" style={styles.composerPanel}>
+          <GlassPanel
+            variant="panel"
+            style={[
+              styles.composerPanel,
+              keyboardVisible && styles.composerPanelKeyboard,
+            ]}
+          >
             <View style={styles.composerHeader}>
               <Text style={styles.sectionTitle}>DIRECTIVE INPUT</Text>
-              <Text style={styles.composerHint}>{apiLabel}</Text>
+              <Text style={styles.composerHint} numberOfLines={1}>
+                {apiLabel}
+              </Text>
             </View>
 
             <View style={styles.composerRow}>
               <TextInput
                 value={draft}
                 onChangeText={setDraft}
+                onFocus={() => scrollMessagesToEnd(false)}
                 onSubmitEditing={() => void submitMessage()}
                 editable={status !== 'ANALYZING'}
                 placeholder="State directive or diagnostic question..."
                 placeholderTextColor="#657684"
                 returnKeyType="send"
+                selectionColor={AIDA_COLORS.cyanGlow}
                 style={styles.input}
               />
 
@@ -277,6 +322,7 @@ const styles = StyleSheet.create({
   },
   contentFrame: {
     flex: 1,
+    minHeight: 0,
     width: '100%',
     maxWidth: 900,
     alignSelf: 'center',
@@ -309,6 +355,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: AIDA_SPACING.md,
     paddingVertical: AIDA_SPACING.sm,
+  },
+  headerKeyboard: {
+    minHeight: 62,
+    paddingVertical: AIDA_SPACING.xs,
   },
   titleBlock: {
     flex: 1,
@@ -352,7 +402,7 @@ const styles = StyleSheet.create({
   },
   feedPanel: {
     flex: 1,
-    minHeight: 220,
+    minHeight: 0,
     padding: AIDA_SPACING.sm,
   },
   feedHeader: {
@@ -363,6 +413,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
     paddingBottom: AIDA_SPACING.xs,
   },
+  feedTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: AIDA_SPACING.xs,
+  },
   sectionTitle: {
     color: AIDA_COLORS.cyanStrong,
     fontFamily: AIDA_FONTS.display,
@@ -371,7 +426,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1.6,
   },
   connectionNote: {
-    maxWidth: 280,
     marginTop: 3,
     color: AIDA_COLORS.textDim,
     fontFamily: AIDA_FONTS.mono,
@@ -380,6 +434,7 @@ const styles = StyleSheet.create({
   },
   messageArea: {
     flex: 1,
+    minHeight: 0,
   },
   messageContent: {
     gap: AIDA_SPACING.sm,
@@ -389,6 +444,9 @@ const styles = StyleSheet.create({
   composerPanel: {
     marginTop: AIDA_SPACING.sm,
     padding: AIDA_SPACING.sm,
+  },
+  composerPanelKeyboard: {
+    marginTop: AIDA_SPACING.xs,
   },
   composerHeader: {
     flexDirection: 'row',
