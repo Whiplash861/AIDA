@@ -6,13 +6,17 @@ from collections.abc import Callable
 from aida.brain.llm_client import AIDABrain
 from aida.config import APP_FULL_NAME, VERSION
 from aida.logging_utils import get_logger
+from aida.operational_state import OperationalStateStore
 
 from .models import (
+    ActivityItem,
+    ActivityResponse,
     CapabilitiesResponse,
     Capability,
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    OperationalStatusResponse,
 )
 from .security import mobile_pairing_configured
 
@@ -28,9 +32,11 @@ class MobileAidaService:
     def __init__(
         self,
         brain_factory: Callable[[], AIDABrain] = AIDABrain,
+        state_store: OperationalStateStore | None = None,
     ) -> None:
         self._brain_factory = brain_factory
         self._brain: AIDABrain | None = None
+        self._state_store = state_store or OperationalStateStore()
 
     def health(self) -> HealthResponse:
         brain_configured = all(
@@ -66,6 +72,24 @@ class MobileAidaService:
                     ),
                 ),
                 Capability(
+                    id="system_status",
+                    label="System status",
+                    status="supported",
+                    detail=(
+                        "Read-only desktop subsystem status mirrored through the "
+                        "authenticated mobile bridge."
+                    ),
+                ),
+                Capability(
+                    id="activity",
+                    label="Recent activity",
+                    status="supported",
+                    detail=(
+                        "Read-only operational activity mirrored from the desktop "
+                        "runtime."
+                    ),
+                ),
+                Capability(
                     id="device_diagnostics",
                     label="Mobile device diagnostics",
                     status="limited",
@@ -97,6 +121,18 @@ class MobileAidaService:
                 ),
             ]
         )
+
+    def operational_status(self) -> OperationalStatusResponse:
+        return OperationalStatusResponse(
+            **self._state_store.read_snapshot()
+        )
+
+    def activity(self, limit: int = 20) -> ActivityResponse:
+        items = [
+            ActivityItem(**item)
+            for item in self._state_store.read_activity(limit)
+        ]
+        return ActivityResponse(items=items)
 
     def chat(self, request: ChatRequest) -> ChatResponse:
         context = self._context_for(request)
