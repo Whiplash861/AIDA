@@ -4,13 +4,7 @@ import math
 import random
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import (
-    QColor,
-    QMouseEvent,
-    QPainter,
-    QPen,
-    QRadialGradient,
-)
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 from aida.frontend.status import AIDAStatus
@@ -28,11 +22,11 @@ class AIDAOverlay(QWidget):
     _FULL_RING_INTERFERENCE = 4
     _CORE_JITTER = 5
 
-    def __init__(self, diameter: int = 96) -> None:
+    def __init__(self, diameter: int = 112) -> None:
         super().__init__()
 
         self._orb_diameter = diameter
-        self._canvas_margin = 18
+        self._canvas_margin = 22
         canvas_size = diameter + self._canvas_margin * 2
 
         self._status = AIDAStatus.STARTUP
@@ -53,6 +47,8 @@ class AIDAOverlay(QWidget):
         self._drag_press_global: QPoint | None = None
         self._drag_window_origin: QPoint | None = None
         self._dragging = False
+
+        self._core_jitter_offset = QPointF(0.0, 0.0)
 
         self.setFixedSize(canvas_size, canvas_size)
         self.setWindowTitle("AIDA Status")
@@ -124,7 +120,6 @@ class AIDAOverlay(QWidget):
             self._start_reveal()
 
     def _next_glitch_delay(self) -> int:
-        # 33 ms frames => roughly 5–10 seconds.
         return self._rng.randint(152, 303)
 
     def _start_glitch(self, frames: int | None = None, style: int | None = None) -> None:
@@ -132,12 +127,12 @@ class AIDAOverlay(QWidget):
             return
         self._glitch_style = self._rng.randrange(6) if style is None else style
         self._glitch_seed = self._rng.randint(0, 1_000_000)
-        self._glitch_frames = frames if frames is not None else self._rng.randint(3, 6)
+        self._glitch_frames = frames if frames is not None else self._rng.randint(4, 7)
 
     def _start_reveal(self) -> None:
         self._reveal_frames = 1
         self._click_wave_progress = 0.001
-        self._start_glitch(frames=8)
+        self._start_glitch(frames=9)
         self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
@@ -150,7 +145,7 @@ class AIDAOverlay(QWidget):
         self._activation_signal_sent = False
         self._click_wave_progress = 0.001
         self._glitch_frames = 0
-        self._start_glitch(frames=10)
+        self._start_glitch(frames=11)
         self.setWindowOpacity(1.0)
         self.update()
 
@@ -160,10 +155,10 @@ class AIDAOverlay(QWidget):
         step = {
             AIDAStatus.STARTUP: 2.0,
             AIDAStatus.STANDBY: 0.8,
-            AIDAStatus.LISTENING: 2.6,
-            AIDAStatus.ANALYZING: 5.2,
-            AIDAStatus.SPEAKING: 4.1,
-            AIDAStatus.WARNING: 2.2,
+            AIDAStatus.LISTENING: 2.4,
+            AIDAStatus.ANALYZING: 4.8,
+            AIDAStatus.SPEAKING: 4.0,
+            AIDAStatus.WARNING: 2.0,
             AIDAStatus.ERROR: 1.8,
             AIDAStatus.SHUTDOWN: 0.4,
         }[self._status]
@@ -173,7 +168,7 @@ class AIDAOverlay(QWidget):
             self._notification_progress = max(0.0, self._notification_progress - 0.055)
 
         if self._click_wave_progress > 0.0:
-            self._click_wave_progress += 0.075
+            self._click_wave_progress += 0.072
             if self._click_wave_progress >= 1.0:
                 self._click_wave_progress = 0.0
 
@@ -185,6 +180,15 @@ class AIDAOverlay(QWidget):
                 self._start_glitch()
                 self._frames_until_glitch = self._next_glitch_delay()
 
+        if self._glitch_style == self._CORE_JITTER and self._glitch_frames > 0:
+            rng = random.Random(self._glitch_seed + self._glitch_frames * 53)
+            self._core_jitter_offset = QPointF(
+                rng.uniform(-1.5, 1.5),
+                rng.uniform(-1.2, 1.2),
+            )
+        else:
+            self._core_jitter_offset = QPointF(0.0, 0.0)
+
         if self._reveal_frames > 0:
             self._advance_reveal()
 
@@ -195,10 +199,10 @@ class AIDAOverlay(QWidget):
 
     def _advance_reveal(self) -> None:
         self._reveal_frames += 1
-        progress = min(1.0, self._reveal_frames / 10.0)
+        progress = min(1.0, self._reveal_frames / 11.0)
         eased = 1.0 - (1.0 - progress) ** 2
         self.setWindowOpacity(eased)
-        if self._reveal_frames >= 10:
+        if self._reveal_frames >= 11:
             self._reveal_frames = 0
             self.setWindowOpacity(1.0)
             self._frames_until_glitch = self._next_glitch_delay()
@@ -218,18 +222,17 @@ class AIDAOverlay(QWidget):
             self._activation_frames = 0
             self.setWindowOpacity(1.0)
             self.hide()
+            self._frames_until_glitch = self._next_glitch_delay()
 
-    def _status_color(self) -> QColor:
-        return {
-            AIDAStatus.STARTUP: QColor("#53d9ff"),
-            AIDAStatus.STANDBY: QColor("#45e2aa"),
-            AIDAStatus.LISTENING: QColor("#7fe7ff"),
-            AIDAStatus.ANALYZING: QColor("#4ab8ff"),
-            AIDAStatus.SPEAKING: QColor("#9a7fff"),
-            AIDAStatus.WARNING: QColor("#ffd36a"),
-            AIDAStatus.ERROR: QColor("#ff6e84"),
-            AIDAStatus.SHUTDOWN: QColor("#748392"),
-        }[self._status]
+    @staticmethod
+    def _base_palette() -> tuple[QColor, QColor, QColor, QColor, QColor]:
+        return (
+            QColor("#53b8ff"),
+            QColor("#82d7ff"),
+            QColor("#dff8ff"),
+            QColor("#0b1b31"),
+            QColor("#040b15"),
+        )
 
     def _orb_rect(self) -> QRectF:
         margin = float(self._canvas_margin)
@@ -237,262 +240,285 @@ class AIDAOverlay(QWidget):
 
     def paintEvent(self, event) -> None:
         del event
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
         full_rect = self._orb_rect().adjusted(2.0, 2.0, -2.0, -2.0)
         center = full_rect.center()
-        base_color = self._status_color()
 
-        idle_wave = 0.5 + 0.5 * math.sin(math.radians(self._phase * 1.6))
+        base_color, bright_color, hot_color, deep_color, edge_color = self._base_palette()
+
+        idle_wave = 0.5 + 0.5 * math.sin(math.radians(self._phase * 1.7))
         notification_wave = 0.0
         if self._notification_progress > 0.0:
             notification_wave = math.sin((1.0 - self._notification_progress) * math.pi)
-
-        active_status = self._status is not AIDAStatus.STANDBY
-        glow_boost = 0.32 + idle_wave * 0.18 if active_status else 0.16 + idle_wave * 0.06
-        glow_boost += notification_wave * 0.6
+        glow_boost = 0.18 + idle_wave * 0.12 + notification_wave * 0.55
 
         self._paint_click_wave(painter, center, base_color)
 
-        ambient_rect = full_rect.adjusted(2.0, 2.0, -2.0, -2.0)
-        ambient_gradient = QRadialGradient(
-            center,
-            ambient_rect.width() / 2.0 + notification_wave * 9.0,
-        )
-        ambient_center = QColor(base_color)
-        ambient_center.setAlpha(int(36 + glow_boost * 135))
-        ambient_mid = QColor(base_color)
-        ambient_mid.setAlpha(int(18 + glow_boost * 65))
-        ambient_edge = QColor(base_color)
-        ambient_edge.setAlpha(0)
-        ambient_gradient.setColorAt(0.0, ambient_center)
-        ambient_gradient.setColorAt(0.55, ambient_mid)
-        ambient_gradient.setColorAt(1.0, ambient_edge)
+        ambient_rect = full_rect.adjusted(-3.0, -3.0, 3.0, 3.0)
+        ambient_gradient = QRadialGradient(center, ambient_rect.width() / 2.0 + notification_wave * 9.0)
+        c0 = QColor(base_color)
+        c0.setAlpha(int(35 + glow_boost * 150))
+        c1 = QColor(base_color)
+        c1.setAlpha(int(16 + glow_boost * 70))
+        c2 = QColor(base_color)
+        c2.setAlpha(0)
+        ambient_gradient.setColorAt(0.0, c0)
+        ambient_gradient.setColorAt(0.55, c1)
+        ambient_gradient.setColorAt(1.0, c2)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(ambient_gradient)
         painter.drawEllipse(ambient_rect)
 
-        ring_rect = full_rect.adjusted(12.0, 12.0, -12.0, -12.0)
-        ring_color = QColor(base_color)
-        ring_color.setAlpha(int(160 + glow_boost * 55))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(ring_color, 2.0))
-        painter.drawEllipse(ring_rect)
-
-        segment_rect = ring_rect.adjusted(6.0, 6.0, -6.0, -6.0)
-        segment_color = QColor(base_color)
-        segment_color.setAlpha(int(165 + glow_boost * 70))
-        segment_pen = QPen(segment_color, 3.1)
-        segment_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(segment_pen)
-        painter.drawArc(segment_rect, int(self._phase * 16), 72 * 16)
-        painter.drawArc(segment_rect, int((self._phase + 118.0) * 16), 48 * 16)
-        painter.drawArc(segment_rect, int((self._phase + 216.0) * 16), 34 * 16)
-
-        accent_color = QColor("#b290ff") if self._status == AIDAStatus.SPEAKING else QColor("#88c7ff")
-        accent_color.setAlpha(int(60 + glow_boost * 55))
-        accent_pen = QPen(accent_color, 1.5)
-        accent_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(accent_pen)
-        accent_rect = segment_rect.adjusted(6.0, 6.0, -6.0, -6.0)
-        painter.drawArc(accent_rect, int((-self._phase * 0.7 + 145.0) * 16), 46 * 16)
-
-        core_jitter_x = 0.0
-        core_jitter_y = 0.0
-        if self._glitch_frames > 0 and self._glitch_style == self._CORE_JITTER:
-            jitter_rng = random.Random(self._glitch_seed + self._glitch_frames * 97)
-            core_jitter_x = jitter_rng.uniform(-2.0, 2.0)
-            core_jitter_y = jitter_rng.uniform(-1.0, 1.0)
-
-        core_rect = accent_rect.adjusted(
-            9.0 + core_jitter_x,
-            9.0 + core_jitter_y,
-            -9.0 + core_jitter_x,
-            -9.0 + core_jitter_y,
-        )
-        core_gradient = QRadialGradient(core_rect.center(), core_rect.width() / 2.0)
-        core_center = QColor(base_color)
-        core_center.setAlpha(int(230 + glow_boost * 25))
-        mid_flare = QColor("#b8efff")
-        mid_flare.setAlpha(int(70 + glow_boost * 85))
-        core_edge = QColor("#07111a")
-        core_edge.setAlpha(245)
-        core_gradient.setColorAt(0.0, core_center)
-        core_gradient.setColorAt(0.24, mid_flare)
-        core_gradient.setColorAt(0.62, QColor("#0b2130"))
-        core_gradient.setColorAt(1.0, core_edge)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(core_gradient)
-        painter.drawEllipse(core_rect)
-
-        flare_rect = QRectF(
-            center.x() - 8.0 - notification_wave * 1.5,
-            center.y() - 8.0 - notification_wave * 1.5,
-            16.0 + notification_wave * 3.0,
-            16.0 + notification_wave * 3.0,
-        )
-        flare_gradient = QRadialGradient(flare_rect.center(), flare_rect.width() / 2.0)
-        flare_center = QColor("#eaffff")
-        flare_center.setAlpha(int(150 + glow_boost * 75))
-        flare_edge = QColor(base_color)
-        flare_edge.setAlpha(0)
-        flare_gradient.setColorAt(0.0, flare_center)
-        flare_gradient.setColorAt(1.0, flare_edge)
-        painter.setBrush(flare_gradient)
-        painter.drawEllipse(flare_rect)
-
-        painter.setBrush(base_color)
-        painter.drawEllipse(QRectF(center.x() - 3.5, center.y() - 3.5, 7.0, 7.0))
-
-        line_pen = QPen(QColor("#e5fbff"), 1.45)
-        line_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(line_pen)
-        line_width = 10.0
-        gap = 8.0
-        painter.drawLine(int(center.x() - gap - line_width), int(center.y()), int(center.x() - gap), int(center.y()))
-        painter.drawLine(int(center.x() + gap), int(center.y()), int(center.x() + gap + line_width), int(center.y()))
+        self._paint_outer_measure_ring(painter, center, full_rect.width() * 0.485, base_color, bright_color)
+        self._paint_energy_ring(painter, center, full_rect.width() * 0.37, base_color, bright_color, hot_color)
+        self._paint_inner_rings(painter, center, full_rect.width() * 0.29, base_color)
 
         if self._glitch_frames > 0:
-            self._paint_glitch(painter, ring_rect, segment_rect, core_rect, base_color)
+            self._paint_glitch(painter, center, full_rect.width() * 0.37, base_color, bright_color, hot_color)
+
+        core_center = QPointF(center.x() + self._core_jitter_offset.x(), center.y() + self._core_jitter_offset.y())
+        self._paint_core(painter, core_center, full_rect.width() * 0.235, base_color, bright_color, hot_color, deep_color, edge_color, glow_boost)
+        self._paint_center_flare(painter, center, full_rect.width() * 0.21, hot_color)
 
         painter.end()
+
+    def _paint_outer_measure_ring(self, painter: QPainter, center: QPointF, radius: float, base_color: QColor, bright_color: QColor) -> None:
+        outer_color = QColor(base_color)
+        outer_color.setAlpha(180)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(outer_color, 1.3))
+        painter.drawEllipse(QRectF(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0))
+
+        tick_radius_outer = radius + 0.3
+        tick_radius_inner = radius - 5.4
+        for index in range(72):
+            angle = index * 5.0 + self._phase * 0.08
+            angle_rad = math.radians(angle)
+            cos_a = math.cos(angle_rad)
+            sin_a = math.sin(angle_rad)
+            inner = tick_radius_inner + (-1.7 if index % 6 == 0 else 0.0)
+            start = QPointF(center.x() + cos_a * inner, center.y() + sin_a * inner)
+            end = QPointF(center.x() + cos_a * tick_radius_outer, center.y() + sin_a * tick_radius_outer)
+            tick_color = QColor(bright_color if index % 9 == 0 else base_color)
+            tick_color.setAlpha(210 if index % 9 == 0 else 95)
+            painter.setPen(QPen(tick_color, 1.1 if index % 9 == 0 else 0.8, cap=Qt.PenCapStyle.RoundCap))
+            painter.drawLine(start, end)
+
+    def _paint_energy_ring(self, painter: QPainter, center: QPointF, radius: float, base_color: QColor, bright_color: QColor, hot_color: QColor) -> None:
+        ring_rect = QRectF(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0)
+
+        shadow_color = QColor("#102645")
+        shadow_color.setAlpha(230)
+        painter.setPen(QPen(shadow_color, 10.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(ring_rect)
+
+        glow_color = QColor(base_color)
+        glow_color.setAlpha(120)
+        painter.setPen(QPen(glow_color, 13.0))
+        painter.drawEllipse(ring_rect)
+
+        ring_color = QColor(bright_color)
+        ring_color.setAlpha(240)
+        painter.setPen(QPen(ring_color, 8.2))
+        painter.drawEllipse(ring_rect)
+
+        sweep_color = QColor(hot_color)
+        sweep_color.setAlpha(255)
+        painter.setPen(QPen(sweep_color, 5.0, cap=Qt.PenCapStyle.RoundCap))
+        painter.drawArc(ring_rect, int((42.0 + self._phase * 0.25) * 16), int(70.0 * 16))
+
+        secondary = QColor(base_color)
+        secondary.setAlpha(210)
+        painter.setPen(QPen(secondary, 3.3, cap=Qt.PenCapStyle.RoundCap))
+        painter.drawArc(ring_rect.adjusted(2.2, 2.2, -2.2, -2.2), int((218.0 - self._phase * 0.18) * 16), int(54.0 * 16))
+
+    def _paint_inner_rings(self, painter: QPainter, center: QPointF, radius: float, base_color: QColor) -> None:
+        line_color = QColor(base_color)
+        line_color.setAlpha(58)
+        painter.setPen(QPen(line_color, 1.0))
+        painter.drawEllipse(QRectF(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0))
+        painter.drawEllipse(QRectF(center.x() - radius * 0.72, center.y() - radius * 0.72, radius * 1.44, radius * 1.44))
+
+    def _paint_core(
+        self,
+        painter: QPainter,
+        center: QPointF,
+        radius: float,
+        base_color: QColor,
+        bright_color: QColor,
+        hot_color: QColor,
+        deep_color: QColor,
+        edge_color: QColor,
+        glow_boost: float,
+    ) -> None:
+        core_rect = QRectF(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0)
+        gradient = QRadialGradient(center, radius)
+        c0 = QColor(hot_color)
+        c0.setAlpha(250)
+        c1 = QColor(bright_color)
+        c1.setAlpha(int(210 + glow_boost * 35))
+        c2 = QColor(base_color)
+        c2.setAlpha(185)
+        c3 = QColor(deep_color)
+        c3.setAlpha(245)
+        c4 = QColor(edge_color)
+        c4.setAlpha(250)
+        gradient.setColorAt(0.0, c0)
+        gradient.setColorAt(0.14, c1)
+        gradient.setColorAt(0.32, c2)
+        gradient.setColorAt(0.72, c3)
+        gradient.setColorAt(1.0, c4)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(gradient)
+        painter.drawEllipse(core_rect)
+
+    def _paint_center_flare(self, painter: QPainter, center: QPointF, radius: float, hot_color: QColor) -> None:
+        flare = QColor(hot_color)
+        flare.setAlpha(190)
+        painter.setPen(QPen(flare, 1.1))
+        painter.drawLine(QPointF(center.x() - radius, center.y()), QPointF(center.x() + radius, center.y()))
+        painter.drawLine(QPointF(center.x(), center.y() - radius * 0.06), QPointF(center.x(), center.y() + radius * 0.06))
+
+        dot_gradient = QRadialGradient(center, radius * 0.33)
+        d0 = QColor("#f7ffff")
+        d0.setAlpha(255)
+        d1 = QColor("#9ce6ff")
+        d1.setAlpha(120)
+        d2 = QColor("#9ce6ff")
+        d2.setAlpha(0)
+        dot_gradient.setColorAt(0.0, d0)
+        dot_gradient.setColorAt(0.55, d1)
+        dot_gradient.setColorAt(1.0, d2)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(dot_gradient)
+        r = radius * 0.33
+        painter.drawEllipse(QRectF(center.x() - r, center.y() - r, r * 2.0, r * 2.0))
 
     def _paint_click_wave(self, painter: QPainter, center: QPointF, base_color: QColor) -> None:
         progress = self._click_wave_progress
         if progress <= 0.0:
             return
+
         eased = 1.0 - (1.0 - progress) ** 2
-        radius = 8.0 + eased * (self._orb_diameter * 0.62)
-        alpha = int(110 * (1.0 - progress) ** 1.45)
-        wave = QColor("#6fdcff")
-        wave.setAlpha(max(0, alpha))
+        radius = 10.0 + eased * (self._orb_diameter * 0.56)
+        alpha = int(110 * (1.0 - progress) ** 1.5)
+
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for offset, width, scale in ((0.0, 2.0, 1.0), (3.0, 1.2, 0.55), (6.0, 0.8, 0.26)):
-            color = QColor(wave)
-            color.setAlpha(int(wave.alpha() * scale))
+        for offset, width, scale in ((0.0, 2.1, 1.0), (4.0, 1.35, 0.55), (8.0, 0.95, 0.28)):
+            color = QColor("#82d7ff")
+            color.setAlpha(int(alpha * scale))
             painter.setPen(QPen(color, width))
-            painter.drawEllipse(center, radius + offset, radius + offset)
+            painter.drawEllipse(QRectF(center.x() - radius - offset, center.y() - radius - offset, (radius + offset) * 2.0, (radius + offset) * 2.0))
+
         fill = QColor(base_color)
-        fill.setAlpha(int(28 * (1.0 - progress)))
+        fill.setAlpha(int(30 * (1.0 - progress)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(fill)
-        painter.drawEllipse(center, max(2.0, radius * 0.30), max(2.0, radius * 0.30))
+        inner = max(2.0, radius * 0.35)
+        painter.drawEllipse(QRectF(center.x() - inner, center.y() - inner, inner * 2.0, inner * 2.0))
 
-    def _paint_glitch(
+    def _paint_glitch(self, painter: QPainter, center: QPointF, ring_radius: float, base_color: QColor, bright_color: QColor, hot_color: QColor) -> None:
+        if self._glitch_style == self._MICRO_SPIKE:
+            self._paint_arc_glitch_cloud(painter, center, ring_radius, 0.0, 14.0, 68, 7.0, 7.5, base_color, bright_color, hot_color, 0.9)
+        elif self._glitch_style == self._CONDENSED_WAVE:
+            self._paint_arc_glitch_cloud(painter, center, ring_radius, -3.0, 18.0, 118, 11.5, 10.5, base_color, bright_color, hot_color, 1.15)
+        elif self._glitch_style == self._TOP_SEGMENT_SPUTTER:
+            self._paint_arc_glitch_cloud(painter, center, ring_radius, 90.0, 28.0, 110, 10.0, 8.0, base_color, bright_color, hot_color, 1.0)
+        elif self._glitch_style == self._LEFT_ARC_DISTORT:
+            self._paint_arc_glitch_cloud(painter, center, ring_radius, 182.0, 34.0, 124, 12.0, 9.5, base_color, bright_color, hot_color, 1.08)
+        elif self._glitch_style == self._FULL_RING_INTERFERENCE:
+            for angle, density in ((42.0, 80), (126.0, 76), (214.0, 74), (310.0, 72)):
+                self._paint_arc_glitch_cloud(painter, center, ring_radius, angle, 26.0, density, 10.0, 9.2, base_color, bright_color, hot_color, 0.95)
+        elif self._glitch_style == self._CORE_JITTER:
+            self._paint_arc_glitch_cloud(painter, center, ring_radius * 0.88, 0.0, 16.0, 96, 8.5, 6.5, base_color, bright_color, hot_color, 0.82)
+            self._paint_arc_glitch_cloud(painter, center, ring_radius * 0.88, 180.0, 14.0, 54, 6.0, 5.0, base_color, bright_color, hot_color, 0.6)
+
+    def _paint_arc_glitch_cloud(
         self,
         painter: QPainter,
-        ring_rect: QRectF,
-        segment_rect: QRectF,
-        core_rect: QRectF,
-        base_color: QColor,
-    ) -> None:
-        rng = random.Random(self._glitch_seed + self._glitch_frames * 173)
-        style = self._glitch_style
-
-        if style == self._MICRO_SPIKE:
-            self._paint_micro_spike(painter, ring_rect, base_color, rng)
-        elif style == self._CONDENSED_WAVE:
-            self._paint_condensed_wave(painter, ring_rect, base_color, rng)
-        elif style == self._TOP_SEGMENT_SPUTTER:
-            self._paint_arc_pixel_cloud(painter, ring_rect, base_color, rng, -90.0, 34.0, 84)
-        elif style == self._LEFT_ARC_DISTORT:
-            self._paint_arc_pixel_cloud(painter, ring_rect, base_color, rng, 180.0, 52.0, 96)
-        elif style == self._FULL_RING_INTERFERENCE:
-            self._paint_full_ring_interference(painter, segment_rect, base_color, rng)
-        else:
-            self._paint_core_jitter(painter, core_rect, base_color, rng)
-
-    def _pixel_color(self, base_color: QColor, rng: random.Random) -> QColor:
-        roll = rng.random()
-        if roll < 0.68:
-            color = QColor(base_color)
-        elif roll < 0.90:
-            color = QColor("#c8f6ff")
-        else:
-            color = QColor("#7c93ff")
-        color.setAlpha(rng.randint(90, 235))
-        return color
-
-    def _paint_micro_spike(self, painter: QPainter, ring_rect: QRectF, base_color: QColor, rng: random.Random) -> None:
-        center = ring_rect.center()
-        angle = math.radians(rng.uniform(-14.0, 14.0))
-        radius = ring_rect.width() / 2.0
-        anchor = QPointF(center.x() + math.cos(angle) * radius, center.y() + math.sin(angle) * radius)
-        painter.setPen(Qt.PenStyle.NoPen)
-        for _ in range(62):
-            x = anchor.x() + rng.uniform(-4.0, 14.0)
-            y = anchor.y() + rng.uniform(-9.0, 9.0)
-            w = rng.uniform(0.8, 4.0)
-            h = rng.uniform(0.7, 1.8)
-            painter.setBrush(self._pixel_color(base_color, rng))
-            painter.drawRect(QRectF(x, y, w, h))
-
-    def _paint_condensed_wave(self, painter: QPainter, ring_rect: QRectF, base_color: QColor, rng: random.Random) -> None:
-        center = ring_rect.center()
-        painter.setPen(Qt.PenStyle.NoPen)
-        for _ in range(118):
-            side = -1.0 if rng.random() < 0.45 else 1.0
-            x = center.x() + side * rng.uniform(10.0, 54.0)
-            y = center.y() + rng.gauss(0.0, 5.2)
-            w = rng.uniform(1.0, 8.0)
-            h = rng.uniform(0.6, 1.8)
-            painter.setBrush(self._pixel_color(base_color, rng))
-            painter.drawRect(QRectF(x, y, w, h))
-
-    def _paint_arc_pixel_cloud(
-        self,
-        painter: QPainter,
-        ring_rect: QRectF,
-        base_color: QColor,
-        rng: random.Random,
+        center: QPointF,
+        ring_radius: float,
         angle_center: float,
         angle_span: float,
-        count: int,
+        density: int,
+        tangent_spread: float,
+        radial_spread: float,
+        base_color: QColor,
+        bright_color: QColor,
+        hot_color: QColor,
+        intensity: float,
     ) -> None:
-        center = ring_rect.center()
-        base_radius = ring_rect.width() / 2.0
-        painter.setPen(Qt.PenStyle.NoPen)
-        for _ in range(count):
-            angle = math.radians(rng.uniform(angle_center - angle_span / 2.0, angle_center + angle_span / 2.0))
-            radius = base_radius + rng.uniform(-8.0, 10.0)
-            x = center.x() + math.cos(angle) * radius + rng.uniform(-2.0, 2.0)
-            y = center.y() + math.sin(angle) * radius + rng.uniform(-2.0, 2.0)
-            w = rng.uniform(0.8, 6.0)
-            h = rng.uniform(0.7, 2.0)
-            painter.setBrush(self._pixel_color(base_color, rng))
-            painter.drawRect(QRectF(x, y, w, h))
+        rng = random.Random(
+            self._glitch_seed
+            + self._glitch_frames * 137
+            + int(angle_center * 10)
+            + int(ring_radius * 10)
+        )
 
-    def _paint_full_ring_interference(self, painter: QPainter, ring_rect: QRectF, base_color: QColor, rng: random.Random) -> None:
-        center = ring_rect.center()
-        base_radius = ring_rect.width() / 2.0
         painter.setPen(Qt.PenStyle.NoPen)
-        for _ in range(148):
-            angle = rng.uniform(0.0, math.tau)
-            radius = base_radius + rng.uniform(-9.0, 10.0)
-            x = center.x() + math.cos(angle) * radius
-            y = center.y() + math.sin(angle) * radius
-            w = rng.uniform(0.7, 5.0)
-            h = rng.uniform(0.6, 1.9)
-            painter.setBrush(self._pixel_color(base_color, rng))
-            painter.drawRect(QRectF(x, y, w, h))
+        tangent_lengths = [2.8, 4.0, 5.6, 7.2, 8.4]
 
-    def _paint_core_jitter(self, painter: QPainter, core_rect: QRectF, base_color: QColor, rng: random.Random) -> None:
-        painter.setPen(Qt.PenStyle.NoPen)
-        center = core_rect.center()
-        for _ in range(104):
-            x = center.x() + rng.gauss(0.0, core_rect.width() * 0.34)
-            y = center.y() + rng.gauss(0.0, core_rect.height() * 0.15)
-            w = rng.uniform(0.8, 6.0)
-            h = rng.uniform(0.6, 1.7)
-            painter.setBrush(self._pixel_color(base_color, rng))
-            painter.drawRect(QRectF(x, y, w, h))
+        for _ in range(density):
+            angle = angle_center + rng.uniform(-angle_span / 2.0, angle_span / 2.0)
+            angle_rad = math.radians(angle)
+            tangent_rad = angle_rad + math.pi / 2.0
+
+            radial_offset = rng.uniform(-radial_spread * 0.33, radial_spread)
+            orbit_radius = ring_radius + radial_offset
+            anchor_x = center.x() + math.cos(angle_rad) * orbit_radius
+            anchor_y = center.y() + math.sin(angle_rad) * orbit_radius
+
+            tangent_offset = rng.uniform(-tangent_spread, tangent_spread) * intensity
+            px = anchor_x + math.cos(tangent_rad) * tangent_offset
+            py = anchor_y + math.sin(tangent_rad) * tangent_offset
+
+            size = rng.uniform(1.1, 3.1) * (0.85 + intensity * 0.28)
+            color_roll = rng.random()
+            if color_roll < 0.14:
+                color = QColor(hot_color)
+                color.setAlpha(rng.randint(150, 225))
+            elif color_roll < 0.52:
+                color = QColor(bright_color)
+                color.setAlpha(rng.randint(125, 210))
+            else:
+                color = QColor(base_color)
+                color.setAlpha(rng.randint(90, 185))
+
+            painter.setBrush(color)
+            painter.drawRect(QRectF(px - size * 0.5, py - size * 0.45, size, size * rng.uniform(0.85, 1.25)))
+
+            if rng.random() < 0.48:
+                length = rng.choice(tangent_lengths) * intensity
+                streak = QColor(color)
+                streak.setAlpha(min(255, color.alpha() + 25))
+                painter.setPen(QPen(streak, rng.uniform(0.8, 1.8), cap=Qt.PenCapStyle.RoundCap))
+                start = QPointF(px, py)
+                end = QPointF(
+                    px + math.cos(tangent_rad) * length,
+                    py + math.sin(tangent_rad) * length,
+                )
+                painter.drawLine(start, end)
+                painter.setPen(Qt.PenStyle.NoPen)
+
+        arc_color = QColor(bright_color)
+        arc_color.setAlpha(int(135 * intensity))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(arc_color, 1.35, cap=Qt.PenCapStyle.RoundCap))
+        rect = QRectF(center.x() - ring_radius, center.y() - ring_radius, ring_radius * 2.0, ring_radius * 2.0)
+        painter.drawArc(rect, int((angle_center - angle_span * 0.48) * 16), int(angle_span * 0.72 * 16))
+        painter.drawArc(rect.adjusted(1.6, 1.6, -1.6, -1.6), int((angle_center - angle_span * 0.30) * 16), int(angle_span * 0.4 * 16))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._start_activation()
             event.accept()
             return
+
         if event.button() == Qt.MouseButton.RightButton:
             self._drag_press_global = event.globalPosition().toPoint()
             self._drag_window_origin = self.frameGeometry().topLeft()
@@ -500,6 +526,7 @@ class AIDAOverlay(QWidget):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -513,12 +540,14 @@ class AIDAOverlay(QWidget):
             self.move(self._drag_window_origin + movement)
             event.accept()
             return
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             event.accept()
             return
+
         if event.button() == Qt.MouseButton.RightButton:
             self._drag_press_global = None
             self._drag_window_origin = None
@@ -526,4 +555,5 @@ class AIDAOverlay(QWidget):
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             event.accept()
             return
+
         super().mouseReleaseEvent(event)
