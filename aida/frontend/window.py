@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QFrame, QHBoxLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from aida.frontend._window_base import AIDAWindow as _BaseAIDAWindow
 from aida.frontend.internal_orb import (
-    AIDAInternalOrb,
     OrbTroubleCode,
     OrbVisualState,
 )
 from aida.frontend.status import AIDAStatus
+from aida.frontend.status_orb import AIDAStatusOrb
 
 
 class AIDAWindow(_BaseAIDAWindow):
@@ -26,12 +26,40 @@ class AIDAWindow(_BaseAIDAWindow):
         if not isinstance(header_layout, QHBoxLayout):
             raise RuntimeError("AIDA header layout is not a horizontal layout")
 
-        self.internal_orb = AIDAInternalOrb(parent=header)
+        self.internal_orb = AIDAStatusOrb(parent=header)
         header_layout.insertWidget(
             1,
             self.internal_orb,
             0,
             Qt.AlignmentFlag.AlignVCenter,
+        )
+
+        self.orb_override_indicator = QLabel(header)
+        self.orb_override_indicator.setObjectName("orbOverrideIndicator")
+        self.orb_override_indicator.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        self.orb_override_indicator.setMinimumWidth(82)
+        self.orb_override_indicator.setStyleSheet(
+            """
+            QLabel#orbOverrideIndicator {
+                color: rgba(201, 232, 255, 225);
+                font-size: 9px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                padding: 1px 3px;
+            }
+            """
+        )
+        self.orb_override_indicator.setVisible(False)
+        header_layout.insertWidget(
+            2,
+            self.orb_override_indicator,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        self.internal_orb.visual_override_changed.connect(
+            self._handle_orb_visual_override
         )
         self.internal_orb.set_status(AIDAStatus.STARTUP)
 
@@ -44,7 +72,7 @@ class AIDAWindow(_BaseAIDAWindow):
     def set_status(self, status: AIDAStatus) -> None:
         super().set_status(status)
         orb = getattr(self, "internal_orb", None)
-        if isinstance(orb, AIDAInternalOrb):
+        if isinstance(orb, AIDAStatusOrb):
             orb.set_status(status)
 
     def set_artificer_status(self, text: str) -> None:
@@ -87,6 +115,48 @@ class AIDAWindow(_BaseAIDAWindow):
 
     def clear_orb_trouble_code(self, code: str | OrbTroubleCode) -> None:
         self.internal_orb.clear_trouble_code(code)
+
+    def set_orb_color_for(
+        self,
+        state: OrbVisualState | str,
+        duration_seconds: float,
+        *,
+        label: str = "COLOR OVERRIDE",
+    ) -> None:
+        """Temporarily show one orb color without changing AIDA's live state."""
+        self.internal_orb.set_temporary_color(
+            state,
+            duration_seconds,
+            label=label,
+        )
+        normalized = self.internal_orb.current_visual_state.name
+        self.dashboard.add_activity(
+            f"ORB temporary color: {normalized} for "
+            f"{float(duration_seconds):g}s"
+        )
+
+    def clear_orb_color_override(self) -> None:
+        """End a targeted color shift early and return to live indication."""
+        self.internal_orb.clear_temporary_color()
+
+    @Slot(bool, str, str)
+    def _handle_orb_visual_override(
+        self,
+        active: bool,
+        heading: str,
+        state_name: str,
+    ) -> None:
+        if not active:
+            self.orb_override_indicator.clear()
+            self.orb_override_indicator.setVisible(False)
+            return
+
+        safe_heading = heading.strip().upper() or "VISUAL OVERRIDE"
+        safe_state = state_name.strip().upper() or "UNKNOWN"
+        self.orb_override_indicator.setText(
+            f"{safe_heading}\n────────\n{safe_state}"
+        )
+        self.orb_override_indicator.setVisible(True)
 
     @Slot()
     def start_orb_color_test(self) -> None:
