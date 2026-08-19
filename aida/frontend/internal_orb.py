@@ -301,12 +301,15 @@ class AIDAInternalOrb(AIDAOverlay):
     ) -> None:
         if not isinstance(state, OrbVisualState):
             raise TypeError("state must be an OrbVisualState")
-        if state is self._display_state and self._transition_from_state is None:
+        # A repeated live-state refresh must not cancel a transition already in
+        # progress. This is especially important during startup Artificer review,
+        # where multiple status notifications can arrive within the 720 ms pulse.
+        if state is self._display_state:
             return
 
         previous = self._display_state
         self._display_state = state
-        if animated and previous is not state:
+        if animated:
             self._transition_from_state = previous
             self._transition_started_at = time.perf_counter()
         else:
