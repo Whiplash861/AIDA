@@ -79,7 +79,13 @@ class AIDAStatusOrb(AIDAInternalOrb):
     ) -> tuple[QColor, QColor, QColor, QColor, QColor]:
         target = self._state_palette(self._display_state)
         if self._transition_from_state is None:
-            return tuple(QColor(color) for color in target)  # type: ignore[return-value]
+            return (
+                QColor(target[0]),
+                QColor(target[1]),
+                QColor(target[2]),
+                QColor(target[3]),
+                QColor(target[4]),
+            )
 
         source = self._state_palette(self._transition_from_state)
         progress = self._layer_progress(layer)
@@ -223,12 +229,7 @@ class AIDAStatusOrb(AIDAInternalOrb):
         else:
             duration = self._rng.uniform(1.10, 3.20)
         self._glitch_duration = 0.0
-        AIDAInternalOrb._start_red_profile(self)
-        self._glitch_style = style
-        self._glitch_duration = duration
-        self._glitch_elapsed = 0.0
-        self._glitch_seed = self._rng.randint(0, 1_000_000)
-        self._glitch_center_angle = self._rng.uniform(0.0, 360.0)
+        super()._start_glitch(style=style, duration=duration)
 
     def _profile(self, target: str) -> tuple[float, float, float]:
         span, radial, tangent = super()._profile(target)
