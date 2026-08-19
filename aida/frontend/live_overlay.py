@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter
 
 from aida.frontend.internal_orb import OrbTroubleCode, OrbVisualState
 from aida.frontend.overlay import AIDAOverlay
@@ -50,8 +50,31 @@ class AIDALiveOverlay(AIDAStatusOrb):
     def _paint_pulse(self, painter: QPainter, center: QPointF) -> None:
         """Combine live-state color pulses with the detached reveal/click pulse."""
         AIDAStatusOrb._paint_pulse(self, painter, center)
-        if self._pulse_progress > 0.0:
-            AIDAOverlay._paint_pulse(self, painter, center)
+        if self._pulse_progress <= 0.0:
+            return
+
+        p = self._pulse_progress
+        radius = 11.0 + (1.0 - (1.0 - p) ** 2) * (self._orb_diameter * 0.66)
+        alpha = int(135 * (1.0 - p) ** 1.45)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        pulse_color = self._state_palette(self._display_state)[1]
+        for offset, width, scale in (
+            (0.0, 2.3, 1.0),
+            (4.0, 1.55, 0.55),
+            (8.5, 1.0, 0.28),
+        ):
+            color = QColor(pulse_color)
+            color.setAlpha(int(alpha * scale))
+            painter.setPen(self._pen(color, width))
+            ring_radius = radius + offset
+            painter.drawEllipse(
+                QRectF(
+                    center.x() - ring_radius,
+                    center.y() - ring_radius,
+                    ring_radius * 2.0,
+                    ring_radius * 2.0,
+                )
+            )
 
     def _refresh_external_tooltip(self) -> None:
         self.setToolTip(
