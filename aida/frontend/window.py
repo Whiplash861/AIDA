@@ -13,6 +13,22 @@ from aida.frontend.status import AIDAStatus
 from aida.frontend.status_orb import AIDAStatusOrb
 
 
+class _HeaderStatusOrb(AIDAStatusOrb):
+    """Header-sized live orb with a slightly fuller visual footprint."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent=parent)
+
+        # Keep the existing 96x96 transparent safety canvas, but reclaim some
+        # of its unused center space for the orb itself. An 80px source field
+        # still leaves enough room for the state-transition pulse, RED glitch
+        # displacement, and ambient glow to finish without clipping.
+        self._orb_diameter = 80
+        self._internal_scale = 76.0 / 120.0
+        self._canvas_margin = 8
+        self.setFixedSize(96, 96)
+
+
 class AIDAWindow(_BaseAIDAWindow):
     """Primary AIDA window with the embedded live-state orb."""
 
@@ -34,7 +50,7 @@ class AIDAWindow(_BaseAIDAWindow):
         # previous height while preserving a small gap to the frame itself.
         header_layout.setContentsMargins(14, 1, 14, 1)
 
-        self.internal_orb = AIDAStatusOrb(parent=header)
+        self.internal_orb = _HeaderStatusOrb(parent=header)
         header_layout.insertWidget(
             1,
             self.internal_orb,
