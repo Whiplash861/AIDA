@@ -16,6 +16,8 @@ from aida.frontend.status_orb import AIDAStatusOrb
 class AIDAWindow(_BaseAIDAWindow):
     """Primary AIDA window with the embedded live-state orb."""
 
+    _TARGETED_ORB_TEST_SECONDS = 10.0
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -68,6 +70,25 @@ class AIDAWindow(_BaseAIDAWindow):
             self,
         )
         self._orb_test_shortcut.activated.connect(self.start_orb_color_test)
+
+        self._orb_targeted_test_shortcuts: list[QShortcut] = []
+        for key_sequence, state in (
+            ("Ctrl+Shift+1", OrbVisualState.BLUE),
+            ("Ctrl+Shift+2", OrbVisualState.GREEN),
+            ("Ctrl+Shift+3", OrbVisualState.PURPLE),
+            ("Ctrl+Shift+4", OrbVisualState.RED),
+        ):
+            shortcut = QShortcut(QKeySequence(key_sequence), self)
+            shortcut.activated.connect(
+                lambda state=state: self.start_orb_targeted_color_test(state)
+            )
+            self._orb_targeted_test_shortcuts.append(shortcut)
+
+        self._orb_live_shortcut = QShortcut(
+            QKeySequence("Ctrl+Shift+0"),
+            self,
+        )
+        self._orb_live_shortcut.activated.connect(self.return_orb_to_live)
 
     def set_status(self, status: AIDAStatus) -> None:
         super().set_status(status)
@@ -138,6 +159,27 @@ class AIDAWindow(_BaseAIDAWindow):
     def clear_orb_color_override(self) -> None:
         """End a targeted color shift early and return to live indication."""
         self.internal_orb.clear_temporary_color()
+
+    def start_orb_targeted_color_test(
+        self,
+        state: OrbVisualState | str,
+    ) -> None:
+        """Show one test color for ten seconds, then return to live state."""
+        self.internal_orb.start_targeted_color_test(
+            state,
+            self._TARGETED_ORB_TEST_SECONDS,
+        )
+        normalized = self.internal_orb.current_visual_state.name
+        self.dashboard.add_activity(
+            f"ORB targeted color test: {normalized} for "
+            f"{self._TARGETED_ORB_TEST_SECONDS:g}s"
+        )
+
+    @Slot()
+    def return_orb_to_live(self) -> None:
+        """Cancel any orb visual test and immediately restore live indication."""
+        self.internal_orb.return_to_live_state()
+        self.dashboard.add_activity("ORB visual test cleared: LIVE")
 
     @Slot(bool, str, str)
     def _handle_orb_visual_override(
