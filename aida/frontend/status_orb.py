@@ -34,15 +34,14 @@ class AIDAStatusOrb(AIDAInternalOrb):
     def __init__(self, parent=None) -> None:
         super().__init__(parent=parent)
 
-        # Keep the header widget footprint fixed at 70x70, but deliberately let
-        # the orb renderer use nearly the entire canvas. The base painter trims
-        # two pixels from each side, so a 74px source rect beginning at -2px
-        # produces a 70px painted field while the luminous ring itself remains
-        # just inside the widget boundary.
+        # The visible orb remains the same size as the enlarged 74px pass, but
+        # the widget and every offscreen glitch pixmap now have enough transparent
+        # safety area for pulse waves and displaced source pixels to finish without
+        # being clipped at the widget boundary.
         self._orb_diameter = 74
         self._internal_scale = 70.0 / 120.0
-        self._canvas_margin = -2
-        self.setFixedSize(70, 70)
+        self._canvas_margin = 11
+        self.setFixedSize(96, 96)
 
         self._temporary_override_state: OrbVisualState | None = None
         self._temporary_override_timer = QTimer(self)
