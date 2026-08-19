@@ -37,8 +37,8 @@ class AIDAStatusOrb(AIDAInternalOrb):
 
     visual_override_changed = Signal(bool, str, str)
 
-    _CORE_PROFILE_MIN_INTERVAL = 5.0
-    _CORE_PROFILE_MAX_INTERVAL = 7.0
+    _CORE_PROFILE_MIN_INTERVAL = 3.0
+    _CORE_PROFILE_MAX_INTERVAL = 5.0
     _CORE_PROFILE_WEIGHTS = (40, 40, 20)
 
     def __init__(self, parent=None) -> None:
@@ -361,19 +361,19 @@ class AIDAStatusOrb(AIDAInternalOrb):
         if profile == 1:
             # Core Split -> Horizontal Fracture -> Core Collapse -> Recover.
             self._core_stages = [
-                ("split", self._rng.uniform(0.45, 0.65)),
-                ("fracture", self._rng.uniform(0.40, 0.60)),
-                ("collapse", self._rng.uniform(0.35, 0.55)),
-                ("recover", self._rng.uniform(0.45, 0.70)),
+                ("split", self._rng.uniform(0.30, 0.42)),
+                ("fracture", self._rng.uniform(0.32, 0.46)),
+                ("collapse", self._rng.uniform(0.28, 0.40)),
+                ("recover", self._rng.uniform(0.32, 0.50)),
             ]
             return
 
         if profile == 2:
             # Phase Jump -> Radial Tear -> Recover.
             self._core_stages = [
-                ("phase_jump", self._rng.uniform(0.55, 0.85)),
-                ("radial_tear", self._rng.uniform(0.55, 0.85)),
-                ("recover", self._rng.uniform(0.45, 0.70)),
+                ("phase_jump", self._rng.uniform(0.45, 0.65)),
+                ("radial_tear", self._rng.uniform(0.55, 0.80)),
+                ("recover", self._rng.uniform(0.35, 0.55)),
             ]
             return
 
@@ -454,6 +454,13 @@ class AIDAStatusOrb(AIDAInternalOrb):
             ),
         )
 
+    def _core_bucket_rng(self, rate: float, salt: int = 0) -> random.Random:
+        elapsed = max(0.0, time.perf_counter() - self._core_stage_started_at)
+        bucket = int(elapsed * rate)
+        return random.Random(
+            self._core_effect_seed + bucket * 137 + salt * 10_007
+        )
+
     # ------------------------------------------------------------------
     # Core profile rendering
     # ------------------------------------------------------------------
@@ -509,13 +516,25 @@ class AIDAStatusOrb(AIDAInternalOrb):
         if effect == "split":
             self._paint_core_split(painter, source, center, radius, progress)
         elif effect == "fracture":
-            self._paint_core_fracture(painter, source, center, progress)
+            self._paint_core_fracture(
+                painter,
+                source,
+                center,
+                radius,
+                progress,
+            )
         elif effect == "collapse":
             self._paint_core_collapse(painter, source, center, progress)
         elif effect == "phase_jump":
             self._paint_core_phase_jump(painter, source, center, radius, progress)
         elif effect == "radial_tear":
-            self._paint_core_radial_tear(painter, source, center, progress)
+            self._paint_core_radial_tear(
+                painter,
+                source,
+                center,
+                radius,
+                progress,
+            )
         elif effect == "recover":
             self._paint_core_recovery(painter, source, center, progress)
         else:
@@ -529,22 +548,60 @@ class AIDAStatusOrb(AIDAInternalOrb):
         radius: float,
         progress: float,
     ) -> None:
-        envelope = math.sin(progress * math.pi)
-        offset = 2.8 + envelope * 4.2
-        clip = QRectF(
-            center.x() - radius * 1.95,
-            center.y() - radius * 1.75,
-            radius * 3.90,
-            radius * 3.50,
+        del progress
+        rng = self._core_bucket_rng(20.0, 1)
+        offset = rng.choice((3, 4, 5, 6))
+        y_jitter = rng.choice((-1, 0, 0, 1))
+        flicker = rng.choice((0.62, 0.74, 0.86, 1.0))
+
+        core_box = QRectF(
+            center.x() - radius * 1.80,
+            center.y() - radius * 1.60,
+            radius * 3.60,
+            radius * 3.20,
+        )
+        half_width = core_box.width() / 2.0
+        left = QRectF(
+            core_box.left(),
+            core_box.top(),
+            half_width,
+            core_box.height(),
+        )
+        right = QRectF(
+            center.x(),
+            core_box.top(),
+            half_width,
+            core_box.height(),
+        )
+
+        painter.save()
+        painter.setClipRect(core_box)
+        painter.setOpacity(0.16)
+        painter.drawPixmap(0, 0, source)
+
+        painter.setOpacity(flicker)
+        painter.save()
+        painter.setClipRect(left)
+        painter.drawPixmap(-offset, y_jitter, source)
+        painter.restore()
+
+        painter.save()
+        painter.setClipRect(right)
+        painter.drawPixmap(offset, -y_jitter, source)
+        painter.restore()
+
+        band_y = center.y() + rng.uniform(-radius * 0.55, radius * 0.55)
+        band = QRectF(
+            core_box.left(),
+            band_y,
+            core_box.width(),
+            rng.choice((1.8, 2.2, 2.8)),
         )
         painter.save()
-        painter.setClipRect(clip)
-        painter.setOpacity(0.28)
-        painter.drawPixmap(0, 0, source)
-        painter.setOpacity(0.72)
-        painter.drawPixmap(int(round(-offset)), -1, source)
-        painter.setOpacity(0.68)
-        painter.drawPixmap(int(round(offset)), 1, source)
+        painter.setClipRect(band)
+        painter.setOpacity(rng.choice((0.48, 0.72, 0.92)))
+        painter.drawPixmap(rng.choice((-7, -5, 5, 7)), 0, source)
+        painter.restore()
         painter.restore()
 
     def _paint_core_fracture(
@@ -552,23 +609,28 @@ class AIDAStatusOrb(AIDAInternalOrb):
         painter: QPainter,
         source: QPixmap,
         center: QPointF,
+        radius: float,
         progress: float,
     ) -> None:
+        del progress
+        rng = self._core_bucket_rng(22.0, 2)
         result = QPixmap(source)
         rp = QPainter(result)
-        amplitude = 3.5 + 4.5 * math.sin(progress * math.pi)
-        bands = (
-            (-6.0, 3.0, -amplitude),
-            (-1.5, 3.4, amplitude),
-            (4.0, 3.0, -amplitude * 0.75),
-        )
-        for y_offset, height, dx in bands:
+
+        core_left = center.x() - radius * 1.75
+        core_width = radius * 3.50
+        y_offsets = (-7.0, -3.0, 0.5, 4.0, 7.0)
+        for index, y_offset in enumerate(y_offsets):
+            height = rng.choice((1.8, 2.2, 2.8, 3.2))
             band = QRectF(
-                0.0,
+                core_left,
                 center.y() + y_offset,
-                float(self.width()),
+                core_width,
                 height,
             )
+            dx = rng.choice((-6, -4, -3, 3, 4, 6))
+            dy = rng.choice((-1, 0, 0, 1))
+
             rp.save()
             rp.setClipRect(band)
             rp.setCompositionMode(
@@ -577,15 +639,29 @@ class AIDAStatusOrb(AIDAInternalOrb):
             rp.fillRect(band, QColor(0, 0, 0, 0))
             rp.restore()
 
+            # A few bands intentionally drop out instead of redrawing, creating
+            # sputtering data loss rather than a smooth physical tear.
+            if rng.random() < 0.22 and index % 2:
+                continue
+
             rp.save()
             rp.setClipRect(band)
             rp.setCompositionMode(
                 QPainter.CompositionMode.CompositionMode_SourceOver
             )
-            rp.drawPixmap(int(round(dx)), 0, source)
+            rp.setOpacity(rng.choice((0.48, 0.66, 0.84, 1.0)))
+            rp.drawPixmap(dx, dy, source)
             rp.restore()
+
         rp.end()
-        painter.drawPixmap(0, 0, result)
+
+        flicker = rng.choice((0.34, 0.52, 0.70, 0.86, 1.0, 1.0))
+        x_spasm = rng.choice((-2, -1, 0, 0, 1, 2))
+        y_spasm = rng.choice((-1, 0, 0, 1))
+        painter.save()
+        painter.setOpacity(flicker)
+        painter.drawPixmap(x_spasm, y_spasm, result)
+        painter.restore()
 
     def _paint_core_collapse(
         self,
@@ -594,16 +670,18 @@ class AIDAStatusOrb(AIDAInternalOrb):
         center: QPointF,
         progress: float,
     ) -> None:
-        eased = progress * progress * (3.0 - 2.0 * progress)
-        height_factor = 1.0 - eased * 0.88
+        levels = (1.0, 0.78, 0.56, 0.34, 0.18, 0.10)
+        index = min(len(levels) - 1, int(progress * len(levels)))
+        height_factor = levels[index]
         target_height = max(5.0, self.height() * height_factor)
+        rng = self._core_bucket_rng(24.0, 3)
         target = QRectF(
-            0.0,
+            float(rng.choice((-1, 0, 0, 1))),
             center.y() - target_height / 2.0,
             float(self.width()),
             target_height,
         )
-        flicker = 0.72 + 0.28 * abs(math.sin(progress * math.pi * 8.0))
+        flicker = rng.choice((0.42, 0.60, 0.78, 1.0, 1.0))
         painter.save()
         painter.setOpacity(flicker)
         painter.drawPixmap(target, source, QRectF(source.rect()))
@@ -617,17 +695,42 @@ class AIDAStatusOrb(AIDAInternalOrb):
         radius: float,
         progress: float,
     ) -> None:
-        del center, radius, progress
-        elapsed = max(0.0, time.perf_counter() - self._core_stage_started_at)
-        bucket = int(elapsed * 9.0)
-        rng = random.Random(self._core_effect_seed + bucket * 137)
-        dx = rng.choice((-7, -6, -5, 5, 6, 7))
-        dy = rng.choice((-3, -2, -1, 1, 2, 3))
+        del progress
+        rng = self._core_bucket_rng(18.0, 4)
+        dx = rng.choice((-4, -3, -2, 0, 0, 2, 3, 4))
+        dy = rng.choice((-2, -1, 0, 0, 1, 2))
+        main_opacity = rng.choice((0.42, 0.58, 0.74, 0.90, 1.0, 1.0))
+
+        core_box = QRectF(
+            center.x() - radius * 1.75,
+            center.y() - radius * 1.60,
+            radius * 3.50,
+            radius * 3.20,
+        )
         painter.save()
-        painter.setOpacity(0.22)
+        painter.setClipRect(core_box)
+        painter.setOpacity(0.10)
         painter.drawPixmap(0, 0, source)
-        painter.setOpacity(1.0)
+        painter.setOpacity(main_opacity)
         painter.drawPixmap(dx, dy, source)
+
+        # Brief packet-like bands jump independently of the main core position.
+        for _ in range(2):
+            band = QRectF(
+                core_box.left(),
+                center.y() + rng.uniform(-radius * 0.70, radius * 0.70),
+                core_box.width(),
+                rng.choice((1.5, 2.0, 2.6)),
+            )
+            painter.save()
+            painter.setClipRect(band)
+            painter.setOpacity(rng.choice((0.38, 0.62, 0.88)))
+            painter.drawPixmap(
+                dx + rng.choice((-4, -2, 2, 4)),
+                dy,
+                source,
+            )
+            painter.restore()
         painter.restore()
 
     def _paint_core_radial_tear(
@@ -635,43 +738,55 @@ class AIDAStatusOrb(AIDAInternalOrb):
         painter: QPainter,
         source: QPixmap,
         center: QPointF,
+        radius: float,
         progress: float,
     ) -> None:
-        envelope = 0.35 + 0.65 * math.sin(progress * math.pi)
-        amplitude = 3.0 + 4.0 * envelope
+        del progress
+        rng = self._core_bucket_rng(22.0, 5)
         result = QPixmap(source.size())
         result.fill(Qt.GlobalColor.transparent)
         rp = QPainter(result)
 
-        rp.setOpacity(0.14)
-        rp.drawPixmap(0, 0, source)
+        x_spasm = rng.choice((-2, -1, 0, 0, 1, 2))
+        y_spasm = rng.choice((-1, 0, 0, 1))
+        flicker = rng.choice((0.28, 0.42, 0.58, 0.76, 0.92, 1.0, 1.0))
+        rp.setOpacity(flicker)
+        rp.drawPixmap(x_spasm, y_spasm, source)
         rp.setOpacity(1.0)
 
-        left = QRectF(0.0, 0.0, center.x(), float(self.height()))
-        right = QRectF(
-            center.x(),
-            0.0,
-            float(self.width()) - center.x(),
-            float(self.height()),
-        )
+        core_left = center.x() - radius * 1.75
+        core_width = radius * 3.50
+        for _ in range(6):
+            y = center.y() + rng.uniform(-radius * 1.05, radius * 1.05)
+            height = rng.choice((1.4, 1.8, 2.2, 2.8))
+            band = QRectF(core_left, y, core_width, height)
 
-        rp.save()
-        rp.setClipRect(left)
-        rp.drawPixmap(
-            int(round(-amplitude)),
-            int(round(-amplitude * 0.28)),
-            source,
-        )
-        rp.restore()
+            rp.save()
+            rp.setClipRect(band)
+            rp.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_Clear
+            )
+            rp.fillRect(band, QColor(0, 0, 0, 0))
+            rp.restore()
 
-        rp.save()
-        rp.setClipRect(right)
-        rp.drawPixmap(
-            int(round(amplitude)),
-            int(round(amplitude * 0.34)),
-            source,
-        )
-        rp.restore()
+            # Some slices vanish entirely for a frame; the rest sputter only a
+            # few pixels so the effect reads as corrupted data, not sliding glass.
+            if rng.random() < 0.24:
+                continue
+
+            rp.save()
+            rp.setClipRect(band)
+            rp.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceOver
+            )
+            rp.setOpacity(rng.choice((0.38, 0.56, 0.74, 0.92, 1.0)))
+            rp.drawPixmap(
+                x_spasm + rng.choice((-4, -3, -2, 2, 3, 4)),
+                y_spasm + rng.choice((-1, 0, 0, 1)),
+                source,
+            )
+            rp.restore()
+
         rp.end()
         painter.drawPixmap(0, 0, result)
 
@@ -682,25 +797,38 @@ class AIDAStatusOrb(AIDAInternalOrb):
         center: QPointF,
         progress: float,
     ) -> None:
-        eased = 1.0 - (1.0 - progress) ** 2
+        rng = self._core_bucket_rng(18.0, 6)
         if self._core_profile == 1:
-            height_factor = 0.12 + eased * 0.88
-            target_height = max(5.0, self.height() * height_factor)
+            levels = (0.12, 0.26, 0.44, 0.64, 0.84, 1.0)
+            index = min(len(levels) - 1, int(progress * len(levels)))
+            target_height = max(5.0, self.height() * levels[index])
             target = QRectF(
-                0.0,
+                float(rng.choice((-1, 0, 0, 1))),
                 center.y() - target_height / 2.0,
                 float(self.width()),
                 target_height,
             )
+            painter.save()
+            painter.setOpacity(rng.choice((0.62, 0.78, 0.92, 1.0)))
             painter.drawPixmap(target, source, QRectF(source.rect()))
+            painter.restore()
             return
 
-        offset = (1.0 - eased) * 5.0
+        remaining = max(0.0, 1.0 - progress)
+        max_jitter = max(0, int(round(3.0 * remaining)))
+        if max_jitter:
+            dx = rng.randint(-max_jitter, max_jitter)
+            dy = rng.randint(-max(1, max_jitter // 2), max(1, max_jitter // 2))
+        else:
+            dx = 0
+            dy = 0
+        opacity = min(
+            1.0,
+            0.58 + progress * 0.42 + rng.choice((-0.10, 0.0, 0.0, 0.08)),
+        )
         painter.save()
-        painter.setOpacity(0.22 * (1.0 - eased))
-        painter.drawPixmap(int(round(-offset)), 1, source)
-        painter.setOpacity(1.0)
-        painter.drawPixmap(int(round(offset)), -1, source)
+        painter.setOpacity(max(0.35, opacity))
+        painter.drawPixmap(dx, dy, source)
         painter.restore()
 
     def _advance_animation(self) -> None:
