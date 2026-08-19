@@ -65,9 +65,35 @@ class AIDAStatusOrb(AIDAInternalOrb):
             max(1, int(round(duration * 1000.0)))
         )
 
+    def start_targeted_color_test(
+        self,
+        state: OrbVisualState | str,
+        duration_seconds: float = 10.0,
+    ) -> None:
+        """Show one test color for a fixed interval, then return to live state."""
+        self.set_temporary_color(
+            state,
+            duration_seconds,
+            label="COLOR TEST",
+        )
+
     def clear_temporary_color(self) -> None:
         """Cancel a targeted color shift and return to the current live state."""
         self._cancel_temporary_override(return_to_live=True, announce=True)
+
+    def return_to_live_state(self) -> None:
+        """Cancel any visual test/override and immediately resolve live state."""
+        had_cycle = self._test_active
+        had_temporary = self._temporary_override_state is not None
+
+        self._test_timer.stop()
+        self._test_active = False
+        self._temporary_override_timer.stop()
+        self._temporary_override_state = None
+
+        if had_cycle or had_temporary:
+            self.visual_override_changed.emit(False, "", "")
+        self._set_display_state(self._resolve_live_state())
 
     def _cancel_temporary_override(
         self,
