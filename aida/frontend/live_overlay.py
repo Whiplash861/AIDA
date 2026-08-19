@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QPainter
 
 from aida.frontend.internal_orb import OrbTroubleCode, OrbVisualState
 from aida.frontend.overlay import AIDAOverlay
@@ -45,6 +46,12 @@ class AIDALiveOverlay(AIDAStatusOrb):
     def _sync_visibility(self) -> None:
         """Restore the detached overlay's minimize/restore visibility contract."""
         AIDAOverlay._sync_visibility(self)
+
+    def _paint_pulse(self, painter: QPainter, center: QPointF) -> None:
+        """Combine live-state color pulses with the detached reveal/click pulse."""
+        AIDAStatusOrb._paint_pulse(self, painter, center)
+        if self._pulse_progress > 0.0:
+            AIDAOverlay._paint_pulse(self, painter, center)
 
     def _refresh_external_tooltip(self) -> None:
         self.setToolTip(
