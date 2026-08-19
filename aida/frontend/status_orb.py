@@ -5,7 +5,9 @@ from PySide6.QtGui import QColor
 
 from aida.frontend.internal_orb import (
     AIDAInternalOrb,
+    OrbTroubleCode,
     OrbVisualState,
+    _ACTIVE_ARTIFICER_STATES,
     _PALETTES,
 )
 
@@ -72,6 +74,33 @@ class AIDAStatusOrb(AIDAInternalOrb):
         if state is OrbVisualState.PURPLE:
             return _VIOLET_PALETTE
         return _PALETTES[state]
+
+    def current_live_status_text(self) -> str:
+        """Return an accessible semantic label for AIDA's real live state."""
+        if OrbTroubleCode.BACKEND_DISCONNECTED.value in self._trouble_codes:
+            return "DISCONNECTED"
+        if self._trouble_codes or self._live_status.name == "ERROR":
+            return "SYSTEM FAULT"
+        if self._live_status.name == "SHUTDOWN":
+            return "OFFLINE"
+        if (
+            self._active_artificer_tasks
+            or self._artificer_status in _ACTIVE_ARTIFICER_STATES
+        ):
+            return "ARTIFICER"
+        if self._live_status.name == "WARNING":
+            return "WARNING"
+        if self._live_status.name == "STARTUP":
+            return "STARTING"
+        if self._live_status.name == "LISTENING":
+            return "LISTENING"
+        if self._live_status.name == "ANALYZING":
+            return "ANALYZING"
+        if self._live_status.name == "SPEAKING":
+            return "SPEAKING"
+        if self._active_task_count > 0:
+            return "WORKING"
+        return "STANDBY"
 
     def _palette_for_layer(
         self,
