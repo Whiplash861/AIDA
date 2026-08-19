@@ -34,11 +34,14 @@ class AIDAStatusOrb(AIDAInternalOrb):
     def __init__(self, parent=None) -> None:
         super().__init__(parent=parent)
 
-        # Keep the header footprint at 70x70 while allowing the rendered orb to
-        # fill more of the available vertical space without touching the frame.
-        self._orb_diameter = 66
-        self._internal_scale = 66.0 / 120.0
-        self._canvas_margin = 2
+        # Keep the header widget footprint fixed at 70x70, but deliberately let
+        # the orb renderer use nearly the entire canvas. The base painter trims
+        # two pixels from each side, so a 74px source rect beginning at -2px
+        # produces a 70px painted field while the luminous ring itself remains
+        # just inside the widget boundary.
+        self._orb_diameter = 74
+        self._internal_scale = 70.0 / 120.0
+        self._canvas_margin = -2
         self.setFixedSize(70, 70)
 
         self._temporary_override_state: OrbVisualState | None = None
@@ -249,21 +252,25 @@ class AIDAStatusOrb(AIDAInternalOrb):
             self._CORE_WAVE,
             self._FULL_ICON_INTERFERENCE,
         )
-        # Local ring/core disruptions remain dominant, but full-orb interference
-        # is now noticeably more common during a genuine RED state.
-        weights = (13, 13, 13, 19, 19, 23)
+        # RED stays continuously unstable. Full-orb interference now occurs
+        # roughly one third of the time, while localized ring/core failures
+        # remain common enough that the orb does not collapse into visual noise.
+        weights = (11, 11, 11, 17, 17, 33)
         style = self._rng.choices(styles, weights=weights, k=1)[0]
         if style == self._FULL_ICON_INTERFERENCE:
-            duration = self._rng.uniform(0.42, 0.92)
+            duration = self._rng.uniform(0.55, 1.15)
         else:
-            duration = self._rng.uniform(1.10, 3.20)
+            duration = self._rng.uniform(1.25, 3.40)
         self._glitch_duration = 0.0
         super()._start_glitch(style=style, duration=duration)
 
     def _profile(self, target: str) -> tuple[float, float, float]:
+        # AIDAInternalOrb scales the detached-orb displacement down for the
+        # smaller canvas. RED deliberately scales it back above the detached
+        # orb's apparent severity so the failure state is unmistakable.
         span, radial, tangent = super()._profile(target)
-        return span * 1.12, radial * 1.18, tangent * 1.18
+        return span * 1.25, radial * 1.75, tangent * 1.85
 
     def _full_offset(self, layer: int) -> QPointF:
         offset = super()._full_offset(layer)
-        return QPointF(offset.x() * 1.24, offset.y() * 1.24)
+        return QPointF(offset.x() * 2.40, offset.y() * 2.40)
