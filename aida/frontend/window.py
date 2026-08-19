@@ -28,6 +28,12 @@ class AIDAWindow(_BaseAIDAWindow):
         if not isinstance(header_layout, QHBoxLayout):
             raise RuntimeError("AIDA header layout is not a horizontal layout")
 
+        # The orb uses a larger transparent render canvas so pulse/glitch pixels
+        # can travel beyond the visible ring without being clipped. Tightening
+        # only the vertical header padding keeps the overall header close to its
+        # previous height while preserving a small gap to the frame itself.
+        header_layout.setContentsMargins(14, 1, 14, 1)
+
         self.internal_orb = AIDAStatusOrb(parent=header)
         header_layout.insertWidget(
             1,
