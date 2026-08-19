@@ -1,8 +1,22 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QPointF, QTimer, Signal
+from PySide6.QtGui import QColor
 
-from aida.frontend.internal_orb import AIDAInternalOrb, OrbVisualState
+from aida.frontend.internal_orb import (
+    AIDAInternalOrb,
+    OrbVisualState,
+    _PALETTES,
+)
+
+
+_VIOLET_PALETTE = (
+    QColor("#B13CFF"),
+    QColor("#D985FF"),
+    QColor("#FFF3FF"),
+    QColor("#2A073D"),
+    QColor("#0D0215"),
+)
 
 
 class AIDAStatusOrb(AIDAInternalOrb):
@@ -17,6 +31,13 @@ class AIDAStatusOrb(AIDAInternalOrb):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent=parent)
+
+        # Keep the header footprint at 70x70 while allowing the rendered orb to
+        # fill more of the available vertical space without touching the frame.
+        self._orb_diameter = 66
+        self._internal_scale = 66.0 / 120.0
+        self._canvas_margin = 2
+        self.setFixedSize(70, 70)
 
         self._temporary_override_state: OrbVisualState | None = None
         self._temporary_override_timer = QTimer(self)
@@ -40,6 +61,34 @@ class AIDAStatusOrb(AIDAInternalOrb):
                 f"unknown orb color {state!r}; expected one of: {allowed}"
             ) from exc
 
+    @staticmethod
+    def _display_name(state: OrbVisualState) -> str:
+        return "VIOLET" if state is OrbVisualState.PURPLE else state.name
+
+    @staticmethod
+    def _state_palette(
+        state: OrbVisualState,
+    ) -> tuple[QColor, QColor, QColor, QColor, QColor]:
+        if state is OrbVisualState.PURPLE:
+            return _VIOLET_PALETTE
+        return _PALETTES[state]
+
+    def _palette_for_layer(
+        self,
+        layer: str,
+    ) -> tuple[QColor, QColor, QColor, QColor, QColor]:
+        target = self._state_palette(self._display_state)
+        if self._transition_from_state is None:
+            return tuple(QColor(color) for color in target)  # type: ignore[return-value]
+
+        source = self._state_palette(self._transition_from_state)
+        progress = self._layer_progress(layer)
+        mixed = tuple(
+            self._mix_color(first, second, progress)
+            for first, second in zip(source, target, strict=True)
+        )
+        return mixed[0], mixed[1], mixed[2], mixed[3], mixed[4]
+
     def set_temporary_color(
         self,
         state: OrbVisualState | str,
@@ -60,7 +109,11 @@ class AIDAStatusOrb(AIDAInternalOrb):
         self._temporary_override_state = target
         self._set_display_state(target)
         heading = label.strip().upper() or "COLOR OVERRIDE"
-        self.visual_override_changed.emit(True, heading, target.name)
+        self.visual_override_changed.emit(
+            True,
+            heading,
+            self._display_name(target),
+        )
         self._temporary_override_timer.start(
             max(1, int(round(duration * 1000.0)))
         )
@@ -113,7 +166,7 @@ class AIDAStatusOrb(AIDAInternalOrb):
         self._cancel_temporary_override(return_to_live=True, announce=True)
 
     def start_color_test(self) -> None:
-        """Run BLUE -> GREEN -> PURPLE -> RED -> current live state."""
+        """Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""
         self._cancel_temporary_override(return_to_live=False, announce=False)
         self._test_timer.stop()
         self._test_active = True
@@ -127,7 +180,7 @@ class AIDAStatusOrb(AIDAInternalOrb):
         self.visual_override_changed.emit(
             True,
             "CYCLE TEST",
-            state.name,
+            self._display_name(state),
         )
 
     def _advance_color_test(self) -> None:
@@ -151,3 +204,36 @@ class AIDAStatusOrb(AIDAInternalOrb):
         if self._test_active or self._temporary_override_state is not None:
             return
         self._set_display_state(self._resolve_live_state())
+
+    def _start_red_profile(self) -> None:
+        styles = (
+            self._RING_SPIKE,
+            self._RING_WAVE,
+            self._RING_SPUTTER,
+            self._CORE_SPIKE,
+            self._CORE_WAVE,
+            self._FULL_ICON_INTERFERENCE,
+        )
+        # Local ring/core disruptions remain dominant, but full-orb interference
+        # is now noticeably more common during a genuine RED state.
+        weights = (13, 13, 13, 19, 19, 23)
+        style = self._rng.choices(styles, weights=weights, k=1)[0]
+        if style == self._FULL_ICON_INTERFERENCE:
+            duration = self._rng.uniform(0.42, 0.92)
+        else:
+            duration = self._rng.uniform(1.10, 3.20)
+        self._glitch_duration = 0.0
+        AIDAInternalOrb._start_red_profile(self)
+        self._glitch_style = style
+        self._glitch_duration = duration
+        self._glitch_elapsed = 0.0
+        self._glitch_seed = self._rng.randint(0, 1_000_000)
+        self._glitch_center_angle = self._rng.uniform(0.0, 360.0)
+
+    def _profile(self, target: str) -> tuple[float, float, float]:
+        span, radial, tangent = super()._profile(target)
+        return span * 1.12, radial * 1.18, tangent * 1.18
+
+    def _full_offset(self, layer: int) -> QPointF:
+        offset = super()._full_offset(layer)
+        return QPointF(offset.x() * 1.24, offset.y() * 1.24)
