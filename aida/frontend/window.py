@@ -36,15 +36,14 @@ class AIDAWindow(_BaseAIDAWindow):
             Qt.AlignmentFlag.AlignVCenter,
         )
 
-        self.orb_override_indicator = QLabel(header)
-        self.orb_override_indicator.setObjectName("orbOverrideIndicator")
-        self.orb_override_indicator.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-        self.orb_override_indicator.setMinimumWidth(82)
-        self.orb_override_indicator.setStyleSheet(
+        self._orb_visual_override_active = False
+        self.orb_status_indicator = QLabel(header)
+        self.orb_status_indicator.setObjectName("orbStatusIndicator")
+        self.orb_status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.orb_status_indicator.setMinimumWidth(96)
+        self.orb_status_indicator.setStyleSheet(
             """
-            QLabel#orbOverrideIndicator {
+            QLabel#orbStatusIndicator {
                 color: rgba(201, 232, 255, 225);
                 font-size: 9px;
                 font-weight: 700;
@@ -53,10 +52,9 @@ class AIDAWindow(_BaseAIDAWindow):
             }
             """
         )
-        self.orb_override_indicator.setVisible(False)
         header_layout.insertWidget(
             2,
-            self.orb_override_indicator,
+            self.orb_status_indicator,
             0,
             Qt.AlignmentFlag.AlignVCenter,
         )
@@ -64,6 +62,7 @@ class AIDAWindow(_BaseAIDAWindow):
             self._handle_orb_visual_override
         )
         self.internal_orb.set_status(AIDAStatus.STARTUP)
+        self._refresh_orb_status_indicator()
 
         self._orb_test_shortcut = QShortcut(
             QKeySequence("Ctrl+Shift+O"),
@@ -90,35 +89,55 @@ class AIDAWindow(_BaseAIDAWindow):
         )
         self._orb_live_shortcut.activated.connect(self.return_orb_to_live)
 
+    def _set_orb_status_text(self, heading: str, value: str) -> None:
+        self.orb_status_indicator.setText(
+            f"{heading.strip().upper()}\n────────\n{value.strip().upper()}"
+        )
+
+    def _refresh_orb_status_indicator(self) -> None:
+        if self._orb_visual_override_active:
+            return
+        self._set_orb_status_text(
+            "CURRENT STATUS",
+            self.internal_orb.current_live_status_text(),
+        )
+
     def set_status(self, status: AIDAStatus) -> None:
         super().set_status(status)
         orb = getattr(self, "internal_orb", None)
         if isinstance(orb, AIDAStatusOrb):
             orb.set_status(status)
+            self._refresh_orb_status_indicator()
 
     def set_artificer_status(self, text: str) -> None:
         super().set_artificer_status(text)
         self.internal_orb.set_artificer_status(text)
+        self._refresh_orb_status_indicator()
 
     def set_active_task_count(self, count: int) -> None:
         super().set_active_task_count(count)
         self.internal_orb.set_active_task_count(count)
+        self._refresh_orb_status_indicator()
 
     def report_task_started(self, task_name: str) -> None:
         super().report_task_started(task_name)
         self.internal_orb.report_task_started(task_name)
+        self._refresh_orb_status_indicator()
 
     def report_task_finished(self, task_name: str) -> None:
         super().report_task_finished(task_name)
         self.internal_orb.report_task_finished(task_name)
+        self._refresh_orb_status_indicator()
 
     def report_task_failed(self, task_name: str, error_message: str) -> None:
         super().report_task_failed(task_name, error_message)
         self.internal_orb.report_task_failed(task_name)
+        self._refresh_orb_status_indicator()
 
     def set_backend_connected(self, connected: bool) -> None:
         """Update the orb's structured backend-connectivity trouble state."""
         self.internal_orb.set_backend_connected(connected)
+        self._refresh_orb_status_indicator()
 
     def set_orb_trouble_code(
         self,
@@ -133,9 +152,11 @@ class AIDAWindow(_BaseAIDAWindow):
             active=active,
             state=state,
         )
+        self._refresh_orb_status_indicator()
 
     def clear_orb_trouble_code(self, code: str | OrbTroubleCode) -> None:
         self.internal_orb.clear_trouble_code(code)
+        self._refresh_orb_status_indicator()
 
     def set_orb_color_for(
         self,
@@ -188,22 +209,19 @@ class AIDAWindow(_BaseAIDAWindow):
         heading: str,
         state_name: str,
     ) -> None:
+        self._orb_visual_override_active = active
         if not active:
-            self.orb_override_indicator.clear()
-            self.orb_override_indicator.setVisible(False)
+            self._refresh_orb_status_indicator()
             return
 
         safe_heading = heading.strip().upper() or "VISUAL OVERRIDE"
         safe_state = state_name.strip().upper() or "UNKNOWN"
-        self.orb_override_indicator.setText(
-            f"{safe_heading}\n────────\n{safe_state}"
-        )
-        self.orb_override_indicator.setVisible(True)
+        self._set_orb_status_text(safe_heading, safe_state)
 
     @Slot()
     def start_orb_color_test(self) -> None:
-        """Run BLUE -> GREEN -> PURPLE -> RED -> current live state."""
+        """Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""
         self.internal_orb.start_color_test()
         self.dashboard.add_activity(
-            "ORB color test: BLUE > GREEN > PURPLE > RED > LIVE"
+            "ORB color test: BLUE > GREEN > VIOLET > RED > LIVE"
         )
