@@ -21,15 +21,20 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  AidaOrb,
+  AidaOrbVisualState,
+} from '@/src/components/aida-orb';
 import { GlassPanel } from '@/src/components/glass-panel';
 import {
   MessageCard,
   MobileMessage,
 } from '@/src/components/message-card';
-import { StatusCore } from '@/src/components/status-core';
 import {
   configuredApiUrl,
   getHealth,
+  getOperationalStatus,
+  OperationalStatusResponse,
   sendChat,
 } from '@/src/services/aida-api';
 import {
@@ -49,12 +54,24 @@ const INITIAL_MESSAGES: MobileMessage[] = [
   },
 ];
 
+const ARTIFICER_ACTIVE_VALUES = [
+  'OBSERVING',
+  'REVIEWING',
+  'MAINTENANCE',
+  'ROLLBACK',
+];
+
 export default function HomeScreen() {
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState<MobileMessage[]>(INITIAL_MESSAGES);
   const [status, setStatus] = useState<AidaRuntimeStatus>('CONNECTING');
   const [connectionNote, setConnectionNote] = useState('CONTACTING LOCAL BRIDGE');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [operationalSnapshot, setOperationalSnapshot] =
+    useState<OperationalStatusResponse | null>(null);
+  const [operationalReachable, setOperationalReachable] = useState<
+    boolean | null
+  >(null);
   const scrollRef = useRef<ScrollView>(null);
 
   const tone = AIDA_STATUS_TONES[status];
@@ -63,6 +80,16 @@ export default function HomeScreen() {
     const url = configuredApiUrl();
     return url ? url.replace(/^https?:\/\//, '') : 'NOT CONFIGURED';
   }, []);
+
+  const orbPresentation = useMemo(
+    () =>
+      deriveOrbPresentation(
+        status,
+        operationalSnapshot,
+        operationalReachable,
+      ),
+    [status, operationalSnapshot, operationalReachable],
+  );
 
   const scrollMessagesToEnd = useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -93,9 +120,27 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const refreshOperationalSnapshot = useCallback(async () => {
+    try {
+      const snapshot = await getOperationalStatus();
+      setOperationalSnapshot(snapshot);
+      setOperationalReachable(true);
+    } catch {
+      setOperationalReachable(false);
+    }
+  }, []);
+
   useEffect(() => {
     void checkConnection();
   }, [checkConnection]);
+
+  useEffect(() => {
+    void refreshOperationalSnapshot();
+    const timer = setInterval(() => {
+      void refreshOperationalSnapshot();
+    }, 2_000);
+    return () => clearInterval(timer);
+  }, [refreshOperationalSnapshot]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -165,6 +210,7 @@ export default function HomeScreen() {
       ]);
       setStatus('STANDBY');
       setConnectionNote('LOCAL BRIDGE READY');
+      void refreshOperationalSnapshot();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -229,7 +275,13 @@ export default function HomeScreen() {
             </Pressable>
           </GlassPanel>
 
-          {!keyboardVisible ? <StatusCore status={status} /> : null}
+          {!keyboardVisible ? (
+            <AidaOrb
+              label={orbPresentation.label}
+              runtimeStatus={status}
+              state={orbPresentation.state}
+            />
+          ) : null}
 
           <GlassPanel variant="deep" style={styles.feedPanel}>
             <View style={styles.feedHeader}>
@@ -306,6 +358,51 @@ export default function HomeScreen() {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+function deriveOrbPresentation(
+  status: AidaRuntimeStatus,
+  snapshot: OperationalStatusResponse | null,
+  operationalReachable: boolean | null,
+): { state: AidaOrbVisualState; label: string } {
+  if (status === 'OFFLINE') {
+    return { state: 'RED', label: 'DISCONNECTED' };
+  }
+  if (status === 'ERROR') {
+    return { state: 'RED', label: 'SYSTEM FAULT' };
+  }
+  if (status !== 'CONNECTING' && operationalReachable === false) {
+    return { state: 'RED', label: 'DISCONNECTED' };
+  }
+  if (snapshot && !snapshot.desktop_online) {
+    return { state: 'RED', label: 'DISCONNECTED' };
+  }
+  if (snapshot?.statuses.some((item) => item.tone === 'error')) {
+    return { state: 'RED', label: 'SYSTEM FAULT' };
+  }
+
+  const artificer = snapshot?.statuses.find((item) => item.id === 'artificer');
+  const artificerValue = artificer?.value.toUpperCase() ?? '';
+  const artificerActive =
+    artificer?.tone === 'active' ||
+    ARTIFICER_ACTIVE_VALUES.some((value) => artificerValue.includes(value));
+  if (artificerActive) {
+    return { state: 'VIOLET', label: 'ARTIFICER' };
+  }
+
+  if (status === 'CONNECTING') {
+    return { state: 'GREEN', label: 'STARTING' };
+  }
+  if (status === 'ANALYZING') {
+    return { state: 'GREEN', label: 'ANALYZING' };
+  }
+  if (snapshot?.statuses.some((item) => item.tone === 'active')) {
+    return { state: 'GREEN', label: 'WORKING' };
+  }
+  if (status === 'WARNING') {
+    return { state: 'BLUE', label: 'WARNING' };
+  }
+  return { state: 'BLUE', label: 'STANDBY' };
 }
 
 function errorMessage(error: unknown) {
