@@ -5,3 +5,4 @@ PySide6
 requests
 playsound==1.2.2
 simpleaudio
+sounddevice

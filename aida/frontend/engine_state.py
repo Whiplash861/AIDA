@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import RLock
 
-from PySide6.QtCore import QObject, Signal
-
 
 @dataclass(frozen=True, slots=True)
 class EngineVisualSnapshot:
@@ -13,13 +11,10 @@ class EngineVisualSnapshot:
     status: str
 
 
-class EngineVisualState(QObject):
+class EngineVisualState:
     """Thread-safe visual foreground state shared by AIDA's Engines."""
 
-    changed = Signal(str, str, str, bool)
-
     def __init__(self) -> None:
-        super().__init__()
         self._lock = RLock()
         self._foreground: list[str] = []
         self._colors: dict[str, str] = {}
@@ -34,7 +29,6 @@ class EngineVisualState(QObject):
             self._foreground.append(normalized_key)
             self._colors[normalized_key] = color
             self._statuses[normalized_key] = normalized_status
-        self.changed.emit(normalized_key, normalized_status, color, True)
 
     def deactivate(self, key: str, status: str = "IDLE") -> None:
         normalized_key = key.strip().lower()
@@ -42,9 +36,7 @@ class EngineVisualState(QObject):
         with self._lock:
             if normalized_key in self._foreground:
                 self._foreground.remove(normalized_key)
-            color = self._colors.get(normalized_key, "")
             self._statuses[normalized_key] = normalized_status
-        self.changed.emit(normalized_key, normalized_status, color, False)
 
     def snapshot(self) -> EngineVisualSnapshot:
         with self._lock:

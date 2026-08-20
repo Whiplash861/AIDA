@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import Enum, auto
 from typing import Callable, List, Optional
 
+
 class MessageSender(Enum):
     USER = auto()
     AIDA = auto()
@@ -16,6 +17,7 @@ class ChatMessage:
     sender: MessageSender
     text: str
     timestamp: datetime = field(default_factory=datetime.now)
+    include_in_context: bool = True
 
 
 MessageListener = Callable[[ChatMessage], None]
@@ -45,6 +47,8 @@ class ChatHistory:
         self,
         sender: MessageSender,
         text: str,
+        *,
+        include_in_context: bool = True,
     ) -> ChatMessage:
         clean_text = text.strip()
 
@@ -54,6 +58,7 @@ class ChatHistory:
         message = ChatMessage(
             sender=sender,
             text=clean_text,
+            include_in_context=include_in_context,
         )
 
         self._messages.append(message)
@@ -65,14 +70,52 @@ class ChatHistory:
 
         return message
 
-    def add_user(self, text: str) -> ChatMessage:
-        return self.add(MessageSender.USER, text)
+    def add_user(
+        self,
+        text: str,
+        *,
+        include_in_context: bool = True,
+    ) -> ChatMessage:
+        return self.add(
+            MessageSender.USER,
+            text,
+            include_in_context=include_in_context,
+        )
 
-    def add_aida(self, text: str) -> ChatMessage:
-        return self.add(MessageSender.AIDA, text)
+    def add_aida(
+        self,
+        text: str,
+        *,
+        include_in_context: bool = True,
+    ) -> ChatMessage:
+        return self.add(
+            MessageSender.AIDA,
+            text,
+            include_in_context=include_in_context,
+        )
 
-    def add_system(self, text: str) -> ChatMessage:
-        return self.add(MessageSender.SYSTEM, text)
+    def add_system(
+        self,
+        text: str,
+        *,
+        include_in_context: bool = True,
+    ) -> ChatMessage:
+        return self.add(
+            MessageSender.SYSTEM,
+            text,
+            include_in_context=include_in_context,
+        )
+
+    def mark_latest_local_only(self) -> None:
+        """
+        Excludes the newest user message from future language-model
+        context while keeping it visible and stored locally.
+        """
+
+        for message in reversed(self._messages):
+            if message.sender is MessageSender.USER:
+                message.include_in_context = False
+                return
 
     def subscribe(self, listener: MessageListener) -> None:
         if listener not in self._listeners:
@@ -93,9 +136,15 @@ class ChatHistory:
         if limit <= 0:
             return []
 
+        eligible_messages = [
+            message
+            for message in self._messages
+            if message.include_in_context
+        ][-limit:]
+
         context: List[str] = []
 
-        for message in self._messages[-limit:]:
+        for message in eligible_messages:
             sender_name = {
                 MessageSender.USER: "User",
                 MessageSender.AIDA: "AIDA",
