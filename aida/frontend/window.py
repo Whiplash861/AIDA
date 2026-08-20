@@ -5,12 +5,12 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from aida.frontend._window_base import AIDAWindow as _BaseAIDAWindow
+from aida.frontend.engine_status_orb import AIDAStatusOrb
 from aida.frontend.internal_orb import (
     OrbTroubleCode,
     OrbVisualState,
 )
 from aida.frontend.status import AIDAStatus
-from aida.frontend.status_orb import AIDAStatusOrb
 
 
 class _HeaderStatusOrb(AIDAStatusOrb):
@@ -105,6 +105,12 @@ class AIDAWindow(_BaseAIDAWindow):
             )
             self._orb_targeted_test_shortcuts.append(shortcut)
 
+        self._orb_cyan_test_shortcut = QShortcut(
+            QKeySequence("Ctrl+Shift+5"),
+            self,
+        )
+        self._orb_cyan_test_shortcut.activated.connect(self.start_orb_cyan_test)
+
         self._orb_live_shortcut = QShortcut(
             QKeySequence("Ctrl+Shift+0"),
             self,
@@ -136,6 +142,11 @@ class AIDAWindow(_BaseAIDAWindow):
         self.internal_orb.set_artificer_status(text)
         self._refresh_orb_status_indicator()
 
+    def set_technomancer_status(self, text: str) -> None:
+        self.dashboard.set_technomancer_status(text)
+        self.internal_orb.set_technomancer_status(text)
+        self._refresh_orb_status_indicator()
+
     def set_active_task_count(self, count: int) -> None:
         super().set_active_task_count(count)
         self.internal_orb.set_active_task_count(count)
@@ -143,16 +154,22 @@ class AIDAWindow(_BaseAIDAWindow):
 
     def report_task_started(self, task_name: str) -> None:
         super().report_task_started(task_name)
+        if task_name.strip().lower().startswith("technomancer"):
+            self.dashboard.set_technomancer_status("RUNNING")
         self.internal_orb.report_task_started(task_name)
         self._refresh_orb_status_indicator()
 
     def report_task_finished(self, task_name: str) -> None:
         super().report_task_finished(task_name)
+        if task_name.strip().lower().startswith("technomancer"):
+            self.dashboard.set_technomancer_status("IDLE")
         self.internal_orb.report_task_finished(task_name)
         self._refresh_orb_status_indicator()
 
     def report_task_failed(self, task_name: str, error_message: str) -> None:
         super().report_task_failed(task_name, error_message)
+        if task_name.strip().lower().startswith("technomancer"):
+            self.dashboard.set_technomancer_status("ERROR")
         self.internal_orb.report_task_failed(task_name)
         self._refresh_orb_status_indicator()
 
@@ -215,6 +232,17 @@ class AIDAWindow(_BaseAIDAWindow):
         normalized = self.internal_orb.current_visual_state.name
         self.dashboard.add_activity(
             f"ORB targeted color test: {normalized} for "
+            f"{self._TARGETED_ORB_TEST_SECONDS:g}s"
+        )
+
+    @Slot()
+    def start_orb_cyan_test(self) -> None:
+        """Show Technomancer cyan for ten seconds, then return to live state."""
+        self.internal_orb.start_cyan_color_test(
+            self._TARGETED_ORB_TEST_SECONDS
+        )
+        self.dashboard.add_activity(
+            f"ORB targeted color test: CYAN for "
             f"{self._TARGETED_ORB_TEST_SECONDS:g}s"
         )
 
