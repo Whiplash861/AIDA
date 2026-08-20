@@ -1,0 +1,328 @@
+name: Restore refined orb frontend with Technomancer
+
+on:
+  push:
+    branches:
+      - feature/technomancer-engine
+    paths:
+      - .github/workflows/restore-technomancer-orbs.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Technomancer branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/technomancer-engine
+
+      - name: Restore refined orb/frontend files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/mobile-backend-glass-integration
+          git checkout origin/feature/mobile-backend-glass-integration -- \
+            aida/frontend/_window_base.py \
+            aida/frontend/window.py \
+            aida/frontend/internal_orb.py \
+            aida/frontend/status_orb.py \
+            aida/frontend/live_overlay.py \
+            aida/frontend/overlay.py \
+            aida/frontend/app.py
+
+      - name: Integrate Technomancer into refined visual state model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if text.count(old) != 1:
+                  raise RuntimeError(f"{label}: expected one match, found {text.count(old)}")
+              return text.replace(old, new, 1)
+
+          # ------------------------------------------------------------------
+          # internal_orb.py: add native CYAN Technomancer state and precedence.
+          # ------------------------------------------------------------------
+          path = Path("aida/frontend/internal_orb.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "from aida.frontend.status import AIDAStatus\n",
+              "from aida.frontend.status import AIDAStatus\nfrom aida.technomancer.models import TECHNOMANCER_COLOR\n",
+              "internal_orb technomancer import",
+          )
+          text = replace_once(
+              text,
+              '    PURPLE = "purple"\n    RED = "red"\n',
+              '    PURPLE = "purple"\n    CYAN = "cyan"\n    RED = "red"\n',
+              "internal_orb CYAN enum",
+          )
+          text = replace_once(
+              text,
+              '    ARTIFICER_FAILURE = "ARTIFICER-FAILURE"\n',
+              '    ARTIFICER_FAILURE = "ARTIFICER-FAILURE"\n    TECHNOMANCER_FAILURE = "TECHNOMANCER-FAILURE"\n',
+              "internal_orb technomancer trouble enum",
+          )
+          text = replace_once(
+              text,
+              "    OrbTroubleCode.ARTIFICER_FAILURE.value: OrbVisualState.RED,\n}",
+              "    OrbTroubleCode.ARTIFICER_FAILURE.value: OrbVisualState.RED,\n    OrbTroubleCode.TECHNOMANCER_FAILURE.value: OrbVisualState.RED,\n}",
+              "internal_orb technomancer trouble mapping",
+          )
+          text = replace_once(
+              text,
+              "    OrbVisualState.RED: (\n",
+              "    OrbVisualState.CYAN: (\n        QColor(TECHNOMANCER_COLOR),\n        QColor(\"#7CF5FF\"),\n        QColor(\"#F4FEFF\"),\n        QColor(\"#04333A\"),\n        QColor(\"#011114\"),\n    ),\n    OrbVisualState.RED: (\n",
+              "internal_orb CYAN palette",
+          )
+          text = replace_once(
+              text,
+              "_ACTIVE_ARTIFICER_STATES = {\n    ArtificerStatus.OBSERVING.value,\n    ArtificerStatus.REVIEWING.value,\n    ArtificerStatus.MAINTENANCE.value,\n    ArtificerStatus.ROLLBACK.value,\n}\n",
+              "_ACTIVE_ARTIFICER_STATES = {\n    ArtificerStatus.OBSERVING.value,\n    ArtificerStatus.REVIEWING.value,\n    ArtificerStatus.MAINTENANCE.value,\n    ArtificerStatus.ROLLBACK.value,\n}\n\n_ACTIVE_TECHNOMANCER_STATES = {\n    \"running\",\n    \"working\",\n    \"analyzing\",\n    \"reviewing\",\n    \"monitoring\",\n}\n",
+              "internal_orb active technomancer states",
+          )
+          text = replace_once(
+              text,
+              "        self._artificer_status = ArtificerStatus.READY.value\n        self._active_artificer_tasks: set[str] = set()\n",
+              "        self._artificer_status = ArtificerStatus.READY.value\n        self._active_artificer_tasks: set[str] = set()\n        self._technomancer_status = \"idle\"\n        self._active_technomancer_tasks: set[str] = set()\n",
+              "internal_orb technomancer fields",
+          )
+          text = replace_once(
+              text,
+              "            OrbVisualState.PURPLE,\n            OrbVisualState.RED,\n",
+              "            OrbVisualState.PURPLE,\n            OrbVisualState.CYAN,\n            OrbVisualState.RED,\n",
+              "internal_orb test sequence",
+          )
+          text = replace_once(
+              text,
+              "    def report_task_started(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if normalized.startswith(\"artificer\"):\n            self._active_artificer_tasks.add(normalized)\n            self._refresh_live_visual_state()\n\n    def report_task_finished(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if normalized in self._active_artificer_tasks:\n            self._active_artificer_tasks.discard(normalized)\n            self._refresh_live_visual_state()\n\n    def report_task_failed(self, task_name: str) -> None:\n        self.report_task_finished(task_name)\n",
+              "    def set_technomancer_status(self, text: str) -> None:\n        normalized = text.strip().lower() or \"idle\"\n        self._technomancer_status = normalized\n        self.set_trouble_code(\n            OrbTroubleCode.TECHNOMANCER_FAILURE,\n            active=normalized in {\"error\", \"failed\", \"failure\"},\n        )\n        self._refresh_live_visual_state()\n\n    def report_task_started(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if normalized.startswith(\"artificer\"):\n            self._active_artificer_tasks.add(normalized)\n            self._refresh_live_visual_state()\n            return\n        if normalized.startswith(\"technomancer\"):\n            self._active_technomancer_tasks.add(normalized)\n            self._technomancer_status = \"running\"\n            self.clear_trouble_code(OrbTroubleCode.TECHNOMANCER_FAILURE)\n            self._refresh_live_visual_state()\n\n    def report_task_finished(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if normalized in self._active_artificer_tasks:\n            self._active_artificer_tasks.discard(normalized)\n            self._refresh_live_visual_state()\n            return\n        if normalized.startswith(\"technomancer\"):\n            self._active_technomancer_tasks.discard(normalized)\n            if not self._active_technomancer_tasks:\n                self._technomancer_status = \"idle\"\n            self._refresh_live_visual_state()\n\n    def report_task_failed(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if normalized.startswith(\"technomancer\"):\n            self._active_technomancer_tasks.discard(normalized)\n            self._technomancer_status = \"error\"\n            self.set_trouble_code(\n                OrbTroubleCode.TECHNOMANCER_FAILURE,\n                active=True,\n            )\n            return\n        self.report_task_finished(task_name)\n",
+              "internal_orb task reporting",
+          )
+          text = replace_once(
+              text,
+              "        if (\n            self._active_artificer_tasks\n            or self._artificer_status in _ACTIVE_ARTIFICER_STATES\n        ):\n            return OrbVisualState.PURPLE\n\n        if self._active_task_count > 0:\n",
+              "        if (\n            self._active_technomancer_tasks\n            or self._technomancer_status in _ACTIVE_TECHNOMANCER_STATES\n        ):\n            return OrbVisualState.CYAN\n\n        if (\n            self._active_artificer_tasks\n            or self._artificer_status in _ACTIVE_ARTIFICER_STATES\n        ):\n            return OrbVisualState.PURPLE\n\n        if self._active_task_count > 0:\n",
+              "internal_orb Technomancer precedence",
+          )
+          path.write_text(text, encoding="utf-8")
+
+          # ------------------------------------------------------------------
+          # status_orb.py: accessible Technomancer label, keep RED unchanged.
+          # ------------------------------------------------------------------
+          path = Path("aida/frontend/status_orb.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "    _ACTIVE_ARTIFICER_STATES,\n    _PALETTES,\n",
+              "    _ACTIVE_ARTIFICER_STATES,\n    _ACTIVE_TECHNOMANCER_STATES,\n    _PALETTES,\n",
+              "status_orb technomancer state import",
+          )
+          text = replace_once(
+              text,
+              "        if self._live_status.name == \"SHUTDOWN\":\n            return \"OFFLINE\"\n        if (\n            self._active_artificer_tasks\n",
+              "        if self._live_status.name == \"SHUTDOWN\":\n            return \"OFFLINE\"\n        if (\n            self._active_technomancer_tasks\n            or self._technomancer_status in _ACTIVE_TECHNOMANCER_STATES\n        ):\n            return \"TECHNOMANCER\"\n        if (\n            self._active_artificer_tasks\n",
+              "status_orb semantic Technomancer label",
+          )
+          text = text.replace(
+              '"""Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""',
+              '"""Run BLUE -> GREEN -> VIOLET -> CYAN -> RED -> current live state."""',
+          )
+          path.write_text(text, encoding="utf-8")
+
+          # ------------------------------------------------------------------
+          # window.py: preserve compact header/orb, add CYAN test + status row.
+          # ------------------------------------------------------------------
+          path = Path("aida/frontend/window.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              '            ("Ctrl+Shift+4", OrbVisualState.RED),\n',
+              '            ("Ctrl+Shift+4", OrbVisualState.RED),\n            ("Ctrl+Shift+5", OrbVisualState.CYAN),\n',
+              "window CYAN shortcut",
+          )
+          text = replace_once(
+              text,
+              "    def set_active_task_count(self, count: int) -> None:\n        super().set_active_task_count(count)\n        self.internal_orb.set_active_task_count(count)\n        self._refresh_orb_status_indicator()\n",
+              "    def set_technomancer_status(self, text: str) -> None:\n        self.dashboard.set_technomancer_status(text)\n        self.internal_orb.set_technomancer_status(text)\n        self._refresh_orb_status_indicator()\n\n    def set_active_task_count(self, count: int) -> None:\n        super().set_active_task_count(count)\n        self.internal_orb.set_active_task_count(count)\n        self._refresh_orb_status_indicator()\n",
+              "window technomancer status method",
+          )
+          text = replace_once(
+              text,
+              "    def report_task_started(self, task_name: str) -> None:\n        super().report_task_started(task_name)\n        self.internal_orb.report_task_started(task_name)\n        self._refresh_orb_status_indicator()\n\n    def report_task_finished(self, task_name: str) -> None:\n        super().report_task_finished(task_name)\n        self.internal_orb.report_task_finished(task_name)\n        self._refresh_orb_status_indicator()\n\n    def report_task_failed(self, task_name: str, error_message: str) -> None:\n        super().report_task_failed(task_name, error_message)\n        self.internal_orb.report_task_failed(task_name)\n        self._refresh_orb_status_indicator()\n",
+              "    def report_task_started(self, task_name: str) -> None:\n        super().report_task_started(task_name)\n        if task_name.strip().lower().startswith(\"technomancer\"):\n            self.dashboard.set_technomancer_status(\"RUNNING\")\n        self.internal_orb.report_task_started(task_name)\n        self._refresh_orb_status_indicator()\n\n    def report_task_finished(self, task_name: str) -> None:\n        super().report_task_finished(task_name)\n        if task_name.strip().lower().startswith(\"technomancer\"):\n            self.dashboard.set_technomancer_status(\"IDLE\")\n        self.internal_orb.report_task_finished(task_name)\n        self._refresh_orb_status_indicator()\n\n    def report_task_failed(self, task_name: str, error_message: str) -> None:\n        super().report_task_failed(task_name, error_message)\n        if task_name.strip().lower().startswith(\"technomancer\"):\n            self.dashboard.set_technomancer_status(\"ERROR\")\n        self.internal_orb.report_task_failed(task_name)\n        self._refresh_orb_status_indicator()\n",
+              "window technomancer task status",
+          )
+          text = text.replace(
+              '"""Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""',
+              '"""Run BLUE -> GREEN -> VIOLET -> CYAN -> RED -> current live state."""',
+          )
+          text = text.replace(
+              '"ORB color test: BLUE > GREEN > VIOLET > RED > LIVE"',
+              '"ORB color test: BLUE > GREEN > VIOLET > CYAN > RED > LIVE"',
+          )
+          path.write_text(text, encoding="utf-8")
+
+          # ------------------------------------------------------------------
+          # live_overlay.py: expose Technomancer status setter for direct callers.
+          # Task signals already flow through the inherited report_task_* methods.
+          # ------------------------------------------------------------------
+          path = Path("aida/frontend/live_overlay.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "    def report_task_started(self, task_name: str) -> None:\n        super().report_task_started(task_name)\n        self._refresh_external_tooltip()\n",
+              "    def set_technomancer_status(self, text: str) -> None:\n        super().set_technomancer_status(text)\n        self._refresh_external_tooltip()\n\n    def report_task_started(self, task_name: str) -> None:\n        super().report_task_started(task_name)\n        self._refresh_external_tooltip()\n",
+              "live_overlay technomancer setter",
+          )
+          path.write_text(text, encoding="utf-8")
+
+          # ------------------------------------------------------------------
+          # widgets.py: keep Technomancer dashboard row; remove hacked header orb.
+          # ------------------------------------------------------------------
+          path = Path("aida/frontend/widgets.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace("from aida.frontend.header_orb import HeaderEngineOrb\n", "")
+          text = text.replace("        self._header_orb: HeaderEngineOrb | None = None\n", "")
+          start = text.find("    def showEvent(self, event) -> None:\n")
+          end = text.find("    def _sync_engine_visual_state(self) -> None:\n")
+          if start == -1 or end == -1 or end <= start:
+              raise RuntimeError("widgets header-orb lifecycle block not found")
+          text = text[:start] + text[end:]
+          text = replace_once(
+              text,
+              "    def _sync_engine_visual_state(self) -> None:\n        technomancer_status = ENGINE_VISUAL_STATE.status(\"technomancer\")\n        if technomancer_status != self._last_technomancer_status:\n            self._last_technomancer_status = technomancer_status\n            self.technomancer_value.set_status_text(technomancer_status)\n        if self._header_orb is not None:\n            self._header_orb.update()\n\n    def set_agent_status(self, status: AIDAStatus) -> None:\n        self.agent_value.set_status_text(status.name)\n        if self._header_orb is not None:\n            self._header_orb.set_status(status)\n",
+              "    def _sync_engine_visual_state(self) -> None:\n        technomancer_status = ENGINE_VISUAL_STATE.status(\"technomancer\")\n        if technomancer_status != self._last_technomancer_status:\n            self._last_technomancer_status = technomancer_status\n            self.technomancer_value.set_status_text(technomancer_status)\n\n    def set_agent_status(self, status: AIDAStatus) -> None:\n        self.agent_value.set_status_text(status.name)\n",
+              "widgets remove header-orb sync",
+          )
+          path.write_text(text, encoding="utf-8")
+
+          # Old visual integration is no longer part of the restored architecture.
+          Path("aida/frontend/header_orb.py").unlink(missing_ok=True)
+
+          # ------------------------------------------------------------------
+          # Regression tests now protect the refined architecture + Technomancer.
+          # ------------------------------------------------------------------
+          test = '''from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+from aida.frontend.command_router import CommandRouter, CommandType
+
+
+class TechnomancerFrontendRegressionTests(unittest.TestCase):
+    def test_canonical_artificer_controls_remain_present(self) -> None:
+        source = Path("aida/frontend/_window_base.py").read_text(encoding="utf-8")
+        self.assertIn('self.artificer_button = self._header_button(', source)
+        self.assertIn(
+            'self.artificer_button.clicked.connect(self.artificer_requested.emit)',
+            source,
+        )
+
+    def test_dashboard_keeps_artificer_and_adds_technomancer(self) -> None:
+        source = Path("aida/frontend/widgets.py").read_text(encoding="utf-8")
+        artificer = '("ARTIFICER", self.artificer_value)'
+        technomancer = '("TECHNOMANCER", self.technomancer_value)'
+        self.assertIn(artificer, source)
+        self.assertIn(technomancer, source)
+        self.assertLess(source.index(artificer), source.index(technomancer))
+        self.assertNotIn("HeaderEngineOrb", source)
+        self.assertNotIn("_install_header_orb", source)
+
+    def test_refined_header_orb_architecture_is_restored(self) -> None:
+        source = Path("aida/frontend/window.py").read_text(encoding="utf-8")
+        self.assertIn("class _HeaderStatusOrb(AIDAStatusOrb)", source)
+        self.assertIn("self._orb_diameter = 80", source)
+        self.assertIn("self.setFixedSize(96, 96)", source)
+        self.assertIn("OrbVisualState.CYAN", source)
+        self.assertIn('QKeySequence("Ctrl+Shift+O")', source)
+        self.assertIn('(\"Ctrl+Shift+5\", OrbVisualState.CYAN)', source)
+        self.assertIn("CURRENT STATUS", source)
+        self.assertFalse(Path("aida/frontend/header_orb.py").exists())
+
+    def test_technomancer_is_a_native_cyan_orb_state(self) -> None:
+        internal = Path("aida/frontend/internal_orb.py").read_text(encoding="utf-8")
+        status = Path("aida/frontend/status_orb.py").read_text(encoding="utf-8")
+        self.assertIn('CYAN = "cyan"', internal)
+        self.assertIn("TECHNOMANCER_COLOR", internal)
+        self.assertIn("OrbVisualState.CYAN", internal)
+        self.assertIn("_ACTIVE_TECHNOMANCER_STATES", internal)
+        self.assertIn('return "TECHNOMANCER"', status)
+
+    def test_live_overlay_uses_same_status_orb_engine(self) -> None:
+        source = Path("aida/frontend/live_overlay.py").read_text(encoding="utf-8")
+        app = Path("aida/frontend/app.py").read_text(encoding="utf-8")
+        self.assertIn("class AIDALiveOverlay(AIDAStatusOrb)", source)
+        self.assertIn("overlay = AIDALiveOverlay()", app)
+        self.assertIn("overlay.report_task_started(task_name)", app)
+        self.assertIn("overlay.set_artificer_status", app)
+
+    def test_red_profile_contract_is_preserved(self) -> None:
+        source = Path("aida/frontend/status_orb.py").read_text(encoding="utf-8")
+        self.assertIn("_CORE_PROFILE_MIN_INTERVAL = 3.0", source)
+        self.assertIn("_CORE_PROFILE_MAX_INTERVAL = 5.0", source)
+        self.assertIn("_CORE_PROFILE_WEIGHTS = (40, 40, 20)", source)
+        self.assertIn('(\"interference\", 3.0)', source)
+
+    def test_technomancer_fast_paths_use_canonical_intent_router(self) -> None:
+        router = CommandRouter()
+        cases = {
+            "Technomancer health": CommandType.TECHNOMANCER_HEALTH,
+            "Technomancer hardware": CommandType.TECHNOMANCER_HARDWARE,
+            "Technomancer upgrades": CommandType.TECHNOMANCER_UPGRADES,
+            "Technomancer advisories": CommandType.TECHNOMANCER_ADVISORIES,
+        }
+        for phrase, expected in cases.items():
+            with self.subTest(phrase=phrase):
+                routed = router.route(phrase)
+                self.assertIsNotNone(routed)
+                assert routed is not None
+                self.assertEqual(routed.command_type, expected)
+                self.assertTrue(routed.local_only)
+
+
+if __name__ == "__main__":
+    unittest.main()
+'''
+          Path("tests/frontend/test_technomancer_frontend.py").write_text(
+              test,
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Validate restored frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            aida/frontend/overlay.py \
+            aida/frontend/internal_orb.py \
+            aida/frontend/status_orb.py \
+            aida/frontend/live_overlay.py \
+            aida/frontend/_window_base.py \
+            aida/frontend/window.py \
+            aida/frontend/widgets.py \
+            aida/frontend/app.py \
+            tests/frontend/test_technomancer_frontend.py
+          python tests/frontend/test_technomancer_frontend.py
+
+      - name: Commit restored frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Whiplash"
+          git config user.email "145601386+Whiplash861@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No product changes to commit."
+            exit 0
+          fi
+          git commit -m "Restore refined orb frontend with Technomancer state"
+          git push origin HEAD:feature/technomancer-engine
