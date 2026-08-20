@@ -10,7 +10,9 @@ class CommandCategory(Enum):
     SECURITY = auto()
     MEMORY = auto()
     NAVIGATION = auto()
+    TECHNOMANCER = auto()
     GENERAL = auto()
+
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
@@ -30,34 +32,18 @@ class CommandExecutor(ABC):
     @property
     @abstractmethod
     def task_name(self) -> str:
-        """
-        Unique Task Manager name for this command.
-        """
-
         raise NotImplementedError
 
     @property
     @abstractmethod
     def category(self) -> CommandCategory:
-        """
-        Frontend subsystem represented by this command.
-        """
-
         raise NotImplementedError
 
     @property
     @abstractmethod
     def start_message(self) -> str:
-        """
-        Message recorded when command execution begins.
-        """
-
         raise NotImplementedError
 
     @abstractmethod
     def execute(self) -> CommandResult:
-        """
-        Performs the command and returns a standardized result.
-        """
-
         raise NotImplementedError
