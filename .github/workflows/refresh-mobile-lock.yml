@@ -1,0 +1,44 @@
+name: Refresh mobile dependency lock
+
+on:
+  push:
+    branches:
+      - feature/mobile-backend-glass-integration
+    paths:
+      - .github/workflows/refresh-mobile-lock.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/mobile-backend-glass-integration
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Refresh package lock
+        working-directory: mobile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Commit refreshed lock
+        shell: bash
+        run: |
+          if git diff --quiet -- mobile/package-lock.json; then
+            echo "package-lock.json already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mobile/package-lock.json
+          git commit -m "Refresh Expo dependency lock"
+          git push origin HEAD:feature/mobile-backend-glass-integration
