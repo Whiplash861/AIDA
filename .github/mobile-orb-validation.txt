@@ -1,4 +1,0 @@
-install=success
-typecheck=success
-lint=success
-export_all=success
