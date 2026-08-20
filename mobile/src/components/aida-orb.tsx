@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  type MutableRefObject,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, {
   Circle,
@@ -133,14 +138,12 @@ const PALETTES: Record<AidaOrbVisualState, Palette> = {
   },
 };
 
-// This is the same coordinate system as the current desktop header orb:
-// 96x96 safety canvas, 80px source field, 8px margin, then the base painter's
-// 2px inset. Scaling the SVG changes presentation size without changing geometry.
+// Same coordinate system as the current desktop header orb: 96x96 safety
+// canvas around an 80px source field. Scaling the SVG changes presentation
+// size without changing the desktop geometry or effect proportions.
 const VIEW_SIZE = 96;
 const ORB_DIAMETER = 80;
-const CANVAS_MARGIN = 8;
 const INTERNAL_SCALE = 76 / 120;
-const FULL_LEFT = CANVAS_MARGIN + 2;
 const FULL_SIZE = ORB_DIAMETER - 4;
 const CENTER = VIEW_SIZE / 2;
 const RING_RADIUS = FULL_SIZE * 0.465;
@@ -316,6 +319,7 @@ export function AidaOrb({
 
   const corePlan = buildCorePlan(coreProfile, now);
   const stableRing = !ringProfile || redRingFraction <= 0.001;
+  const [baseCoreLayer, ...glitchCoreLayers] = corePlan.layers;
 
   const idle =
     0.5 +
@@ -580,6 +584,19 @@ export function AidaOrb({
             fullOffset={profile3Offset}
           />
 
+          {baseCoreLayer ? (
+            <CoreArtwork
+              clipId={
+                baseCoreLayer.clip
+                  ? `${gradientPrefix}-clip-${baseCoreLayer.id}`
+                  : undefined
+              }
+              gradientPrefix={gradientPrefix}
+              layer={baseCoreLayer}
+              palette={corePalette}
+            />
+          ) : null}
+
           {corePlan.covers.map((cover) => (
             <Rect
               fill={corePalette.edge}
@@ -592,7 +609,7 @@ export function AidaOrb({
             />
           ))}
 
-          {corePlan.layers.map((layer) => (
+          {glitchCoreLayers.map((layer) => (
             <CoreArtwork
               clipId={
                 layer.clip
@@ -828,10 +845,10 @@ function advanceRedSchedulers({
   now: number;
   targetState: AidaOrbVisualState;
   transition: { from: AidaOrbVisualState; startedAt: number } | null;
-  redTargetActiveRef: React.MutableRefObject<boolean>;
-  ringProfileRef: React.MutableRefObject<RingProfile | null>;
-  coreProfileRef: React.MutableRefObject<CoreProfile | null>;
-  nextCoreProfileDueRef: React.MutableRefObject<number>;
+  redTargetActiveRef: MutableRefObject<boolean>;
+  ringProfileRef: MutableRefObject<RingProfile | null>;
+  coreProfileRef: MutableRefObject<CoreProfile | null>;
+  nextCoreProfileDueRef: MutableRefObject<number>;
 }) {
   const targetRed = targetState === 'RED';
 
