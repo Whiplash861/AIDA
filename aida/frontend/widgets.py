@@ -4,7 +4,6 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QListWidget, QVBoxLayout
 
 from aida.frontend.engine_state import ENGINE_VISUAL_STATE
-from aida.frontend.header_orb import HeaderEngineOrb
 from aida.frontend.status import AIDAStatus
 
 
@@ -78,7 +77,6 @@ class StatusDashboard(QFrame):
         self.perception_value = StatusValueLabel("READY")
         self.microphone_value = StatusValueLabel("READY")
         self.tasks_value = StatusValueLabel("0 ACTIVE")
-        self._header_orb: HeaderEngineOrb | None = None
         self._last_technomancer_status = "IDLE"
 
         self.activity_list = QListWidget()
@@ -141,45 +139,14 @@ class StatusDashboard(QFrame):
         layout.addWidget(name_label, row, 0)
         layout.addWidget(value, row, 1)
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if self._header_orb is None:
-            self._install_header_orb()
-
-    def _install_header_orb(self) -> None:
-        top_level = self.window()
-        central_widget_getter = getattr(top_level, "centralWidget", None)
-        if not callable(central_widget_getter):
-            return
-        central_widget = central_widget_getter()
-        if central_widget is None or central_widget.layout() is None:
-            return
-        main_layout = central_widget.layout()
-        if main_layout.count() < 1:
-            return
-        header = main_layout.itemAt(0).widget()
-        if header is None or header.layout() is None:
-            return
-
-        orb = HeaderEngineOrb(diameter=42)
-        status_name = self.agent_value.text().strip().upper()
-        if status_name in AIDAStatus.__members__:
-            orb.set_status(AIDAStatus[status_name])
-        header.layout().insertWidget(0, orb)
-        self._header_orb = orb
-
     def _sync_engine_visual_state(self) -> None:
         technomancer_status = ENGINE_VISUAL_STATE.status("technomancer")
         if technomancer_status != self._last_technomancer_status:
             self._last_technomancer_status = technomancer_status
             self.technomancer_value.set_status_text(technomancer_status)
-        if self._header_orb is not None:
-            self._header_orb.update()
 
     def set_agent_status(self, status: AIDAStatus) -> None:
         self.agent_value.set_status_text(status.name)
-        if self._header_orb is not None:
-            self._header_orb.set_status(status)
 
     def set_brain_status(self, text: str) -> None:
         self.brain_value.set_status_text(text)
