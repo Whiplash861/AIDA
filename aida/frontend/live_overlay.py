@@ -3,20 +3,20 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter
 
+from aida.frontend.engine_status_orb import AIDAStatusOrb
 from aida.frontend.internal_orb import OrbTroubleCode, OrbVisualState
 from aida.frontend.overlay import AIDAOverlay
 from aida.frontend.status import AIDAStatus
-from aida.frontend.status_orb import AIDAStatusOrb
 
 
 class AIDALiveOverlay(AIDAStatusOrb):
     """Detached live-state proxy for AIDA while the main frontend is minimized.
 
-    The detached orb deliberately reuses ``AIDAStatusOrb`` so its palette,
-    transition pulse, RED ring scheduler, RED core profiles, and Artificer state
-    remain identical to the embedded header orb. This subclass restores the
-    original overlay's top-level window, click/drag, reveal, and visibility
-    behavior around that shared visual-state engine.
+    The detached orb deliberately reuses the same engine-aware ``AIDAStatusOrb``
+    as the embedded header orb so its palette, transition pulse, RED ring/core
+    schedulers, Artificer violet state, and Technomancer cyan state remain
+    identical. This subclass restores the original overlay's top-level window,
+    click/drag, reveal, and visibility behavior around that shared visual engine.
     """
 
     def __init__(self, diameter: int = 120) -> None:
@@ -57,7 +57,7 @@ class AIDALiveOverlay(AIDAStatusOrb):
         radius = 11.0 + (1.0 - (1.0 - p) ** 2) * (self._orb_diameter * 0.66)
         alpha = int(135 * (1.0 - p) ** 1.45)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        pulse_color = self._state_palette(self._display_state)[1]
+        pulse_color = self._palette_for_layer("ring")[1]
         for offset, width, scale in (
             (0.0, 2.3, 1.0),
             (4.0, 1.55, 0.55),
@@ -92,6 +92,10 @@ class AIDALiveOverlay(AIDAStatusOrb):
 
     def set_artificer_status(self, text: str) -> None:
         super().set_artificer_status(text)
+        self._refresh_external_tooltip()
+
+    def set_technomancer_status(self, text: str) -> None:
+        super().set_technomancer_status(text)
         self._refresh_external_tooltip()
 
     def report_task_started(self, task_name: str) -> None:
