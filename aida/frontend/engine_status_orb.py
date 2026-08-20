@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 
 from aida.frontend.internal_orb import OrbVisualState
@@ -38,6 +38,13 @@ class AIDAStatusOrb(_BaseStatusOrb):
     keeps the accepted renderer untouched while allowing smooth transitions to
     and from Technomancer, including overlap with Artificer.
     """
+
+    # AIDAInternalOrb invokes the polymorphic state resolver before
+    # AIDAStatusOrb finishes constructing its temporary-override fields. Class
+    # defaults keep that bootstrap path safe; the base constructor replaces
+    # them with normal instance state immediately afterward.
+    _temporary_override_state: OrbVisualState | None = None
+    _test_active = False
 
     def __init__(self, parent=None) -> None:
         self._technomancer_status = "idle"
@@ -108,7 +115,8 @@ class AIDAStatusOrb(_BaseStatusOrb):
     def _copy_palette(
         palette: tuple[QColor, QColor, QColor, QColor, QColor],
     ) -> tuple[QColor, QColor, QColor, QColor, QColor]:
-        return tuple(QColor(color) for color in palette)  # type: ignore[return-value]
+        copied = tuple(QColor(color) for color in palette)
+        return copied[0], copied[1], copied[2], copied[3], copied[4]
 
     def _palette_for_layer(
         self,
@@ -212,8 +220,6 @@ class AIDAStatusOrb(_BaseStatusOrb):
         # callback. Defer the visual resolve until that count is current so a
         # completed Technomancer task transitions cleanly from CYAN to its true
         # live destination instead of briefly flashing generic GREEN.
-        from PySide6.QtCore import QTimer
-
         QTimer.singleShot(0, self._refresh_live_visual_state)
 
     def report_task_failed(self, task_name: str) -> None:
