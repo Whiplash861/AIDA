@@ -31,30 +31,32 @@ class TechnomancerFrontendRegressionTests(unittest.TestCase):
         self.assertIn("self._orb_diameter = 80", source)
         self.assertIn("self.setFixedSize(96, 96)", source)
         self.assertIn("CURRENT STATUS", source)
-        self.assertIn('QKeySequence("Ctrl+Shift+5")', source)
+        self.assertIn('(\"Ctrl+Shift+5\", OrbVisualState.CYAN)', source)
+        self.assertIn("header_layout.insertStretch(insert_at, 1)", source)
         self.assertFalse(Path("aida/frontend/header_orb.py").exists())
+        self.assertFalse(Path("aida/frontend/engine_status_orb.py").exists())
 
-    def test_technomancer_cyan_is_layered_over_refined_orb(self) -> None:
-        source = Path("aida/frontend/engine_status_orb.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("TECHNOMANCER_COLOR", source)
-        self.assertIn('QColor("#7CF5FF")', source)
-        self.assertIn('return "TECHNOMANCER"', source)
-        self.assertIn("_BaseStatusOrb", source)
-        self.assertIn('"TECHNOMANCER-FAILURE"', source)
+    def test_technomancer_cyan_is_native_to_refined_orb(self) -> None:
+        internal = Path("aida/frontend/internal_orb.py").read_text(encoding="utf-8")
+        status = Path("aida/frontend/status_orb.py").read_text(encoding="utf-8")
+        self.assertIn('CYAN = "cyan"', internal)
+        self.assertIn('QColor("#7CF5FF")', internal)
+        self.assertIn('return "TECHNOMANCER"', status)
+        self.assertIn("return OrbVisualState.CYAN", status)
+        self.assertIn('"TECHNOMANCER-FAILURE"', status)
 
-    def test_external_orb_uses_same_engine_aware_status_orb(self) -> None:
+    def test_external_orb_uses_same_native_status_orb(self) -> None:
         overlay = Path("aida/frontend/live_overlay.py").read_text(encoding="utf-8")
         app = Path("aida/frontend/app.py").read_text(encoding="utf-8")
         self.assertIn(
-            "from aida.frontend.engine_status_orb import AIDAStatusOrb",
+            "from aida.frontend.status_orb import AIDAStatusOrb",
             overlay,
         )
         self.assertIn("class AIDALiveOverlay(AIDAStatusOrb)", overlay)
         self.assertIn("overlay = AIDALiveOverlay()", app)
         self.assertIn("overlay.report_task_started(task_name)", app)
         self.assertIn("overlay.set_artificer_status", app)
+        self.assertIn("overlay.set_technomancer_status", app)
 
     def test_accepted_red_failure_profiles_remain_intact(self) -> None:
         source = Path("aida/frontend/status_orb.py").read_text(encoding="utf-8")
