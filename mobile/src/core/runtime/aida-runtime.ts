@@ -168,7 +168,9 @@ export function getRuntimeActivity(limit = 30): RuntimeActivityItem[] {
 export function subscribeRuntime(listener: Listener): () => void {
   listeners.add(listener);
   listener(bootstrapAidaRuntime());
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export async function submitLocalDirective(message: string): Promise<string> {
