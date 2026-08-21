@@ -97,6 +97,7 @@ class AegisLearningService:
             return LearningModelSnapshot(
                 model_id=model.model_id,
                 model_version=model.model_version,
+                feature_schema_version=model.feature_schema_version,
                 stage=LearningModelStage.ACTIVE,
                 sample_count=model.sample_count,
                 minimum_samples=model.minimum_samples,
