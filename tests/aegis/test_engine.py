@@ -74,6 +74,7 @@ def test_clean_first_intelligent_scan_establishes_baseline(tmp_path) -> None:
     assert result.case.provider_detection_count == 0
     assert result.case.escalation == "no_escalation"
     assert result.case.status.value == "assessed"
+    assert engine.store.open_case_count() == 0
 
 
 def test_active_provider_detection_creates_confirmed_case(tmp_path) -> None:
@@ -94,3 +95,4 @@ def test_active_provider_detection_creates_confirmed_case(tmp_path) -> None:
     assert result.case.escalation == "full_sweep_recommended"
     assert result.case.risk.likelihood >= 0.95
     assert engine.store.get_case(result.case.case_id) is not None
+    assert engine.store.open_case_count() == 1
