@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Iterable
 
 from aida.aegis.artificer_bridge import AegisArtificerBridge
 from aida.aegis.engine import AegisEngine
@@ -25,13 +24,21 @@ def build_aegis_engine(
 ) -> AegisEngine:
     data_root = _aegis_data_root(config)
     data_root.mkdir(parents=True, exist_ok=True)
-    reader = detection_reader or _read_defender_detections
+    raw_reader = detection_reader or _read_defender_detections
+
+    def unresolved_reader() -> tuple[ProviderDetection, ...]:
+        try:
+            rows = tuple(raw_reader() or ())
+        except (OSError, RuntimeError):
+            return ()
+        return tuple(item for item in rows if _is_unresolved(item))
+
     sensor = AegisSystemSensor(provider_health_reader=_read_provider_health)
     return AegisEngine(
         store=AegisStore(data_root / "aegis.db"),
         memory=memory,
         threat_analysis=threat_analysis,
-        detection_reader=reader,
+        detection_reader=unresolved_reader,
         sensor=sensor,
         bridge=AegisArtificerBridge(),
         observation_interval_seconds=_env_int(
@@ -68,6 +75,12 @@ def _read_defender_detections() -> tuple[ProviderDetection, ...]:
         return ()
 
 
+def _is_unresolved(detection: ProviderDetection) -> bool:
+    active = _optional_bool(detection.metadata.get("is_active"))
+    action_success = _optional_bool(detection.metadata.get("action_success"))
+    return active is True or (active is None and action_success is not True)
+
+
 def _read_provider_health() -> ProviderHealth:
     try:
         discovery = WindowsAntivirusDiscovery().discover()
@@ -89,6 +102,22 @@ def _read_provider_health() -> ProviderHealth:
         signatures_current=status.signatures_current,
         provider_name=discovery.provider.display_name,
     )
+
+
+def _optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
 
 
 def _env_bool(name: str, default: bool) -> bool:
