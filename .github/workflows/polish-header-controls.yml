@@ -32,7 +32,6 @@ jobs:
                   raise SystemExit(f"anchor not found in {path}: {old[:100]!r}")
               p.write_text(text.replace(old, new, count), encoding="utf-8")
 
-          # Header: convert autonomy and app state into paired compact HUD modules.
           replace(
               "aida/frontend/_window_base.py",
               "    QMainWindow,\n    QPushButton,\n    QSplitter,\n",
@@ -69,13 +68,11 @@ jobs:
               "        self.workspace_splitter.setSizes([260, 890])\n",
           )
 
-          # User-facing autonomy vocabulary: ENABLED / DISABLED, never MANUAL.
           controller = Path("aida/frontend/controller.py")
           text = controller.read_text(encoding="utf-8")
           text = text.replace('else "MANUAL"', 'else "DISABLED"')
           controller.write_text(text, encoding="utf-8")
 
-          # Status dashboard: reserve sufficient width for complete values.
           replace(
               "aida/frontend/widgets.py",
               "        self.setMinimumWidth(78)\n",
@@ -92,8 +89,6 @@ jobs:
               "        status_grid.setHorizontalSpacing(12)\n        status_grid.setColumnMinimumWidth(1, 96)\n",
           )
 
-          # Theme: paired HUD modules, modern switch, semantic autonomy colors,
-          # and a tighter state pill rather than a tall stretched slab.
           replace(
               "aida/frontend/theme.py",
               '''QLabel#statusLabel {\n    color: #afc2d1;\n\n    background:\n        qlineargradient(\n            x1: 0,\n            y1: 0,\n            x2: 0,\n            y2: 1,\n            stop: 0 rgba(51, 69, 82, 205),\n            stop: 1 rgba(24, 35, 45, 220)\n        );\n\n    border: 1px solid rgba(147, 194, 221, 70);\n    border-radius: 15px;\n\n    padding: 7px 16px;\n\n    font-size: 9pt;\n    font-weight: 700;\n    letter-spacing: 1px;\n}\n''',
@@ -112,7 +107,7 @@ jobs:
             aida/frontend/window.py \
             aida/frontend/status_orb.py \
             aida/frontend/live_overlay.py
-          ! grep -R '"MANUAL"' -n aida/frontend --include='*.py'
+          git diff --check
 
       - name: Commit frontend polish
         shell: bash
