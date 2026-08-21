@@ -24,7 +24,11 @@ def ensure_aegis_engine(
     detection_reader=None,
 ) -> AegisEngine:
     global _ACTIVE, _ACTIVE_KEY, _ATEXIT_REGISTERED
-    key = str(config.memory_db_path)
+    configured_memory = getattr(config, "memory_db_path", None)
+    database_path = getattr(memory.database, "path", "")
+    key = str(configured_memory or database_path)
+    if not key:
+        raise ValueError("Aegis requires a durable local database scope")
     with _LOCK:
         if _ACTIVE is not None and _ACTIVE_KEY == key:
             if not _ACTIVE.running:
