@@ -18,7 +18,14 @@ ProviderHealthReader = Callable[[], ProviderHealth]
 
 
 class AegisSystemSensor:
-    """Bounded read-only machine security snapshot used by Aegis."""
+    """Bounded read-only machine security snapshot used by Aegis.
+
+    Normal background observation deliberately excludes process command-line
+    contents. Aegis only needs process identity, parentage, executable paths,
+    and endpoint relationships for its current Early Alpha correlation model.
+    More invasive evidence is collected only by existing targeted analysis
+    paths when directly relevant to an investigation.
+    """
 
     def __init__(
         self,
@@ -65,9 +72,7 @@ class AegisSystemSensor:
             errors.append("network_snapshot_unavailable")
 
         try:
-            iterator = psutil.process_iter(
-                ["pid", "ppid", "name", "exe", "cmdline"]
-            )
+            iterator = psutil.process_iter(["pid", "ppid", "name", "exe"])
             for index, process in enumerate(iterator):
                 if index >= self.max_processes:
                     errors.append("process_snapshot_limit_reached")
@@ -76,9 +81,6 @@ class AegisSystemSensor:
                     info = process.info
                     pid = int(info.get("pid") or process.pid)
                     executable = str(info.get("exe") or "")
-                    command_line = " ".join(
-                        str(item) for item in (info.get("cmdline") or ())
-                    )[:1200]
                     network = connection_map.get(
                         pid, {"remote": set(), "listen": set()}
                     )
@@ -92,7 +94,7 @@ class AegisSystemSensor:
                             ),
                             name=str(info.get("name") or ""),
                             executable=executable,
-                            command_line=command_line,
+                            command_line="",
                             remote_endpoints=tuple(sorted(network["remote"])),
                             listening_endpoints=tuple(sorted(network["listen"])),
                         )
