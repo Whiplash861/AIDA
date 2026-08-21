@@ -5,6 +5,7 @@ from typing import Iterable
 
 from aida.aegis.engine import AegisEngine
 from aida.aegis.runtime import ensure_aegis_engine
+from aida.aegis.scan_modes import AegisScanStrategy
 from aida.applications.monitor import ApplicationHealthMonitor
 from aida.applications.models import RepairAction
 from aida.applications.repair import ApplicationRepairPlanner
@@ -15,7 +16,10 @@ from aida.autonomy.controller import AutonomyController
 from aida.autonomy.observation import AutonomyObservationService
 from aida.config import AidaConfig
 from aida.frontend.command_router import CommandType, RoutedCommand
-from aida.frontend.commands.aegis import AegisIntelligentScanExecutor
+from aida.frontend.commands.aegis import (
+    AegisSecurityScanExecutor,
+    AegisSecurityStatusExecutor,
+)
 from aida.frontend.commands.application import (
     ApplicationHealthExecutor,
     ApplicationRecoveryPlanExecutor,
@@ -29,7 +33,7 @@ from aida.frontend.commands.base import CommandExecutor
 from aida.frontend.commands.memory import MemoryCommandExecutor, MemoryOperation
 from aida.frontend.commands.performance import PerformanceScanExecutor
 from aida.frontend.commands.quickscan import QuickscanExecutor
-from aida.frontend.commands.security import SecurityScanExecutor, SecurityStatusExecutor
+from aida.frontend.commands.security import SecurityScanExecutor
 from aida.frontend.commands.security_control import (
     SecurityControlExecutor,
     SecurityControlOperation,
@@ -133,19 +137,20 @@ class CommandRegistry:
         self._factories: dict[CommandType, CommandFactory] = {
             CommandType.QUICKSCAN: lambda command: QuickscanExecutor(config=config),
             CommandType.PERFORMANCE_SCAN: lambda command: PerformanceScanExecutor(),
-            CommandType.SECURITY_STATUS: lambda command: SecurityStatusExecutor(),
-            CommandType.SECURITY_INTELLIGENT_SCAN: lambda command: AegisIntelligentScanExecutor(
-                self.aegis,
-                lambda: self._security_scan(SecurityScanMode.SURFACE, command),
+            CommandType.SECURITY_STATUS: lambda command: AegisSecurityStatusExecutor(
+                self.aegis
             ),
-            CommandType.SECURITY_SURFACE_SCAN: lambda command: self._security_scan(
-                SecurityScanMode.SURFACE, command
+            CommandType.SECURITY_INTELLIGENT_SCAN: lambda command: self._aegis_scan(
+                AegisScanStrategy.ADAPTIVE, command
             ),
-            CommandType.SECURITY_DEEP_SCAN: lambda command: self._security_scan(
-                SecurityScanMode.DEEP, command
+            CommandType.SECURITY_SURFACE_SCAN: lambda command: self._aegis_scan(
+                AegisScanStrategy.SURFACE, command
             ),
-            CommandType.SECURITY_FULL_SWEEP: lambda command: self._security_scan(
-                SecurityScanMode.FULL_SWEEP, command
+            CommandType.SECURITY_DEEP_SCAN: lambda command: self._aegis_scan(
+                AegisScanStrategy.DEEP, command
+            ),
+            CommandType.SECURITY_FULL_SWEEP: lambda command: self._aegis_scan(
+                AegisScanStrategy.FULL, command
             ),
             CommandType.SECURITY_CANCEL_REQUEST: lambda command: self._security_control(
                 SecurityControlOperation.CANCEL_REQUEST, command
@@ -289,6 +294,17 @@ class CommandRegistry:
             self.technomancer,
             mode,
             autonomy_enabled=self._autonomy_gate,
+        )
+
+    def _aegis_scan(
+        self,
+        strategy: AegisScanStrategy,
+        command: RoutedCommand,
+    ) -> AegisSecurityScanExecutor:
+        return AegisSecurityScanExecutor(
+            self.aegis,
+            strategy,
+            lambda: self._security_scan(strategy.provider_mode, command),
         )
 
     def _security_scan(
