@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -14,6 +13,7 @@ class CommandCategory(Enum):
     AUTONOMY = auto()
     APPLICATION = auto()
     NAVIGATION = auto()
+    TECHNOMANCER = auto()
     GENERAL = auto()
 
 

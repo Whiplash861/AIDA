@@ -24,9 +24,10 @@ from aida.frontend.command_manager import CommandManager
 from aida.frontend.command_router import CommandRouter, CommandType, RoutedCommand
 from aida.frontend.commands.registry import CommandRegistry
 from aida.frontend.controller import AIDAController
+from aida.frontend.engine_state import ENGINE_VISUAL_STATE
+from aida.frontend.live_overlay import AIDALiveOverlay
 from aida.frontend.memory_dialog import MemoryBankDialog
 from aida.frontend.models import ChatHistory, ChatMessage, MessageSender
-from aida.frontend.overlay import AIDAOverlay
 from aida.frontend.session_store import SessionStore
 from aida.frontend.status import AIDAStatus, StatusManager
 from aida.frontend.task_center_dialog import TaskCenterDialog
@@ -151,7 +152,7 @@ def main() -> int:
     )
 
     window = AIDAWindow()
-    overlay = AIDAOverlay()
+    overlay = AIDALiveOverlay()
     task_manager = TaskManager()
     memory_dialog = MemoryBankDialog(memory_service, parent=window)
     bug_report_dialog = BugReportDialog(
@@ -172,6 +173,7 @@ def main() -> int:
     artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window)
     artificer_qt_bridge = ArtificerQtBridge(artificer_engine, parent=app)
     artificer_qt_bridge.status_changed.connect(window.set_artificer_status)
+    artificer_qt_bridge.status_changed.connect(overlay.set_artificer_status)
     artificer_qt_bridge.snapshot_changed.connect(artificer_dialog.apply_snapshot)
 
     def run_artificer_review() -> None:
@@ -219,6 +221,42 @@ def main() -> int:
     task_manager.task_finished.connect(operational_bridge.record_task_finished)
     task_manager.task_failed.connect(operational_bridge.record_task_failed)
     window.autonomy_toggled.connect(operational_bridge.record_autonomy_state)
+
+    def sync_overlay_task_count() -> None:
+        overlay.set_active_task_count(len(task_manager.active_task_names))
+
+    def handle_overlay_task_started(task_name: str) -> None:
+        overlay.report_task_started(task_name)
+        sync_overlay_task_count()
+
+    def handle_overlay_task_finished(task_name: str) -> None:
+        overlay.report_task_finished(task_name)
+        sync_overlay_task_count()
+
+    def handle_overlay_task_failed(task_name: str, error_message: str) -> None:
+        del error_message
+        overlay.report_task_failed(task_name)
+        sync_overlay_task_count()
+
+    task_manager.task_started.connect(handle_overlay_task_started)
+    task_manager.task_finished.connect(handle_overlay_task_finished)
+    task_manager.task_failed.connect(handle_overlay_task_failed)
+
+    technomancer_visual_timer = QTimer(app)
+    technomancer_visual_timer.setInterval(100)
+    last_technomancer_status: list[str | None] = [None]
+
+    def sync_technomancer_visual_state() -> None:
+        status = ENGINE_VISUAL_STATE.status("technomancer")
+        if status == last_technomancer_status[0]:
+            return
+        last_technomancer_status[0] = status
+        window.set_technomancer_status(status)
+        overlay.set_technomancer_status(status)
+
+    technomancer_visual_timer.timeout.connect(sync_technomancer_visual_state)
+    technomancer_visual_timer.start()
+    sync_technomancer_visual_state()
 
     artificer_engine.start(run_startup_review=False)
     artificer_qt_bridge.emit_current()
@@ -458,6 +496,7 @@ def main() -> int:
 
     window.show()
     overlay.set_status(status_manager.current)
+    sync_overlay_task_count()
     overlay.move_to_default_position()
     overlay.show()
     QTimer.singleShot(300, resume_provider_owned_scan)
@@ -468,6 +507,8 @@ def main() -> int:
     try:
         return app.exec()
     finally:
+        technomancer_visual_timer.stop()
+        technomancer_visual_timer.timeout.disconnect(sync_technomancer_visual_state)
         observation_timer.stop()
         observation_timer.timeout.disconnect(run_observation_if_idle)
         window.autonomy_toggled.disconnect(handle_autonomy_observation_schedule)
@@ -491,6 +532,9 @@ def main() -> int:
         task_manager.task_started.disconnect(operational_bridge.record_task_started)
         task_manager.task_finished.disconnect(operational_bridge.record_task_finished)
         task_manager.task_failed.disconnect(operational_bridge.record_task_failed)
+        task_manager.task_started.disconnect(handle_overlay_task_started)
+        task_manager.task_finished.disconnect(handle_overlay_task_finished)
+        task_manager.task_failed.disconnect(handle_overlay_task_failed)
         artificer_dialog.review_requested.disconnect(run_artificer_review)
         artificer_dialog.export_requested.disconnect(export_artificer_report)
         threat_center_dialog.command_requested.disconnect(
@@ -498,6 +542,7 @@ def main() -> int:
         )
         overlay.clicked.disconnect(restore_main_window)
         artificer_qt_bridge.status_changed.disconnect(window.set_artificer_status)
+        artificer_qt_bridge.status_changed.disconnect(overlay.set_artificer_status)
         artificer_qt_bridge.snapshot_changed.disconnect(
             artificer_dialog.apply_snapshot
         )

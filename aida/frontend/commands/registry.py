@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Iterable
 
+from aida.aegis.engine import AegisEngine
+from aida.aegis.runtime import ensure_aegis_engine
 from aida.applications.monitor import ApplicationHealthMonitor
 from aida.applications.models import RepairAction
 from aida.applications.repair import ApplicationRepairPlanner
@@ -13,6 +15,7 @@ from aida.autonomy.controller import AutonomyController
 from aida.autonomy.observation import AutonomyObservationService
 from aida.config import AidaConfig
 from aida.frontend.command_router import CommandType, RoutedCommand
+from aida.frontend.commands.aegis import AegisIntelligentScanExecutor
 from aida.frontend.commands.application import (
     ApplicationHealthExecutor,
     ApplicationRecoveryPlanExecutor,
@@ -32,6 +35,7 @@ from aida.frontend.commands.security_control import (
     SecurityControlOperation,
 )
 from aida.frontend.commands.system import StaticResponseExecutor
+from aida.frontend.commands.technomancer import TechnomancerCommandExecutor
 from aida.frontend.commands.threat_assistance import (
     ThreatAssistanceExecutor,
     ThreatAssistanceOperation,
@@ -46,6 +50,7 @@ from aida.security.stand_down import StandDownService
 from aida.security.threat_analysis import ThreatAnalysisService
 from aida.security.windows.defender_cancel import DefenderCancellationService
 from aida.security.windows.discovery import WindowsAntivirusDiscovery
+from aida.technomancer.engine import TechnomancerEngine
 
 
 CommandFactory = Callable[[RoutedCommand], CommandExecutor]
@@ -73,6 +78,7 @@ class CommandRegistry:
         response_planner: GuidedResponsePlanner | None = None,
         remediation_service: DefenderRemediationService | None = None,
         detection_reader: DetectionReader | None = None,
+        aegis_engine: AegisEngine | None = None,
     ) -> None:
         if memory_service is None:
             database = MemoryDatabase(config.memory_db_path)
@@ -111,15 +117,27 @@ class CommandRegistry:
         self.remediation = remediation_service or DefenderRemediationService(
             snapshot_reader=self._detection_reader,
         )
+        self.aegis = aegis_engine or ensure_aegis_engine(
+            config,
+            memory=self.memory,
+            threat_analysis=self.threat_analysis,
+            detection_reader=self._detection_reader,
+        )
         self.application_monitor = application_monitor or ApplicationHealthMonitor()
         self.application_repair_planner = (
             application_repair_planner or ApplicationRepairPlanner()
         )
+        self.technomancer = TechnomancerEngine.from_config(config)
+        self.technomancer.permissions.set_autonomy(self._autonomy_gate())
 
         self._factories: dict[CommandType, CommandFactory] = {
             CommandType.QUICKSCAN: lambda command: QuickscanExecutor(config=config),
             CommandType.PERFORMANCE_SCAN: lambda command: PerformanceScanExecutor(),
             CommandType.SECURITY_STATUS: lambda command: SecurityStatusExecutor(),
+            CommandType.SECURITY_INTELLIGENT_SCAN: lambda command: AegisIntelligentScanExecutor(
+                self.aegis,
+                lambda: self._security_scan(SecurityScanMode.SURFACE, command),
+            ),
             CommandType.SECURITY_SURFACE_SCAN: lambda command: self._security_scan(
                 SecurityScanMode.SURFACE, command
             ),
@@ -237,12 +255,41 @@ class CommandRegistry:
             CommandType.TASK_CENTER_SHOW: lambda command: self._threat_assistance(
                 ThreatAssistanceOperation.TASK_CENTER_SUMMARY, command
             ),
+            CommandType.TECHNOMANCER_HEALTH: lambda command: self._technomancer(
+                "health"
+            ),
+            CommandType.TECHNOMANCER_HARDWARE: lambda command: self._technomancer(
+                "inventory"
+            ),
+            CommandType.TECHNOMANCER_UPGRADES: lambda command: self._technomancer(
+                "upgrades"
+            ),
+            CommandType.TECHNOMANCER_ADVISORIES: lambda command: self._technomancer(
+                "advisories"
+            ),
+            CommandType.TECHNOMANCER_BACKGROUND_ENABLE: lambda command: self._technomancer(
+                "background_on"
+            ),
+            CommandType.TECHNOMANCER_BACKGROUND_DISABLE: lambda command: self._technomancer(
+                "background_off"
+            ),
             CommandType.INTENT_CLARIFICATION: lambda command: StaticResponseExecutor(
                 command.clarification_text
                 or "Please clarify the requested operation.",
                 local_only=command.local_only,
             ),
         }
+
+    def _autonomy_gate(self) -> bool:
+        settings = self.autonomy.settings
+        return bool(settings.enabled and not settings.kill_switch_engaged)
+
+    def _technomancer(self, mode: str) -> TechnomancerCommandExecutor:
+        return TechnomancerCommandExecutor(
+            self.technomancer,
+            mode,
+            autonomy_enabled=self._autonomy_gate,
+        )
 
     def _security_scan(
         self, mode: SecurityScanMode, command: RoutedCommand

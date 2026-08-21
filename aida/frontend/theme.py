@@ -70,26 +70,81 @@ QLabel#appSubtitle {
     letter-spacing: 3px;
 }
 
-QLabel#statusLabel {
-    color: #afc2d1;
-
+QFrame#headerControlModule,
+QFrame#headerStateModule {
     background:
         qlineargradient(
             x1: 0,
             y1: 0,
-            x2: 0,
+            x2: 1,
             y2: 1,
-            stop: 0 rgba(51, 69, 82, 205),
-            stop: 1 rgba(24, 35, 45, 220)
+            stop: 0 rgba(12, 35, 49, 218),
+            stop: 1 rgba(5, 21, 31, 232)
         );
+    border: 1px solid rgba(91, 207, 240, 72);
+    border-radius: 12px;
+}
 
-    border: 1px solid rgba(147, 194, 221, 70);
-    border-radius: 15px;
+QFrame#headerControlModule:hover,
+QFrame#headerStateModule:hover {
+    border-color: rgba(91, 220, 255, 120);
+}
 
-    padding: 7px 16px;
+QLabel#headerControlCaption {
+    color: #718c9d;
+    font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Segoe UI";
+    font-size: 6pt;
+    font-weight: 650;
+    letter-spacing: 2px;
+}
 
-    font-size: 9pt;
+QCheckBox#autonomySwitch {
+    spacing: 0;
+    padding: 0;
+}
+
+QCheckBox#autonomySwitch::indicator {
+    width: 28px;
+    height: 14px;
+    border: 1px solid rgba(139, 168, 186, 105);
+    border-radius: 7px;
+    background: rgba(23, 38, 48, 235);
+}
+
+QCheckBox#autonomySwitch::indicator:hover {
+    border-color: rgba(105, 220, 255, 175);
+}
+
+QCheckBox#autonomySwitch::indicator:checked {
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 rgba(25, 155, 104, 240),
+        stop: 1 rgba(53, 231, 166, 245)
+    );
+    border-color: rgba(102, 246, 190, 210);
+}
+
+QLabel#autonomyStateLabel {
+    color: #8fa4b3;
+    font-family: "Cascadia Mono", "Consolas";
+    font-size: 7.5pt;
     font-weight: 700;
+    letter-spacing: 1px;
+}
+
+QLabel#autonomyStateLabel[state="enabled"] { color: #59f0b3; }
+QLabel#autonomyStateLabel[state="disabled"] { color: #91a5b3; }
+QLabel#autonomyStateLabel[state="updating"] { color: #68d8ff; }
+QLabel#autonomyStateLabel[state="locked"] { color: #ff9b79; }
+
+QLabel#statusLabel {
+    color: #afc2d1;
+    background: rgba(18, 36, 48, 210);
+    border: 1px solid rgba(117, 186, 215, 62);
+    border-radius: 8px;
+    padding: 3px 7px;
+    font-size: 8pt;
+    font-weight: 750;
     letter-spacing: 1px;
 }
 

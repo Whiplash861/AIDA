@@ -7,6 +7,35 @@ from aida.intent.registry import IntentRegistry
 def register_early_alpha_intents(registry: IntentRegistry) -> IntentRegistry:
     definitions = (
         IntentDefinition(
+            intent_id="security.scan.intelligent",
+            command_type="SECURITY_INTELLIGENT_SCAN",
+            actions=frozenset({"run", "start", "perform", "begin", "launch"}),
+            objects=frozenset(
+                {
+                    "intelligent security scan",
+                    "intelligent scan",
+                    "smart security scan",
+                    "aegis scan",
+                    "aegis security scan",
+                }
+            ),
+            aliases=frozenset(
+                {
+                    "intelligent security scan",
+                    "run intelligent security scan",
+                    "start intelligent security scan",
+                    "smart security scan",
+                    "run aegis scan",
+                    "aegis security scan",
+                }
+            ),
+            negative_terms=frozenset({"full system", "full sweep", "deep targeted"}),
+            risk=IntentRisk.LOW_OPERATIONAL,
+            local_only=True,
+            description="an Aegis adaptive Intelligent Security Scan",
+            priority=124,
+        ),
+        IntentDefinition(
             intent_id="security.threat.analyze",
             command_type="THREAT_ANALYZE",
             actions=frozenset({"analyze", "inspect", "review", "assess"}),
