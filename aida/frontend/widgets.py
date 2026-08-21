@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QListWidget, QVBoxLayout
 
+from aida.frontend.engine_state import ENGINE_VISUAL_STATE
 from aida.frontend.status import AIDAStatus
 
 
@@ -50,7 +51,7 @@ class StatusValueLabel(QLabel):
         super().__init__()
         self.setObjectName("statusValue")
         self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.setMinimumWidth(78)
+        self.setMinimumWidth(96)
         self.set_status_text(text)
 
     def set_status_text(self, text: str) -> None:
@@ -63,8 +64,8 @@ class StatusDashboard(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("statusDashboard")
-        self.setMinimumWidth(220)
-        self.setMaximumWidth(380)
+        self.setMinimumWidth(246)
+        self.setMaximumWidth(400)
 
         self.agent_value = StatusValueLabel("STARTUP")
         self.brain_value = StatusValueLabel("IDLE")
@@ -72,9 +73,11 @@ class StatusDashboard(QFrame):
         self.diagnostics_value = StatusValueLabel("IDLE")
         self.memory_value = StatusValueLabel("READY")
         self.artificer_value = StatusValueLabel("READY")
+        self.technomancer_value = StatusValueLabel("IDLE")
         self.perception_value = StatusValueLabel("READY")
         self.microphone_value = StatusValueLabel("READY")
         self.tasks_value = StatusValueLabel("0 ACTIVE")
+        self._last_technomancer_status = "IDLE"
 
         self.activity_list = QListWidget()
         self.activity_list.setObjectName("activityList")
@@ -83,12 +86,18 @@ class StatusDashboard(QFrame):
         self.activity_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._build_layout()
 
+        self._engine_visual_timer = QTimer(self)
+        self._engine_visual_timer.setInterval(100)
+        self._engine_visual_timer.timeout.connect(self._sync_engine_visual_state)
+        self._engine_visual_timer.start()
+
     def _build_layout(self) -> None:
         title = QLabel("SYSTEM STATUS")
         title.setObjectName("dashboardTitle")
         status_grid = QGridLayout()
         status_grid.setContentsMargins(0, 0, 0, 0)
-        status_grid.setHorizontalSpacing(18)
+        status_grid.setHorizontalSpacing(12)
+        status_grid.setColumnMinimumWidth(1, 96)
         status_grid.setVerticalSpacing(10)
 
         rows = (
@@ -98,6 +107,7 @@ class StatusDashboard(QFrame):
             ("DIAGNOSTICS", self.diagnostics_value),
             ("MEMORY", self.memory_value),
             ("ARTIFICER", self.artificer_value),
+            ("TECHNOMANCER", self.technomancer_value),
             ("PERCEPTION", self.perception_value),
             ("MICROPHONE", self.microphone_value),
             ("TASKS", self.tasks_value),
@@ -130,6 +140,12 @@ class StatusDashboard(QFrame):
         layout.addWidget(name_label, row, 0)
         layout.addWidget(value, row, 1)
 
+    def _sync_engine_visual_state(self) -> None:
+        technomancer_status = ENGINE_VISUAL_STATE.status("technomancer")
+        if technomancer_status != self._last_technomancer_status:
+            self._last_technomancer_status = technomancer_status
+            self.technomancer_value.set_status_text(technomancer_status)
+
     def set_agent_status(self, status: AIDAStatus) -> None:
         self.agent_value.set_status_text(status.name)
 
@@ -147,6 +163,10 @@ class StatusDashboard(QFrame):
 
     def set_artificer_status(self, text: str) -> None:
         self.artificer_value.set_status_text(text)
+
+    def set_technomancer_status(self, text: str) -> None:
+        self.technomancer_value.set_status_text(text)
+        self._last_technomancer_status = text.strip().upper()
 
     def set_perception_status(self, text: str) -> None:
         self.perception_value.set_status_text(text)

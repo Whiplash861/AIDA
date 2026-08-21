@@ -35,6 +35,7 @@ from aida.frontend.commands.security_control import (
     SecurityControlOperation,
 )
 from aida.frontend.commands.system import StaticResponseExecutor
+from aida.frontend.commands.technomancer import TechnomancerCommandExecutor
 from aida.frontend.commands.threat_assistance import (
     ThreatAssistanceExecutor,
     ThreatAssistanceOperation,
@@ -49,6 +50,7 @@ from aida.security.stand_down import StandDownService
 from aida.security.threat_analysis import ThreatAnalysisService
 from aida.security.windows.defender_cancel import DefenderCancellationService
 from aida.security.windows.discovery import WindowsAntivirusDiscovery
+from aida.technomancer.engine import TechnomancerEngine
 
 
 CommandFactory = Callable[[RoutedCommand], CommandExecutor]
@@ -125,6 +127,8 @@ class CommandRegistry:
         self.application_repair_planner = (
             application_repair_planner or ApplicationRepairPlanner()
         )
+        self.technomancer = TechnomancerEngine.from_config(config)
+        self.technomancer.permissions.set_autonomy(self._autonomy_gate())
 
         self._factories: dict[CommandType, CommandFactory] = {
             CommandType.QUICKSCAN: lambda command: QuickscanExecutor(config=config),
@@ -251,12 +255,41 @@ class CommandRegistry:
             CommandType.TASK_CENTER_SHOW: lambda command: self._threat_assistance(
                 ThreatAssistanceOperation.TASK_CENTER_SUMMARY, command
             ),
+            CommandType.TECHNOMANCER_HEALTH: lambda command: self._technomancer(
+                "health"
+            ),
+            CommandType.TECHNOMANCER_HARDWARE: lambda command: self._technomancer(
+                "inventory"
+            ),
+            CommandType.TECHNOMANCER_UPGRADES: lambda command: self._technomancer(
+                "upgrades"
+            ),
+            CommandType.TECHNOMANCER_ADVISORIES: lambda command: self._technomancer(
+                "advisories"
+            ),
+            CommandType.TECHNOMANCER_BACKGROUND_ENABLE: lambda command: self._technomancer(
+                "background_on"
+            ),
+            CommandType.TECHNOMANCER_BACKGROUND_DISABLE: lambda command: self._technomancer(
+                "background_off"
+            ),
             CommandType.INTENT_CLARIFICATION: lambda command: StaticResponseExecutor(
                 command.clarification_text
                 or "Please clarify the requested operation.",
                 local_only=command.local_only,
             ),
         }
+
+    def _autonomy_gate(self) -> bool:
+        settings = self.autonomy.settings
+        return bool(settings.enabled and not settings.kill_switch_engaged)
+
+    def _technomancer(self, mode: str) -> TechnomancerCommandExecutor:
+        return TechnomancerCommandExecutor(
+            self.technomancer,
+            mode,
+            autonomy_enabled=self._autonomy_gate,
+        )
 
     def _security_scan(
         self, mode: SecurityScanMode, command: RoutedCommand

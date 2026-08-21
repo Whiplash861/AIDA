@@ -122,7 +122,7 @@ class AIDAController:
                 if settings.kill_switch_engaged
                 else "ENABLED"
                 if settings.enabled
-                else "MANUAL"
+                else "DISABLED"
             )
         self.status_manager.set(AIDAStatus.STANDBY)
 
@@ -198,7 +198,7 @@ class AIDAController:
             if settings.kill_switch_engaged
             else "ENABLED"
             if settings.enabled
-            else "MANUAL"
+            else "DISABLED"
         )
         if enabled and settings.kill_switch_engaged:
             message = (
@@ -251,7 +251,7 @@ class AIDAController:
                     if settings.kill_switch_engaged
                     else "ENABLED"
                     if settings.enabled
-                    else "MANUAL"
+                    else "DISABLED"
                 )
 
     def _handle_brain_response(self, result: object) -> None:
