@@ -1,0 +1,100 @@
+name: Normalize AIDA header layering
+
+on:
+  push:
+    branches:
+      - feature/technomancer-engine
+    paths:
+      - .github/workflows/normalize-header-layering.yml
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/technomancer-engine
+          fetch-depth: 0
+
+      - name: Restore primitive base header and protect identity geometry
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"anchor not found in {path}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          base = "aida/frontend/_window_base.py"
+
+          replace(
+              base,
+              "    QPushButton,\n    QSizePolicy,\n    QSplitter,\n",
+              "    QPushButton,\n    QSplitter,\n",
+          )
+
+          old_controls = '''        self.autonomy_panel = QFrame()\n        self.autonomy_panel.setObjectName("headerControlModule")\n        self.autonomy_panel.setFixedSize(154, 54)\n        self.autonomy_caption = QLabel("AUTONOMY")\n        self.autonomy_caption.setObjectName("headerControlCaption")\n\n        self.autonomy_switch = QCheckBox("")\n        self.autonomy_switch.setObjectName("autonomySwitch")\n        self.autonomy_switch.setCursor(Qt.CursorShape.PointingHandCursor)\n        self.autonomy_switch.setFixedSize(34, 20)\n        self.autonomy_switch.setToolTip(\n            "Enable or disable Controlled Autonomy."\n        )\n        self.autonomy_state_label = QLabel("DISABLED")\n        self.autonomy_state_label.setObjectName("autonomyStateLabel")\n        self.autonomy_state_label.setProperty("state", "disabled")\n        self.autonomy_state_label.setMinimumWidth(82)\n        self.autonomy_state_label.setAlignment(\n            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter\n        )\n\n        self.status_panel = QFrame()\n        self.status_panel.setObjectName("headerStateModule")\n        self.status_panel.setFixedSize(116, 54)\n        self.status_caption = QLabel("CORE STATE")\n        self.status_caption.setObjectName("headerControlCaption")\n\n        self.status_label = QLabel("STARTUP")\n        self.status_label.setObjectName("statusLabel")\n        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)\n        self.status_label.setFixedWidth(96)\n        self.status_label.setMaximumHeight(27)\n        self.status_label.setSizePolicy(\n            QSizePolicy.Policy.Fixed,\n            QSizePolicy.Policy.Fixed,\n        )\n'''
+          new_controls = '''        self.autonomy_switch = QCheckBox("AUTONOMY")\n        self.autonomy_switch.setObjectName("autonomySwitch")\n        self.autonomy_switch.setToolTip(\n            "Enable or disable Controlled Autonomy."\n        )\n        self.autonomy_state_label = QLabel("DISABLED")\n        self.autonomy_state_label.setObjectName("autonomyStateLabel")\n        self.autonomy_state_label.setMinimumWidth(76)\n        self.autonomy_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)\n\n        self.status_label = QLabel("STARTUP")\n        self.status_label.setObjectName("statusLabel")\n        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)\n        self.status_label.setMinimumWidth(110)\n'''
+          replace(base, old_controls, new_controls)
+
+          old_layout = '''        identity_layout = QVBoxLayout()\n        identity_layout.setContentsMargins(0, 0, 0, 0)\n        identity_layout.setSpacing(2)\n        identity_layout.addWidget(self.app_title)\n        identity_layout.addWidget(self.app_subtitle)\n\n        autonomy_value_layout = QHBoxLayout()\n        autonomy_value_layout.setContentsMargins(0, 0, 0, 0)\n        autonomy_value_layout.setSpacing(7)\n        autonomy_value_layout.addWidget(self.autonomy_switch)\n        autonomy_value_layout.addWidget(self.autonomy_state_label, stretch=1)\n\n        autonomy_layout = QVBoxLayout()\n        autonomy_layout.setContentsMargins(10, 6, 10, 6)\n        autonomy_layout.setSpacing(2)\n        autonomy_layout.addWidget(self.autonomy_caption)\n        autonomy_layout.addLayout(autonomy_value_layout)\n        self.autonomy_panel.setLayout(autonomy_layout)\n\n        status_layout = QVBoxLayout()\n        status_layout.setContentsMargins(10, 6, 10, 6)\n        status_layout.setSpacing(2)\n        status_layout.addWidget(self.status_caption)\n        status_layout.addWidget(\n            self.status_label,\n            0,\n            Qt.AlignmentFlag.AlignHCenter,\n        )\n        self.status_panel.setLayout(status_layout)\n\n        header_layout = QHBoxLayout()\n        header_layout.setContentsMargins(14, 10, 14, 10)\n        header_layout.setSpacing(7)\n        header_layout.addLayout(identity_layout)\n        header_layout.addStretch()\n'''
+          new_layout = '''        identity_panel = QWidget()\n        identity_panel.setObjectName("appIdentity")\n        identity_panel.setFixedWidth(210)\n        identity_layout = QVBoxLayout(identity_panel)\n        identity_layout.setContentsMargins(0, 0, 0, 0)\n        identity_layout.setSpacing(2)\n        identity_layout.addWidget(self.app_title)\n        identity_layout.addWidget(self.app_subtitle)\n\n        autonomy_layout = QHBoxLayout()\n        autonomy_layout.setContentsMargins(0, 0, 0, 0)\n        autonomy_layout.setSpacing(6)\n        autonomy_layout.addWidget(self.autonomy_switch)\n        autonomy_layout.addWidget(self.autonomy_state_label)\n\n        header_layout = QHBoxLayout()\n        header_layout.setContentsMargins(14, 10, 14, 10)\n        header_layout.setSpacing(7)\n        header_layout.addWidget(identity_panel)\n        header_layout.addStretch()\n'''
+          replace(base, old_layout, new_layout)
+
+          replace(
+              base,
+              '''        header_layout.addWidget(self.autonomy_panel)\n        header_layout.addWidget(self.status_panel)\n''',
+              '''        header_layout.addLayout(autonomy_layout)\n        header_layout.addWidget(self.status_label)\n''',
+          )
+
+          # The wrapper is now the single modern presentation owner. Since the
+          # identity panel itself is fixed-width in the base, remove the old
+          # label-only sizing workaround and slightly tighten the orb/status gap.
+          window = "aida/frontend/window.py"
+          replace(
+              window,
+              '''        # Protect AIDA's identity copy from being squeezed by action buttons.\n        self.app_title.setMinimumWidth(96)\n        self.app_subtitle.setMinimumWidth(188)\n        self.app_title.setSizePolicy(\n            QSizePolicy.Policy.Minimum,\n            QSizePolicy.Policy.Preferred,\n        )\n        self.app_subtitle.setSizePolicy(\n            QSizePolicy.Policy.Minimum,\n            QSizePolicy.Policy.Preferred,\n        )\n\n''',
+              '',
+          )
+          replace(
+              window,
+              '        self.orb_status_indicator.setFixedWidth(92)\n',
+              '        self.orb_status_indicator.setFixedWidth(88)\n',
+          )
+
+          # No need for QSizePolicy once the label workaround is gone.
+          replace(
+              window,
+              '    QLabel,\n    QSizePolicy,\n    QVBoxLayout,\n',
+              '    QLabel,\n    QVBoxLayout,\n',
+          )
+          PY
+
+      - name: Validate normalized frontend
+        shell: bash
+        run: |
+          python -m py_compile \
+            aida/frontend/_window_base.py \
+            aida/frontend/window.py \
+            aida/frontend/status_orb.py \
+            aida/frontend/live_overlay.py \
+            aida/frontend/app.py
+          ! grep -n 'self.autonomy_panel = QFrame()' aida/frontend/_window_base.py
+          ! grep -n 'self.status_panel = QFrame()' aida/frontend/_window_base.py
+          grep -n 'identity_panel.setFixedWidth(210)' aida/frontend/_window_base.py
+
+      - name: Commit normalized header
+        shell: bash
+        run: |
+          git config user.name "AIDA GitHub Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add aida/frontend/_window_base.py aida/frontend/window.py
+          git commit -m "Normalize header ownership and protect AIDA identity"
+          git push origin HEAD:feature/technomancer-engine
