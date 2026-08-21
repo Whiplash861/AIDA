@@ -27,6 +27,12 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
         tone: 'ready',
       },
       {
+        title: 'Local Storage',
+        detail: 'Persistent instance identity and device-local runtime history.',
+        badge: 'READY',
+        tone: 'ready',
+      },
+      {
         title: 'Notifications',
         detail: 'Local and autonomous mobile alerts.',
         badge: 'STAGED',
@@ -39,7 +45,13 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
     items: [
       {
         title: 'Memory',
-        detail: 'Persistent mobile findings, preferences, and procedures.',
+        detail: 'Persistent storage foundation is active; semantic memory is the next layer.',
+        badge: 'FOUNDATION',
+        tone: 'ready',
+      },
+      {
+        title: 'Voice & Speech',
+        detail: 'Microphone capture, transcription, and AIDA spoken responses.',
         badge: 'STAGED',
         tone: 'staged',
       },
