@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from aida.aegis.learning.models import AegisFeatureVector
+import json
+
+from aida.aegis.learning.models import (
+    AEGIS_FEATURE_SCHEMA_VERSION,
+    AegisFeatureVector,
+)
 from aida.aegis.learning.service import AegisLearningService
 from aida.aegis.learning.store import AegisLearningStore
 
@@ -12,6 +17,7 @@ def _stable_vector(processes: float = 100.0) -> AegisFeatureVector:
             "persistence_count": 10.0,
             "listener_count": 4.0,
             "remote_endpoint_count": 12.0,
+            "parent_child_relationship_count": 80.0,
             "new_process_count": 0.0,
             "new_persistence_count": 0.0,
             "new_listener_count": 0.0,
@@ -37,6 +43,7 @@ def test_learning_warms_up_then_scores_stable_behavior_low(tmp_path) -> None:
     assert assessment.warmup is False
     assert assessment.confidence > 0.0
     assert assessment.anomaly_score < 0.20
+    assert service.snapshot().feature_schema_version == AEGIS_FEATURE_SCHEMA_VERSION
 
 
 def test_learning_detects_large_numeric_and_identity_novelty(tmp_path) -> None:
@@ -48,7 +55,11 @@ def test_learning_detects_large_numeric_and_identity_novelty(tmp_path) -> None:
         service.learn_if_safe(_stable_vector(), eligible=True)
 
     unusual = AegisFeatureVector(
-        numeric={**_stable_vector().numeric, "process_count": 400.0, "listener_count": 40.0},
+        numeric={
+            **_stable_vector().numeric,
+            "process_count": 400.0,
+            "listener_count": 40.0,
+        },
         identity_tokens=("process:" + "c" * 64, "listener:" + "d" * 64),
     )
     assessment = service.assess(unusual)
@@ -79,3 +90,25 @@ def test_learning_store_contains_no_raw_identity_strings(tmp_path) -> None:
     payload = path.read_text(encoding="utf-8")
     assert raw_path not in payload
     assert "Secret.exe" not in payload
+
+
+def test_incompatible_feature_schema_is_not_loaded_as_active_model(tmp_path) -> None:
+    path = tmp_path / "learning.json"
+    path.write_text(
+        json.dumps(
+            {
+                "model_id": "old-model",
+                "model_version": 7,
+                "feature_schema_version": AEGIS_FEATURE_SCHEMA_VERSION + 99,
+                "minimum_samples": 3,
+                "sample_count": 100,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = AegisLearningService(AegisLearningStore(path), minimum_samples=3)
+    snapshot = service.snapshot()
+    assert snapshot.feature_schema_version == AEGIS_FEATURE_SCHEMA_VERSION
+    assert snapshot.model_version == 1
+    assert snapshot.sample_count == 0
