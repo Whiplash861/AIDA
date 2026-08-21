@@ -1,14 +1,7 @@
 import Constants from 'expo-constants';
 import { StatusBar } from 'expo-status-bar';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-import {
-  ActivityIndicator,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -31,12 +24,12 @@ import {
   MobileMessage,
 } from '@/src/components/message-card';
 import {
-  configuredApiUrl,
-  getHealth,
-  getOperationalStatus,
-  OperationalStatusResponse,
-  sendChat,
-} from '@/src/services/aida-api';
+  getRuntimeSnapshot,
+  LocalRuntimeStatus,
+  MobileRuntimeSnapshot,
+  submitLocalDirective,
+  subscribeRuntime,
+} from '@/src/core/runtime/aida-runtime';
 import {
   AIDA_COLORS,
   AIDA_FONTS,
@@ -46,49 +39,33 @@ import {
   AidaRuntimeStatus,
 } from '@/src/theme/aida-theme';
 
-const INITIAL_MESSAGES: MobileMessage[] = [
-  {
-    id: 'welcome',
-    sender: 'aida',
-    text: 'AIDA mobile interface online. Establishing paired local bridge.',
-  },
-];
-
-const ARTIFICER_ACTIVE_VALUES = [
-  'OBSERVING',
-  'REVIEWING',
-  'MAINTENANCE',
-  'ROLLBACK',
-];
-
 export default function HomeScreen() {
+  const [runtime, setRuntime] = useState<MobileRuntimeSnapshot>(() =>
+    getRuntimeSnapshot(),
+  );
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<MobileMessage[]>(INITIAL_MESSAGES);
-  const [status, setStatus] = useState<AidaRuntimeStatus>('CONNECTING');
-  const [connectionNote, setConnectionNote] = useState('CONTACTING LOCAL BRIDGE');
+  const [showQuickActions, setShowQuickActions] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  const [operationalSnapshot, setOperationalSnapshot] =
-    useState<OperationalStatusResponse | null>(null);
-  const [operationalReachable, setOperationalReachable] = useState<
-    boolean | null
-  >(null);
+  const [messages, setMessages] = useState<MobileMessage[]>(() => [
+    {
+      id: 'runtime-online',
+      sender: 'aida',
+      text:
+        `AIDA Mobile runtime online. ${getRuntimeSnapshot().platform} environment recognized. ` +
+        'This instance is operating locally without requiring Desktop AIDA.',
+    },
+  ]);
   const scrollRef = useRef<ScrollView>(null);
 
+  const status = mapRuntimeStatus(runtime.status);
   const tone = AIDA_STATUS_TONES[status];
-  const appVersion = Constants.expoConfig?.version ?? '1.0.0';
-  const apiLabel = useMemo(() => {
-    const url = configuredApiUrl();
-    return url ? url.replace(/^https?:\/\//, '') : 'NOT CONFIGURED';
-  }, []);
+  const orb = deriveOrbPresentation(runtime.status);
+  const appVersion = Constants.expoConfig?.version ?? '0.1.0';
 
-  const orbPresentation = useMemo(
+  const platformLine = useMemo(
     () =>
-      deriveOrbPresentation(
-        status,
-        operationalSnapshot,
-        operationalReachable,
-      ),
-    [status, operationalSnapshot, operationalReachable],
+      `${runtime.platform.toUpperCase()} ${runtime.platform_version} • LOCAL INSTANCE`,
+    [runtime.platform, runtime.platform_version],
   );
 
   const scrollMessagesToEnd = useCallback((animated = true) => {
@@ -97,56 +74,14 @@ export default function HomeScreen() {
     });
   }, []);
 
-  const checkConnection = useCallback(async () => {
-    setStatus('CONNECTING');
-    setConnectionNote('CONTACTING LOCAL BRIDGE');
-
-    try {
-      const health = await getHealth();
-      if (health.status === 'ready') {
-        setStatus('STANDBY');
-        setConnectionNote(`PAIRED LOCAL BRIDGE READY • AIDA ${health.version}`);
-      } else {
-        setStatus('WARNING');
-        setConnectionNote(
-          health.brain_configured
-            ? 'PAIRING REQUIRES CONFIGURATION'
-            : 'AIDA BRAIN REQUIRES CONFIGURATION',
-        );
-      }
-    } catch (error) {
-      setStatus('OFFLINE');
-      setConnectionNote(errorMessage(error));
-    }
-  }, []);
-
-  const refreshOperationalSnapshot = useCallback(async () => {
-    try {
-      const snapshot = await getOperationalStatus();
-      setOperationalSnapshot(snapshot);
-      setOperationalReachable(true);
-    } catch {
-      setOperationalReachable(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void checkConnection();
-  }, [checkConnection]);
-
-  useEffect(() => {
-    void refreshOperationalSnapshot();
-    const timer = setInterval(() => {
-      void refreshOperationalSnapshot();
-    }, 2_000);
-    return () => clearInterval(timer);
-  }, [refreshOperationalSnapshot]);
+  useEffect(() => subscribeRuntime(setRuntime), []);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     const showSubscription = Keyboard.addListener(showEvent, () => {
       setKeyboardVisible(true);
+      setShowQuickActions(false);
     });
     const hideSubscription = Keyboard.addListener(hideEvent, () => {
       setKeyboardVisible(false);
@@ -166,7 +101,7 @@ export default function HomeScreen() {
 
   async function submitMessage() {
     const clean = draft.trim();
-    if (!clean || status === 'ANALYZING') {
+    if (!clean || runtime.status === 'ANALYZING') {
       return;
     }
 
@@ -176,53 +111,44 @@ export default function HomeScreen() {
       text: clean,
     };
 
-    const history = messages
-      .filter((item) => item.sender !== 'system')
-      .slice(-20)
-      .map((item) => ({
-        role: item.sender === 'user' ? ('user' as const) : ('assistant' as const),
-        content: item.text,
-      }));
-
     setMessages((current) => [...current, userMessage]);
     setDraft('');
-    setStatus('ANALYZING');
-    setConnectionNote('AIDA IS ANALYZING');
+    setShowQuickActions(false);
 
     try {
-      const response = await sendChat({
-        message: clean,
-        history,
-        device: {
-          platform: `${Platform.OS} ${Platform.Version}`,
-          model: Platform.OS === 'ios' ? 'Apple mobile device' : 'Mobile device',
-          app_version: appVersion,
-        },
-      });
-
+      const reply = await submitLocalDirective(clean);
       setMessages((current) => [
         ...current,
         {
-          id: `aida-${response.request_id}`,
+          id: `aida-${Date.now()}`,
           sender: 'aida',
-          text: response.reply,
+          text: reply,
         },
       ]);
-      setStatus('STANDBY');
-      setConnectionNote('LOCAL BRIDGE READY');
-      void refreshOperationalSnapshot();
     } catch (error) {
       setMessages((current) => [
         ...current,
         {
           id: `system-${Date.now()}`,
           sender: 'system',
-          text: errorMessage(error),
+          text: error instanceof Error ? error.message : 'AIDA runtime error.',
         },
       ]);
-      setStatus('ERROR');
-      setConnectionNote('REQUEST FAILED • TAP STATUS TO RETRY');
     }
+  }
+
+  function stageAction(label: string) {
+    setMessages((current) => [
+      ...current,
+      {
+        id: `system-${label}-${Date.now()}`,
+        sender: 'system',
+        text:
+          `${label} is staged for the native Android provider. ` +
+          'The standalone runtime remains online in Expo Go.',
+      },
+    ]);
+    setShowQuickActions(false);
   }
 
   return (
@@ -234,66 +160,61 @@ export default function HomeScreen() {
       <KeyboardAvoidingView
         style={styles.keyboardArea}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
       >
         <View style={styles.contentFrame}>
           <GlassPanel
             variant="header"
             style={[styles.header, keyboardVisible && styles.headerKeyboard]}
           >
-            <View style={styles.titleBlock}>
+            <View style={styles.identityBlock}>
               <Text style={styles.title}>AIDA</Text>
               {!keyboardVisible ? (
-                <Text style={styles.subtitle}>
-                  ANALYTICAL INTELLIGENT DIAGNOSTIC AGENT
-                </Text>
+                <Text style={styles.subtitle}>SYSTEMS DIAGNOSTIC CORE</Text>
               ) : null}
             </View>
 
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Retry AIDA bridge connection"
-              onPress={() => void checkConnection()}
-              style={({ pressed }) => [
-                styles.statusBadge,
-                {
-                  backgroundColor: tone.background,
-                  borderColor: tone.border,
-                  opacity: pressed ? 0.72 : 1,
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.statusDot,
-                  { backgroundColor: tone.foreground },
-                ]}
-              />
-              <Text style={[styles.statusText, { color: tone.foreground }]}>
-                {status}
-              </Text>
-            </Pressable>
+            <View style={styles.headerStateBlock}>
+              <Text style={styles.headerCaption}>CURRENT STATUS</Text>
+              <View style={styles.headerStateRow}>
+                <View
+                  style={[
+                    styles.stateDot,
+                    { backgroundColor: tone.foreground },
+                  ]}
+                />
+                <Text style={[styles.headerState, { color: tone.foreground }]}>
+                  {runtime.status}
+                </Text>
+              </View>
+            </View>
           </GlassPanel>
 
           {!keyboardVisible ? (
-            <AidaOrb
-              label={orbPresentation.label}
-              runtimeStatus={status}
-              state={orbPresentation.state}
-            />
+            <View style={styles.orbSection}>
+              <AidaOrb
+                label={orb.label}
+                runtimeStatus={status}
+                state={orb.state}
+                size={156}
+              />
+              <Text style={styles.platformLine}>{platformLine}</Text>
+              <Text style={styles.instanceLine} numberOfLines={1}>
+                AIDA {appVersion} • {runtime.runtime_mode.toUpperCase()}
+              </Text>
+            </View>
           ) : null}
 
           <GlassPanel variant="deep" style={styles.feedPanel}>
             <View style={styles.feedHeader}>
-              <View style={styles.feedTitleBlock}>
+              <View>
                 <Text style={styles.sectionTitle}>COMMUNICATION FEED</Text>
-                <Text style={styles.connectionNote} numberOfLines={1}>
-                  {connectionNote}
+                <Text style={styles.feedSubline} numberOfLines={1}>
+                  DEVICE-LOCAL RUNTIME
                 </Text>
               </View>
-              {status === 'ANALYZING' ? (
-                <ActivityIndicator color={AIDA_COLORS.cyanGlow} size="small" />
-              ) : null}
+              <View style={styles.localBadge}>
+                <Text style={styles.localBadgeText}>LOCAL</Text>
+              </View>
             </View>
 
             <ScrollView
@@ -310,28 +231,50 @@ export default function HomeScreen() {
             </ScrollView>
           </GlassPanel>
 
-          <GlassPanel
-            variant="panel"
-            style={[
-              styles.composerPanel,
-              keyboardVisible && styles.composerPanelKeyboard,
-            ]}
-          >
+          {showQuickActions && !keyboardVisible ? (
+            <GlassPanel variant="panel" style={styles.quickActions}>
+              {['MIC', 'IMAGE', 'PASTE'].map((label) => (
+                <Pressable
+                  key={label}
+                  accessibilityRole="button"
+                  onPress={() => stageAction(label)}
+                  style={({ pressed }) => [
+                    styles.quickActionButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.quickActionText}>{label}</Text>
+                </Pressable>
+              ))}
+            </GlassPanel>
+          ) : null}
+
+          <GlassPanel variant="panel" style={styles.composerPanel}>
             <View style={styles.composerHeader}>
-              <Text style={styles.sectionTitle}>DIRECTIVE INPUT</Text>
-              <Text style={styles.composerHint} numberOfLines={1}>
-                {apiLabel}
-              </Text>
+              <Text style={styles.sectionTitle}>COMMAND INTERFACE</Text>
+              <Text style={styles.composerHint}>ENTER TO SEND</Text>
             </View>
 
             <View style={styles.composerRow}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Show AIDA input options"
+                onPress={() => setShowQuickActions((current) => !current)}
+                style={({ pressed }) => [
+                  styles.addButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.addButtonText}>+</Text>
+              </Pressable>
+
               <TextInput
                 value={draft}
                 onChangeText={setDraft}
                 onFocus={() => scrollMessagesToEnd(false)}
                 onSubmitEditing={() => void submitMessage()}
-                editable={status !== 'ANALYZING'}
-                placeholder="State directive or diagnostic question..."
+                editable={runtime.status !== 'ANALYZING'}
+                placeholder="State malfunction parameters..."
                 placeholderTextColor="#657684"
                 returnKeyType="send"
                 selectionColor={AIDA_COLORS.cyanGlow}
@@ -341,13 +284,13 @@ export default function HomeScreen() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Send directive to AIDA"
-                disabled={!draft.trim() || status === 'ANALYZING'}
+                disabled={!draft.trim() || runtime.status === 'ANALYZING'}
                 onPress={() => void submitMessage()}
                 style={({ pressed }) => [
                   styles.sendButton,
-                  (!draft.trim() || status === 'ANALYZING') &&
+                  (!draft.trim() || runtime.status === 'ANALYZING') &&
                     styles.sendButtonDisabled,
-                  pressed && styles.sendButtonPressed,
+                  pressed && styles.pressed,
                 ]}
               >
                 <Text style={styles.sendButtonText}>SEND</Text>
@@ -360,53 +303,30 @@ export default function HomeScreen() {
   );
 }
 
-function deriveOrbPresentation(
-  status: AidaRuntimeStatus,
-  snapshot: OperationalStatusResponse | null,
-  operationalReachable: boolean | null,
-): { state: AidaOrbVisualState; label: string } {
-  if (status === 'OFFLINE') {
-    return { state: 'RED', label: 'DISCONNECTED' };
+function mapRuntimeStatus(status: LocalRuntimeStatus): AidaRuntimeStatus {
+  if (status === 'STARTING') {
+    return 'CONNECTING';
   }
+  return status;
+}
+
+function deriveOrbPresentation(status: LocalRuntimeStatus): {
+  state: AidaOrbVisualState;
+  label: string;
+} {
   if (status === 'ERROR') {
     return { state: 'RED', label: 'SYSTEM FAULT' };
   }
-  if (status !== 'CONNECTING' && operationalReachable === false) {
-    return { state: 'RED', label: 'DISCONNECTED' };
-  }
-  if (snapshot && !snapshot.desktop_online) {
-    return { state: 'RED', label: 'DISCONNECTED' };
-  }
-  if (snapshot?.statuses.some((item) => item.tone === 'error')) {
-    return { state: 'RED', label: 'SYSTEM FAULT' };
-  }
-
-  const artificer = snapshot?.statuses.find((item) => item.id === 'artificer');
-  const artificerValue = artificer?.value.toUpperCase() ?? '';
-  const artificerActive =
-    artificer?.tone === 'active' ||
-    ARTIFICER_ACTIVE_VALUES.some((value) => artificerValue.includes(value));
-  if (artificerActive) {
-    return { state: 'VIOLET', label: 'ARTIFICER' };
-  }
-
-  if (status === 'CONNECTING') {
+  if (status === 'STARTING') {
     return { state: 'GREEN', label: 'STARTING' };
   }
   if (status === 'ANALYZING') {
     return { state: 'GREEN', label: 'ANALYZING' };
   }
-  if (snapshot?.statuses.some((item) => item.tone === 'active')) {
-    return { state: 'GREEN', label: 'WORKING' };
-  }
   if (status === 'WARNING') {
-    return { state: 'BLUE', label: 'WARNING' };
+    return { state: 'BLUE', label: 'ATTENTION' };
   }
   return { state: 'BLUE', label: 'STANDBY' };
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Unknown AIDA bridge error.';
 }
 
 const styles = StyleSheet.create({
@@ -426,14 +346,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: AIDA_SPACING.sm,
     paddingTop: AIDA_SPACING.sm,
     paddingBottom: AIDA_SPACING.xs,
+    gap: AIDA_SPACING.sm,
   },
   backgroundGlowPrimary: {
     position: 'absolute',
-    top: -140,
-    left: -110,
-    width: 360,
-    height: 360,
-    borderRadius: 180,
+    top: -150,
+    left: -120,
+    width: 380,
+    height: 380,
+    borderRadius: 190,
     backgroundColor: 'rgba(27, 89, 119, 0.34)',
   },
   backgroundGlowSecondary: {
@@ -446,7 +367,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(32, 43, 100, 0.16)',
   },
   header: {
-    minHeight: 82,
+    minHeight: 74,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -454,12 +375,12 @@ const styles = StyleSheet.create({
     paddingVertical: AIDA_SPACING.sm,
   },
   headerKeyboard: {
-    minHeight: 62,
+    minHeight: 58,
     paddingVertical: AIDA_SPACING.xs,
   },
-  titleBlock: {
+  identityBlock: {
     flex: 1,
-    paddingRight: AIDA_SPACING.sm,
+    minWidth: 0,
   },
   title: {
     color: AIDA_COLORS.textBright,
@@ -469,33 +390,66 @@ const styles = StyleSheet.create({
     letterSpacing: 5,
   },
   subtitle: {
-    marginTop: 3,
+    marginTop: 2,
     color: AIDA_COLORS.cyan,
     fontFamily: AIDA_FONTS.display,
     fontSize: 8,
     fontWeight: '600',
+    letterSpacing: 1.8,
+  },
+  headerStateBlock: {
+    minWidth: 126,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: AIDA_COLORS.borderSoft,
+    borderRadius: AIDA_RADIUS.small,
+    backgroundColor: 'rgba(5, 21, 31, 0.72)',
+  },
+  headerCaption: {
+    color: AIDA_COLORS.textDim,
+    fontFamily: AIDA_FONTS.display,
+    fontSize: 7,
+    fontWeight: '700',
     letterSpacing: 1.5,
   },
-  statusBadge: {
-    minHeight: 34,
+  headerStateRow: {
+    marginTop: 5,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-    borderWidth: 1,
-    borderRadius: AIDA_RADIUS.pill,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
   },
-  statusDot: {
+  stateDot: {
     width: 7,
     height: 7,
     borderRadius: 4,
   },
-  statusText: {
+  headerState: {
+    fontFamily: AIDA_FONTS.mono,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  orbSection: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 2,
+    paddingBottom: 4,
+  },
+  platformLine: {
+    marginTop: -8,
+    color: AIDA_COLORS.cyan,
     fontFamily: AIDA_FONTS.mono,
     fontSize: 9,
     fontWeight: '700',
-    letterSpacing: 1,
+    letterSpacing: 1.4,
+  },
+  instanceLine: {
+    marginTop: 4,
+    color: AIDA_COLORS.textDim,
+    fontFamily: AIDA_FONTS.mono,
+    fontSize: 8,
+    letterSpacing: 0.8,
   },
   feedPanel: {
     flex: 1,
@@ -503,17 +457,12 @@ const styles = StyleSheet.create({
     padding: AIDA_SPACING.sm,
   },
   feedHeader: {
-    minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 3,
+    gap: AIDA_SPACING.sm,
+    paddingHorizontal: 2,
     paddingBottom: AIDA_SPACING.xs,
-  },
-  feedTitleBlock: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: AIDA_SPACING.xs,
   },
   sectionTitle: {
     color: AIDA_COLORS.cyanStrong,
@@ -522,87 +471,129 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1.6,
   },
-  connectionNote: {
+  feedSubline: {
     marginTop: 3,
     color: AIDA_COLORS.textDim,
     fontFamily: AIDA_FONTS.mono,
+    fontSize: 7,
+    letterSpacing: 1,
+  },
+  localBadge: {
+    borderWidth: 1,
+    borderColor: 'rgba(77, 236, 171, 0.42)',
+    borderRadius: AIDA_RADIUS.pill,
+    backgroundColor: 'rgba(9, 42, 34, 0.90)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  localBadgeText: {
+    color: AIDA_COLORS.mint,
+    fontFamily: AIDA_FONTS.mono,
     fontSize: 8,
-    letterSpacing: 0.7,
+    fontWeight: '700',
+    letterSpacing: 1,
   },
   messageArea: {
     flex: 1,
     minHeight: 0,
   },
   messageContent: {
-    gap: AIDA_SPACING.sm,
-    paddingTop: AIDA_SPACING.xs,
-    paddingBottom: AIDA_SPACING.sm,
+    gap: AIDA_SPACING.xs,
+    paddingVertical: AIDA_SPACING.xs,
+  },
+  quickActions: {
+    flexDirection: 'row',
+    gap: AIDA_SPACING.xs,
+    padding: AIDA_SPACING.xs,
+  },
+  quickActionButton: {
+    flex: 1,
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: AIDA_COLORS.borderSoft,
+    borderRadius: AIDA_RADIUS.small,
+    backgroundColor: AIDA_COLORS.glassInput,
+  },
+  quickActionText: {
+    color: AIDA_COLORS.textPrimary,
+    fontFamily: AIDA_FONTS.mono,
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1,
   },
   composerPanel: {
-    marginTop: AIDA_SPACING.sm,
     padding: AIDA_SPACING.sm,
-  },
-  composerPanelKeyboard: {
-    marginTop: AIDA_SPACING.xs,
   },
   composerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 3,
-    paddingBottom: AIDA_SPACING.xs,
+    marginBottom: AIDA_SPACING.xs,
   },
   composerHint: {
-    maxWidth: '55%',
     color: AIDA_COLORS.textDim,
     fontFamily: AIDA_FONTS.mono,
     fontSize: 7,
+    fontWeight: '700',
+    letterSpacing: 1,
   },
   composerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: AIDA_SPACING.xs,
   },
+  addButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: AIDA_COLORS.border,
+    borderRadius: AIDA_RADIUS.small,
+    backgroundColor: 'rgba(18, 36, 48, 0.88)',
+  },
+  addButtonText: {
+    color: AIDA_COLORS.cyan,
+    fontSize: 26,
+    fontWeight: '300',
+    lineHeight: 28,
+  },
   input: {
     flex: 1,
-    minHeight: 48,
+    minWidth: 0,
+    minHeight: 44,
     color: AIDA_COLORS.textPrimary,
     backgroundColor: AIDA_COLORS.glassInput,
     borderWidth: 1,
-    borderColor: 'rgba(107, 181, 218, 0.32)',
+    borderColor: AIDA_COLORS.borderSoft,
     borderRadius: AIDA_RADIUS.small,
-    paddingHorizontal: 14,
+    paddingHorizontal: 13,
     fontSize: 14,
   },
   sendButton: {
-    minWidth: 72,
-    minHeight: 48,
+    minWidth: 68,
+    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(109, 218, 255, 0.70)',
     borderRadius: AIDA_RADIUS.small,
     backgroundColor: '#116da7',
-    shadowColor: AIDA_COLORS.cyanGlow,
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 5,
-  },
-  sendButtonPressed: {
-    opacity: 0.72,
-    transform: [{ scale: 0.97 }],
+    paddingHorizontal: 12,
   },
   sendButtonDisabled: {
-    backgroundColor: 'rgba(30, 43, 54, 0.80)',
-    borderColor: 'rgba(88, 109, 122, 0.22)',
-    shadowOpacity: 0,
+    opacity: 0.42,
   },
   sendButtonText: {
     color: AIDA_COLORS.textBright,
     fontFamily: AIDA_FONTS.display,
     fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1.3,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  pressed: {
+    opacity: 0.72,
   },
 });
