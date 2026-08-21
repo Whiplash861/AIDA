@@ -51,7 +51,7 @@ class StatusValueLabel(QLabel):
         super().__init__()
         self.setObjectName("statusValue")
         self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.setMinimumWidth(78)
+        self.setMinimumWidth(96)
         self.set_status_text(text)
 
     def set_status_text(self, text: str) -> None:
@@ -64,8 +64,8 @@ class StatusDashboard(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("statusDashboard")
-        self.setMinimumWidth(220)
-        self.setMaximumWidth(380)
+        self.setMinimumWidth(246)
+        self.setMaximumWidth(400)
 
         self.agent_value = StatusValueLabel("STARTUP")
         self.brain_value = StatusValueLabel("IDLE")
@@ -96,7 +96,8 @@ class StatusDashboard(QFrame):
         title.setObjectName("dashboardTitle")
         status_grid = QGridLayout()
         status_grid.setContentsMargins(0, 0, 0, 0)
-        status_grid.setHorizontalSpacing(18)
+        status_grid.setHorizontalSpacing(12)
+        status_grid.setColumnMinimumWidth(1, 96)
         status_grid.setVerticalSpacing(10)
 
         rows = (

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -99,20 +100,42 @@ class AIDAWindow(QMainWindow):
             "taskCenterButton",
         )
 
-        self.autonomy_switch = QCheckBox("AUTONOMY")
+        self.autonomy_panel = QFrame()
+        self.autonomy_panel.setObjectName("headerControlModule")
+        self.autonomy_panel.setFixedSize(154, 54)
+        self.autonomy_caption = QLabel("AUTONOMY")
+        self.autonomy_caption.setObjectName("headerControlCaption")
+
+        self.autonomy_switch = QCheckBox("")
         self.autonomy_switch.setObjectName("autonomySwitch")
+        self.autonomy_switch.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.autonomy_switch.setFixedSize(34, 20)
         self.autonomy_switch.setToolTip(
-            "When disabled, every operational decision is routed to the user first."
+            "Enable or disable Controlled Autonomy."
         )
-        self.autonomy_state_label = QLabel("MANUAL")
+        self.autonomy_state_label = QLabel("DISABLED")
         self.autonomy_state_label.setObjectName("autonomyStateLabel")
-        self.autonomy_state_label.setMinimumWidth(72)
-        self.autonomy_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.autonomy_state_label.setProperty("state", "disabled")
+        self.autonomy_state_label.setMinimumWidth(82)
+        self.autonomy_state_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.status_panel = QFrame()
+        self.status_panel.setObjectName("headerStateModule")
+        self.status_panel.setFixedSize(116, 54)
+        self.status_caption = QLabel("CORE STATE")
+        self.status_caption.setObjectName("headerControlCaption")
 
         self.status_label = QLabel("STARTUP")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setMinimumWidth(110)
+        self.status_label.setFixedWidth(96)
+        self.status_label.setMaximumHeight(27)
+        self.status_label.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
 
         self.transcript = MessageFeed()
         self.transcript.setMinimumWidth(420)
@@ -188,15 +211,33 @@ class AIDAWindow(QMainWindow):
         identity_layout.addWidget(self.app_title)
         identity_layout.addWidget(self.app_subtitle)
 
-        autonomy_layout = QHBoxLayout()
-        autonomy_layout.setContentsMargins(0, 0, 0, 0)
-        autonomy_layout.setSpacing(6)
-        autonomy_layout.addWidget(self.autonomy_switch)
-        autonomy_layout.addWidget(self.autonomy_state_label)
+        autonomy_value_layout = QHBoxLayout()
+        autonomy_value_layout.setContentsMargins(0, 0, 0, 0)
+        autonomy_value_layout.setSpacing(7)
+        autonomy_value_layout.addWidget(self.autonomy_switch)
+        autonomy_value_layout.addWidget(self.autonomy_state_label, stretch=1)
+
+        autonomy_layout = QVBoxLayout()
+        autonomy_layout.setContentsMargins(10, 6, 10, 6)
+        autonomy_layout.setSpacing(2)
+        autonomy_layout.addWidget(self.autonomy_caption)
+        autonomy_layout.addLayout(autonomy_value_layout)
+        self.autonomy_panel.setLayout(autonomy_layout)
+
+        status_layout = QVBoxLayout()
+        status_layout.setContentsMargins(10, 6, 10, 6)
+        status_layout.setSpacing(2)
+        status_layout.addWidget(self.status_caption)
+        status_layout.addWidget(
+            self.status_label,
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
+        self.status_panel.setLayout(status_layout)
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(14, 10, 14, 10)
-        header_layout.setSpacing(9)
+        header_layout.setSpacing(7)
         header_layout.addLayout(identity_layout)
         header_layout.addStretch()
         for button in (
@@ -207,8 +248,8 @@ class AIDAWindow(QMainWindow):
             self.artificer_button,
         ):
             header_layout.addWidget(button)
-        header_layout.addLayout(autonomy_layout)
-        header_layout.addWidget(self.status_label)
+        header_layout.addWidget(self.autonomy_panel)
+        header_layout.addWidget(self.status_panel)
         header.setLayout(header_layout)
 
         workspace = QFrame()
@@ -217,7 +258,7 @@ class AIDAWindow(QMainWindow):
         self.workspace_splitter.addWidget(self.transcript)
         self.workspace_splitter.setStretchFactor(0, 0)
         self.workspace_splitter.setStretchFactor(1, 1)
-        self.workspace_splitter.setSizes([250, 900])
+        self.workspace_splitter.setSizes([260, 890])
         workspace_layout = QHBoxLayout()
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
@@ -475,7 +516,23 @@ class AIDAWindow(QMainWindow):
         del blocker
 
     def set_autonomy_status(self, text: str) -> None:
-        self.autonomy_state_label.setText(text.strip().upper() or "MANUAL")
+        normalized = text.strip().upper() or "DISABLED"
+        if normalized == "MANUAL":
+            normalized = "DISABLED"
+        self.autonomy_state_label.setText(normalized)
+        if normalized == "ENABLED":
+            state = "enabled"
+        elif normalized == "LOCKED":
+            state = "locked"
+        elif normalized == "UPDATING":
+            state = "updating"
+        else:
+            state = "disabled"
+        self.autonomy_state_label.setProperty("state", state)
+        style = self.autonomy_state_label.style()
+        style.unpolish(self.autonomy_state_label)
+        style.polish(self.autonomy_state_label)
+        self.autonomy_state_label.update()
 
     def set_brain_status(self, text: str) -> None:
         self.dashboard.set_brain_status(text)
