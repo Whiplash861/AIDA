@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+)
 
 from aida.frontend._window_base import AIDAWindow as _BaseAIDAWindow
 from aida.frontend.status_orb import AIDAStatusOrb
@@ -34,6 +40,107 @@ class AIDAWindow(_BaseAIDAWindow):
 
     _TARGETED_ORB_TEST_SECONDS = 10.0
 
+    _HEADER_MODULE_STYLE = """
+        QFrame#headerControlModule,
+        QFrame#headerStateModule {
+            background:
+                qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 rgba(12, 35, 49, 218),
+                    stop: 1 rgba(5, 21, 31, 232)
+                );
+            border: 1px solid rgba(91, 207, 240, 72);
+            border-radius: 12px;
+        }
+        QFrame#headerControlModule:hover,
+        QFrame#headerStateModule:hover {
+            border-color: rgba(91, 220, 255, 120);
+        }
+        QLabel#headerControlCaption {
+            color: #718c9d;
+            font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Segoe UI";
+            font-size: 8px;
+            font-weight: 650;
+            letter-spacing: 2px;
+        }
+    """
+
+    _AUTONOMY_STYLE = """
+        QCheckBox#autonomySwitch {
+            spacing: 0;
+            padding: 0;
+        }
+        QCheckBox#autonomySwitch::indicator {
+            width: 28px;
+            height: 14px;
+            border: 1px solid rgba(139, 168, 186, 105);
+            border-radius: 7px;
+            background: rgba(23, 38, 48, 235);
+        }
+        QCheckBox#autonomySwitch::indicator:hover {
+            border-color: rgba(105, 220, 255, 175);
+        }
+        QCheckBox#autonomySwitch::indicator:checked {
+            background:
+                qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 rgba(25, 155, 104, 240),
+                    stop: 1 rgba(53, 231, 166, 245)
+                );
+            border-color: rgba(102, 246, 190, 210);
+        }
+        QLabel#autonomyStateLabel {
+            color: #91a5b3;
+            font-family: "Cascadia Mono", "Consolas";
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+        QLabel#autonomyStateLabel[state="enabled"] { color: #59f0b3; }
+        QLabel#autonomyStateLabel[state="disabled"] { color: #91a5b3; }
+        QLabel#autonomyStateLabel[state="updating"] { color: #68d8ff; }
+        QLabel#autonomyStateLabel[state="locked"] { color: #ff9b79; }
+    """
+
+    _CORE_STATE_STYLE = """
+        QLabel#statusLabel {
+            color: #afc2d1;
+            background: rgba(18, 36, 48, 210);
+            border: 1px solid rgba(117, 186, 215, 62);
+            border-radius: 8px;
+            padding: 3px 6px;
+            font-family: "Cascadia Mono", "Consolas";
+            font-size: 10px;
+            font-weight: 750;
+            letter-spacing: 1px;
+        }
+        QLabel#statusLabel[tone="ready"] {
+            color: #59f0b3;
+            background: rgba(15, 63, 48, 220);
+            border-color: rgba(77, 236, 171, 105);
+        }
+        QLabel#statusLabel[tone="active"] {
+            color: #68d8ff;
+            background: rgba(10, 49, 70, 225);
+            border-color: rgba(88, 207, 255, 120);
+        }
+        QLabel#statusLabel[tone="warning"] {
+            color: #ffd875;
+            background: rgba(67, 49, 15, 225);
+            border-color: rgba(255, 205, 91, 120);
+        }
+        QLabel#statusLabel[tone="error"] {
+            color: #ff7d8d;
+            background: rgba(68, 22, 30, 225);
+            border-color: rgba(255, 105, 126, 125);
+        }
+        QLabel#statusLabel[tone="idle"] {
+            color: #a9bbc8;
+            background: rgba(26, 39, 48, 220);
+            border-color: rgba(136, 166, 187, 65);
+        }
+    """
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -49,6 +156,7 @@ class AIDAWindow(_BaseAIDAWindow):
         # only the vertical header padding keeps the overall header close to its
         # previous height while preserving a small gap to the frame itself.
         header_layout.setContentsMargins(14, 1, 14, 1)
+        header_layout.setSpacing(7)
 
         self.internal_orb = _HeaderStatusOrb(parent=header)
         header_layout.insertWidget(
@@ -86,6 +194,9 @@ class AIDAWindow(_BaseAIDAWindow):
         self.internal_orb.set_status(AIDAStatus.STARTUP)
         self._refresh_orb_status_indicator()
 
+        self._modernize_header_controls(header, header_layout)
+        self._protect_dashboard_status_values()
+
         self._orb_test_shortcut = QShortcut(
             QKeySequence("Ctrl+Shift+O"),
             self,
@@ -111,6 +222,120 @@ class AIDAWindow(_BaseAIDAWindow):
             self,
         )
         self._orb_live_shortcut.activated.connect(self.return_orb_to_live)
+
+    def _modernize_header_controls(
+        self,
+        header: QFrame,
+        header_layout: QHBoxLayout,
+    ) -> None:
+        """Repackage autonomy and core-state controls as compact HUD modules."""
+        self.autonomy_panel = QFrame(header)
+        self.autonomy_panel.setObjectName("headerControlModule")
+        self.autonomy_panel.setFixedSize(154, 54)
+        self.autonomy_panel.setStyleSheet(
+            self._HEADER_MODULE_STYLE + self._AUTONOMY_STYLE
+        )
+
+        autonomy_caption = QLabel("AUTONOMY", self.autonomy_panel)
+        autonomy_caption.setObjectName("headerControlCaption")
+        self.autonomy_switch.setParent(self.autonomy_panel)
+        self.autonomy_switch.setText("")
+        self.autonomy_switch.setFixedSize(34, 20)
+        self.autonomy_switch.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.autonomy_switch.setToolTip("Enable or disable Controlled Autonomy.")
+        self.autonomy_state_label.setParent(self.autonomy_panel)
+        self.autonomy_state_label.setMinimumWidth(82)
+        self.autonomy_state_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.autonomy_state_label.setProperty("state", "disabled")
+        if self.autonomy_state_label.text().strip().upper() == "MANUAL":
+            self.autonomy_state_label.setText("DISABLED")
+
+        autonomy_value_layout = QHBoxLayout()
+        autonomy_value_layout.setContentsMargins(0, 0, 0, 0)
+        autonomy_value_layout.setSpacing(7)
+        autonomy_value_layout.addWidget(self.autonomy_switch)
+        autonomy_value_layout.addWidget(self.autonomy_state_label, stretch=1)
+
+        autonomy_layout = QVBoxLayout(self.autonomy_panel)
+        autonomy_layout.setContentsMargins(10, 6, 10, 6)
+        autonomy_layout.setSpacing(2)
+        autonomy_layout.addWidget(autonomy_caption)
+        autonomy_layout.addLayout(autonomy_value_layout)
+
+        self.status_panel = QFrame(header)
+        self.status_panel.setObjectName("headerStateModule")
+        self.status_panel.setFixedSize(116, 54)
+        self.status_panel.setStyleSheet(
+            self._HEADER_MODULE_STYLE + self._CORE_STATE_STYLE
+        )
+        status_caption = QLabel("CORE STATE", self.status_panel)
+        status_caption.setObjectName("headerControlCaption")
+        self.status_label.setParent(self.status_panel)
+        self.status_label.setFixedWidth(96)
+        self.status_label.setMaximumHeight(27)
+        self.status_label.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+
+        status_layout = QVBoxLayout(self.status_panel)
+        status_layout.setContentsMargins(10, 6, 10, 6)
+        status_layout.setSpacing(2)
+        status_layout.addWidget(status_caption)
+        status_layout.addWidget(
+            self.status_label,
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
+
+        # Reparenting removes the old widgets from their base layouts. Discard
+        # any now-empty nested layout so it does not consume header spacing.
+        for index in range(header_layout.count() - 1, -1, -1):
+            item = header_layout.itemAt(index)
+            nested = item.layout()
+            if nested is not None and nested.count() == 0:
+                header_layout.takeAt(index)
+
+        header_layout.addWidget(
+            self.autonomy_panel,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        header_layout.addWidget(
+            self.status_panel,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+
+    def _protect_dashboard_status_values(self) -> None:
+        """Keep dashboard values readable instead of allowing text clipping."""
+        self.dashboard.setMinimumWidth(258)
+        self.dashboard.setMaximumWidth(400)
+        for label in self.dashboard.findChildren(QLabel, "statusValue"):
+            label.setMinimumWidth(104)
+        self.workspace_splitter.setSizes([268, 882])
+
+    def set_autonomy_status(self, text: str) -> None:
+        """Present autonomy as ENABLED / DISABLED while preserving model semantics."""
+        normalized = text.strip().upper() or "DISABLED"
+        if normalized == "MANUAL":
+            normalized = "DISABLED"
+        super().set_autonomy_status(normalized)
+        if normalized == "ENABLED":
+            state = "enabled"
+        elif normalized == "LOCKED":
+            state = "locked"
+        elif normalized == "UPDATING":
+            state = "updating"
+        else:
+            state = "disabled"
+        self.autonomy_state_label.setProperty("state", state)
+        style = self.autonomy_state_label.style()
+        style.unpolish(self.autonomy_state_label)
+        style.polish(self.autonomy_state_label)
+        self.autonomy_state_label.update()
 
     def _set_orb_status_text(self, heading: str, value: str) -> None:
         self.orb_status_indicator.setText(
