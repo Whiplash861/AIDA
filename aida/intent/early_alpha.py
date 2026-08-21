@@ -9,30 +9,88 @@ def register_early_alpha_intents(registry: IntentRegistry) -> IntentRegistry:
         IntentDefinition(
             intent_id="security.scan.intelligent",
             command_type="SECURITY_INTELLIGENT_SCAN",
-            actions=frozenset({"run", "start", "perform", "begin", "launch"}),
+            actions=frozenset(
+                {
+                    "run",
+                    "start",
+                    "perform",
+                    "begin",
+                    "launch",
+                    "execute",
+                    "do",
+                    "check",
+                    "scan",
+                }
+            ),
             objects=frozenset(
                 {
                     "intelligent security scan",
                     "intelligent scan",
+                    "adaptive security scan",
+                    "adaptive scan",
                     "smart security scan",
+                    "smart scan",
                     "aegis scan",
                     "aegis security scan",
+                    "security scan",
+                    "malware scan",
+                    "virus scan",
+                    "antivirus scan",
+                    "anti virus scan",
+                    "malware",
+                    "viruses",
+                    "threats",
+                }
+            ),
+            modifiers=frozenset(
+                {
+                    "intelligent",
+                    "adaptive",
+                    "smart",
+                    "aegis",
+                    "security",
                 }
             ),
             aliases=frozenset(
                 {
                     "intelligent security scan",
                     "run intelligent security scan",
+                    "run an intelligent security scan",
                     "start intelligent security scan",
+                    "start an intelligent security scan",
+                    "adaptive security scan",
+                    "run adaptive security scan",
+                    "aegis adaptive scan",
+                    "run aegis adaptive scan",
                     "smart security scan",
                     "run aegis scan",
                     "aegis security scan",
+                    "run a security scan",
+                    "run security scan",
+                    "check my computer for malware",
+                    "check my pc for malware",
+                    "scan my computer for viruses",
+                    "scan my pc for viruses",
+                    "check for malware",
+                    "check for viruses",
+                    "check for threats",
                 }
             ),
-            negative_terms=frozenset({"full system", "full sweep", "deep targeted"}),
+            negative_terms=frozenset(
+                {
+                    "full system",
+                    "full sweep",
+                    "deep",
+                    "targeted",
+                    "surface",
+                    "low level",
+                    "quick malware",
+                    "quick security",
+                }
+            ),
             risk=IntentRisk.LOW_OPERATIONAL,
             local_only=True,
-            description="an Aegis adaptive Intelligent Security Scan",
+            description="an Aegis Adaptive Security Scan",
             priority=124,
         ),
         IntentDefinition(
