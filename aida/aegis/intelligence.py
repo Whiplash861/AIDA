@@ -11,9 +11,7 @@ from aida.aegis.models import (
     BaselineDelta,
     CoverageVector,
     RiskVector,
-    SecurityCase,
     SecuritySnapshot,
-    utc_now,
 )
 from aida.security.models import ProviderDetection, SecuritySeverity
 from aida.security.threat_analysis import (
@@ -39,31 +37,28 @@ def select_candidate_paths(
     limit: int = 8,
 ) -> tuple[Path, ...]:
     candidates: list[Path] = []
-
     for detection in detections:
         if detection.file_path is not None:
             _append_path(candidates, Path(detection.file_path))
-
     for item in delta.new_persistence:
         target = _extract_existing_target(item.target)
         if target is not None:
             _append_path(candidates, target)
-
     new_process_keys = {_path_key(value) for value in delta.new_process_paths}
     for process in snapshot.processes:
         if not process.executable:
             continue
-        key = _path_key(process.executable)
-        if key not in new_process_keys:
+        if _path_key(process.executable) not in new_process_keys:
             continue
         lowered = process.executable.lower()
-        if any(token in lowered for token in _SUSPICIOUS_PATH_TOKENS):
-            _append_path(candidates, Path(process.executable))
-        elif process.listening_endpoints or process.remote_endpoints:
+        if (
+            any(token in lowered for token in _SUSPICIOUS_PATH_TOKENS)
+            or process.listening_endpoints
+            or process.remote_endpoints
+        ):
             _append_path(candidates, Path(process.executable))
         if len(candidates) >= limit:
             break
-
     return tuple(path for path in candidates if path.is_file())[:limit]
 
 
@@ -74,32 +69,25 @@ def assess_risk(
     delta: BaselineDelta,
     snapshot: SecuritySnapshot,
 ) -> RiskVector:
-    likelihood = 0.05
-    impact = 0.10
-    activity = 0.05
-    persistence = 0.05
-    exposure = 0.05
-
-    active_detections = [
-        item
-        for item in detections
-        if item.metadata.get("is_active") is not False
+    likelihood, impact = 0.05, 0.10
+    activity, persistence, exposure = 0.05, 0.05, 0.05
+    active = [
+        item for item in detections if item.metadata.get("is_active") is not False
     ]
-    if active_detections:
-        likelihood = max(likelihood, 0.88)
-        activity = max(activity, 0.65)
-        for detection in active_detections:
+    if active:
+        likelihood = 0.88
+        activity = 0.65
+        for detection in active:
             if detection.severity is SecuritySeverity.CRITICAL:
-                likelihood = max(likelihood, 0.98)
-                impact = max(impact, 1.0)
+                likelihood, impact = max(likelihood, 0.98), max(impact, 1.0)
             elif detection.severity is SecuritySeverity.HIGH:
-                likelihood = max(likelihood, 0.96)
-                impact = max(impact, 0.86)
-            elif detection.severity is SecuritySeverity.MEDIUM:
+                likelihood, impact = max(likelihood, 0.96), max(impact, 0.86)
+            elif detection.severity is SecuritySeverity.MODERATE:
                 impact = max(impact, 0.58)
-            else:
+            elif detection.severity is SecuritySeverity.MINOR:
                 impact = max(impact, 0.32)
-
+            else:
+                impact = max(impact, 0.20)
     for analysis in analyses:
         likelihood = max(likelihood, _assessment_likelihood(analysis))
         if analysis.process_observations:
@@ -108,18 +96,21 @@ def assess_risk(
             persistence = max(persistence, 0.80)
         if any(item.network_endpoints for item in analysis.process_observations):
             exposure = max(exposure, 0.75)
-        if analysis.possible_impacts:
-            impact = max(impact, _impact_from_analysis(analysis))
-
+        impact = max(impact, _impact_from_analysis(analysis))
     if delta.new_persistence:
-        persistence = max(persistence, min(0.85, 0.30 + len(delta.new_persistence) * 0.12))
+        persistence = max(
+            persistence,
+            min(0.85, 0.30 + len(delta.new_persistence) * 0.12),
+        )
         likelihood = max(likelihood, 0.22)
     if delta.new_listeners:
-        exposure = max(exposure, min(0.75, 0.22 + len(delta.new_listeners) * 0.08))
+        exposure = max(
+            exposure,
+            min(0.75, 0.22 + len(delta.new_listeners) * 0.08),
+        )
     if snapshot.provider_health.active is False:
         impact = max(impact, 0.65)
         likelihood = max(likelihood, 0.30)
-
     urgency = max(
         likelihood * max(impact, 0.25),
         activity * 0.70,
@@ -146,23 +137,19 @@ def assess_coverage(
     provider = 1.0 if snapshot.provider_health.available is True else 0.45
     if snapshot.provider_health.active is False:
         provider = 0.25
-    processes = 0.45 if "process_snapshot_unavailable" in errors else 1.0
-    persistence = (
-        0.50 if "registry_persistence_unavailable" in errors else 0.92
-    )
-    network = 0.45 if "network_snapshot_unavailable" in errors else 0.95
-    baseline_score = 1.0 if baseline is not None else 0.25
-    if candidate_count == 0:
-        file_analysis = 1.0
-    else:
-        file_analysis = analyzed_count / candidate_count
     return CoverageVector(
         provider=_clamp(provider),
-        processes=_clamp(processes),
-        persistence=_clamp(persistence),
-        network=_clamp(network),
-        baseline=_clamp(baseline_score),
-        file_analysis=_clamp(file_analysis),
+        processes=(0.45 if "process_snapshot_unavailable" in errors else 1.0),
+        persistence=(
+            0.50 if "registry_persistence_unavailable" in errors else 0.92
+        ),
+        network=(0.45 if "network_snapshot_unavailable" in errors else 0.95),
+        baseline=(1.0 if baseline is not None else 0.25),
+        file_analysis=(
+            1.0
+            if candidate_count == 0
+            else _clamp(analyzed_count / candidate_count)
+        ),
     )
 
 
@@ -172,15 +159,12 @@ def build_hypotheses(
     analyses: tuple[ThreatAnalysisRecord, ...],
     delta: BaselineDelta,
 ) -> tuple[AegisHypothesis, ...]:
-    output: list[AegisHypothesis] = []
+    hypotheses: list[AegisHypothesis] = []
     active = [
-        item
-        for item in detections
-        if item.metadata.get("is_active") is not False
+        item for item in detections if item.metadata.get("is_active") is not False
     ]
-
     if active:
-        output.append(
+        hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
                 title="Active provider-confirmed threat",
@@ -196,13 +180,11 @@ def build_hypotheses(
                     f"{item.source} reports {item.name} ({item.severity.name})."
                     for item in active[:5]
                 ),
-                evidence_against=(),
                 unresolved_questions=(
                     "Whether related persistence, child processes, or secondary payloads remain outside the provider record.",
                 ),
             )
         )
-
     suspicious = [
         item
         for item in analyses
@@ -214,7 +196,7 @@ def build_hypotheses(
         }
     ]
     if suspicious and not active:
-        output.append(
+        hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
                 title="Suspicious local activity without active provider confirmation",
@@ -232,45 +214,44 @@ def build_hypotheses(
                 ),
             )
         )
-
-    signed_low_concern = [
+    signed_low = [
         item
         for item in analyses
         if item.assessment is ThreatAssessmentLevel.LOW_CONCERN
         and item.identity.signature_state is SignatureState.VALID
     ]
-    if signed_low_concern and not active:
-        output.append(
+    if signed_low and not active:
+        hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
                 title="Legitimate signed software change",
                 category="benign_candidate",
-                confidence=min(
-                    0.92,
-                    0.60 + len(signed_low_concern) * 0.06,
-                ),
+                confidence=min(0.92, 0.60 + len(signed_low) * 0.06),
                 evidence_for=tuple(
                     f"{item.path.name} has a valid signer and low-concern local assessment."
-                    for item in signed_low_concern[:5]
+                    for item in signed_low[:5]
                 ),
-                evidence_against=tuple(
-                    f"{len(delta.new_persistence)} new persistence item(s) remain to be explained."
-                    for _ in (0,)
-                    if delta.new_persistence
-                ),
+                evidence_against=(
+                    (
+                        f"{len(delta.new_persistence)} new persistence item(s) remain to be explained."
+                    ),
+                )
+                if delta.new_persistence
+                else (),
                 unresolved_questions=(
                     "Whether the observed change aligns with a recent installation or update event.",
                 ),
             )
         )
-
-    if delta.meaningful_change_count and not output:
-        output.append(
+    if delta.meaningful_change_count and not hypotheses:
+        hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
                 title="Unexplained baseline drift",
                 category="unknown",
-                confidence=min(0.70, 0.30 + delta.meaningful_change_count * 0.03),
+                confidence=min(
+                    0.70, 0.30 + delta.meaningful_change_count * 0.03
+                ),
                 evidence_for=(
                     f"{delta.meaningful_change_count} security-relevant baseline change(s) were observed.",
                 ),
@@ -282,9 +263,8 @@ def build_hypotheses(
                 ),
             )
         )
-
-    if not output:
-        output.append(
+    if not hypotheses:
+        hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
                 title="No active compromise identified",
@@ -293,14 +273,12 @@ def build_hypotheses(
                 evidence_for=(
                     "No active provider detection or high-confidence local malicious assessment was correlated.",
                 ),
-                evidence_against=(),
                 unresolved_questions=(
                     "Read-only observation cannot prove the absence of behavior that was not observable during this snapshot.",
                 ),
             )
         )
-
-    return tuple(output)
+    return tuple(hypotheses)
 
 
 def escalation_for(risk: RiskVector, coverage: CoverageVector) -> str:
@@ -365,13 +343,9 @@ def build_case_summary(
     delta: BaselineDelta,
 ) -> str:
     if detection_count:
-        return (
-            f"Aegis correlated {detection_count} provider detection(s) with local machine evidence."
-        )
+        return f"Aegis correlated {detection_count} provider detection(s) with local machine evidence."
     if risk.overall >= 0.50:
-        return (
-            "Aegis identified elevated security risk from correlated local evidence and baseline drift."
-        )
+        return "Aegis identified elevated security risk from correlated local evidence and baseline drift."
     if delta.meaningful_change_count:
         return (
             f"Aegis reviewed {delta.meaningful_change_count} security-relevant baseline change(s) without confirming an active compromise."
@@ -387,44 +361,46 @@ def _append_path(output: list[Path], path: Path) -> None:
     except OSError:
         resolved = path.expanduser().absolute()
     key = _path_key(str(resolved))
-    if any(_path_key(str(item)) == key for item in output):
-        return
-    output.append(resolved)
+    if not any(_path_key(str(item)) == key for item in output):
+        output.append(resolved)
 
 
 def _extract_existing_target(raw: str) -> Path | None:
-    text = raw.strip().strip('"')
-    if not text:
-        return None
-    candidates = [text]
-    if text.startswith('"') and '"' in text[1:]:
-        candidates.insert(0, text.split('"', 2)[1])
+    raw_text = raw.strip()
+    quoted = None
+    if raw_text.startswith('"') and '"' in raw_text[1:]:
+        quoted = raw_text.split('"', 2)[1]
+    candidates = [item for item in (quoted, raw_text.strip('"')) if item]
     for candidate in candidates:
         expanded = os.path.expandvars(candidate).strip().strip('"')
-        path = Path(expanded)
-        if path.is_file():
-            return path
-        if " " in expanded:
-            parts = expanded.split()
-            for index in range(len(parts), 0, -1):
-                possible = Path(" ".join(parts[:index]).strip('"'))
-                if possible.is_file():
-                    return possible
+        direct = Path(expanded)
+        if direct.is_file():
+            return direct
+        parts = expanded.split()
+        for index in range(len(parts), 0, -1):
+            possible = Path(" ".join(parts[:index]).strip('"'))
+            if possible.is_file():
+                return possible
     return None
 
 
 def _assessment_likelihood(record: ThreatAnalysisRecord) -> float:
-    mapping = {
-        ThreatAssessmentLevel.INSUFFICIENT_EVIDENCE: 0.15,
-        ThreatAssessmentLevel.UNKNOWN: 0.25,
-        ThreatAssessmentLevel.LOW_CONCERN: 0.08,
-        ThreatAssessmentLevel.SUSPICIOUS: max(0.48, record.confidence * 0.75),
-        ThreatAssessmentLevel.LIKELY_MALICIOUS: max(0.75, record.confidence),
-        ThreatAssessmentLevel.PROVIDER_CONFIRMED_MALICIOUS: max(
-            0.92, record.confidence
-        ),
-    }
-    return _clamp(mapping[record.assessment])
+    return _clamp(
+        {
+            ThreatAssessmentLevel.INSUFFICIENT_EVIDENCE: 0.15,
+            ThreatAssessmentLevel.UNKNOWN: 0.25,
+            ThreatAssessmentLevel.LOW_CONCERN: 0.08,
+            ThreatAssessmentLevel.SUSPICIOUS: max(
+                0.48, record.confidence * 0.75
+            ),
+            ThreatAssessmentLevel.LIKELY_MALICIOUS: max(
+                0.75, record.confidence
+            ),
+            ThreatAssessmentLevel.PROVIDER_CONFIRMED_MALICIOUS: max(
+                0.92, record.confidence
+            ),
+        }[record.assessment]
+    )
 
 
 def _impact_from_analysis(record: ThreatAnalysisRecord) -> float:
@@ -433,9 +409,7 @@ def _impact_from_analysis(record: ThreatAnalysisRecord) -> float:
         return 0.90
     if any(token in text for token in ("persistence", "secondary payload", "data")):
         return 0.72
-    if record.possible_impacts:
-        return 0.45
-    return 0.20
+    return 0.45 if record.possible_impacts else 0.20
 
 
 def _severity_confidence(severity: SecuritySeverity) -> float:
@@ -443,7 +417,7 @@ def _severity_confidence(severity: SecuritySeverity) -> float:
         return 0.99
     if severity is SecuritySeverity.HIGH:
         return 0.97
-    if severity is SecuritySeverity.MEDIUM:
+    if severity is SecuritySeverity.MODERATE:
         return 0.94
     return 0.92
 
