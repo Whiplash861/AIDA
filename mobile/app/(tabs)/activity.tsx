@@ -1,5 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { GlassPanel } from '@/src/components/glass-panel';
@@ -7,6 +7,7 @@ import { PageShell } from '@/src/components/page-shell';
 import {
   getRuntimeActivity,
   RuntimeActivityItem,
+  subscribeRuntimeActivity,
 } from '@/src/core/runtime/aida-runtime';
 import {
   AIDA_COLORS,
@@ -39,6 +40,14 @@ export default function ActivityScreen() {
     setItems([...getRuntimeActivity(30)]);
   }, []);
 
+  useEffect(
+    () =>
+      subscribeRuntimeActivity((next) => {
+        setItems(next.slice(0, 30));
+      }),
+    [],
+  );
+
   useFocusEffect(
     useCallback(() => {
       load();
@@ -48,7 +57,7 @@ export default function ActivityScreen() {
   return (
     <PageShell
       title="Activity"
-      subtitle="Recent events produced by this device-local AIDA runtime."
+      subtitle="Persistent events produced by this device-local AIDA runtime."
       onRefresh={load}
     >
       {items.length === 0 ? (
@@ -56,7 +65,7 @@ export default function ActivityScreen() {
           <Text style={styles.emptyTitle}>NO RECENT ACTIVITY</Text>
           <Text style={styles.emptyBody}>
             Local runtime events, diagnostics, Engine activity, and warnings will
-            appear here as this Android instance develops.
+            appear here and persist across AIDA restarts on this device.
           </Text>
         </GlassPanel>
       ) : null}
