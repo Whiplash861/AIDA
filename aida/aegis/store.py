@@ -252,6 +252,12 @@ def _case_from_record(record: dict[str, Any]) -> SecurityCase:
         ),
         escalation=str(record.get("escalation") or "none"),
         remaining_uncertainty=tuple(record.get("remaining_uncertainty") or ()),
+        scan_strategy=str(record.get("scan_strategy") or "adaptive"),
+        learning_anomaly_score=float(record.get("learning_anomaly_score") or 0.0),
+        learning_confidence=float(record.get("learning_confidence") or 0.0),
+        learning_model_version=int(record.get("learning_model_version") or 0),
+        learning_sample_count=int(record.get("learning_sample_count") or 0),
+        learning_warmup=bool(record.get("learning_warmup", True)),
     )
 
 
