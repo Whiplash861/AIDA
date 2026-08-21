@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 
+BASE_WINDOW_PATH = Path("aida/frontend/_window_base.py")
 WINDOW_PATH = Path("aida/frontend/window.py")
 WIDGETS_PATH = Path("aida/frontend/widgets.py")
 APP_PATH = Path("aida/frontend/app.py")
@@ -11,8 +12,10 @@ DIALOG_PATH = Path("aida/frontend/artificer_dialog.py")
 
 
 def test_canonical_header_controls_are_preserved_with_artificer() -> None:
-    source = WINDOW_PATH.read_text(encoding="utf-8")
-    ast.parse(source)
+    base_source = BASE_WINDOW_PATH.read_text(encoding="utf-8")
+    window_source = WINDOW_PATH.read_text(encoding="utf-8")
+    ast.parse(base_source)
+    ast.parse(window_source)
 
     for label in (
         '"REPORT BUG"',
@@ -22,25 +25,32 @@ def test_canonical_header_controls_are_preserved_with_artificer() -> None:
         '"ARTIFICER"',
         'QCheckBox("AUTONOMY")',
     ):
-        assert label in source
+        assert label in base_source
 
-    assert "bug_report_requested = Signal()" in source
-    assert "memory_requested = Signal()" in source
-    assert "threat_center_requested = Signal()" in source
-    assert "task_center_requested = Signal()" in source
-    assert "artificer_requested = Signal()" in source
-    assert "autonomy_toggled = Signal(bool)" in source
+    for signal in (
+        "bug_report_requested = Signal()",
+        "memory_requested = Signal()",
+        "threat_center_requested = Signal()",
+        "task_center_requested = Signal()",
+        "artificer_requested = Signal()",
+        "autonomy_toggled = Signal(bool)",
+    ):
+        assert signal in base_source
 
+    # The public wrapper owns the modern header composition. Status and
+    # Autonomy stay ahead of the canonical action buttons, with flexible space
+    # between the orb and the right-anchored control cluster.
     order = [
-        source.index("self.bug_report_button,"),
-        source.index("self.memory_button,"),
-        source.index("self.threat_center_button,"),
-        source.index("self.task_center_button,"),
-        source.index("self.artificer_button,"),
-        source.index("header_layout.addLayout(autonomy_layout)"),
-        source.index("header_layout.addWidget(self.status_label)"),
+        window_source.index("self.orb_status_panel,"),
+        window_source.index("self.autonomy_panel,"),
+        window_source.index("self.bug_report_button,"),
+        window_source.index("self.memory_button,"),
+        window_source.index("self.threat_center_button,"),
+        window_source.index("self.task_center_button,"),
+        window_source.index("self.artificer_button,"),
     ]
     assert order == sorted(order)
+    assert "header_layout.insertStretch(insert_at, 1)" in window_source
 
 
 def test_artificer_remains_a_peer_dashboard_subsystem() -> None:
