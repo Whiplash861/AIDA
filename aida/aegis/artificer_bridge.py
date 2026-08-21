@@ -58,6 +58,7 @@ def _safe_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "learning_anomaly_band",
         "learning_confidence_band",
         "learning_model_version",
+        "learning_feature_schema_version",
         "learning_model_stage",
         "learning_sample_count",
         "learning_ready",
