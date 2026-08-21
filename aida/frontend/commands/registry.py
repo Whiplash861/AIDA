@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Iterable
 
+from aida.aegis.engine import AegisEngine
+from aida.aegis.runtime import ensure_aegis_engine
 from aida.applications.monitor import ApplicationHealthMonitor
 from aida.applications.models import RepairAction
 from aida.applications.repair import ApplicationRepairPlanner
@@ -13,6 +15,7 @@ from aida.autonomy.controller import AutonomyController
 from aida.autonomy.observation import AutonomyObservationService
 from aida.config import AidaConfig
 from aida.frontend.command_router import CommandType, RoutedCommand
+from aida.frontend.commands.aegis import AegisIntelligentScanExecutor
 from aida.frontend.commands.application import (
     ApplicationHealthExecutor,
     ApplicationRecoveryPlanExecutor,
@@ -73,6 +76,7 @@ class CommandRegistry:
         response_planner: GuidedResponsePlanner | None = None,
         remediation_service: DefenderRemediationService | None = None,
         detection_reader: DetectionReader | None = None,
+        aegis_engine: AegisEngine | None = None,
     ) -> None:
         if memory_service is None:
             database = MemoryDatabase(config.memory_db_path)
@@ -111,6 +115,12 @@ class CommandRegistry:
         self.remediation = remediation_service or DefenderRemediationService(
             snapshot_reader=self._detection_reader,
         )
+        self.aegis = aegis_engine or ensure_aegis_engine(
+            config,
+            memory=self.memory,
+            threat_analysis=self.threat_analysis,
+            detection_reader=self._detection_reader,
+        )
         self.application_monitor = application_monitor or ApplicationHealthMonitor()
         self.application_repair_planner = (
             application_repair_planner or ApplicationRepairPlanner()
@@ -120,6 +130,10 @@ class CommandRegistry:
             CommandType.QUICKSCAN: lambda command: QuickscanExecutor(config=config),
             CommandType.PERFORMANCE_SCAN: lambda command: PerformanceScanExecutor(),
             CommandType.SECURITY_STATUS: lambda command: SecurityStatusExecutor(),
+            CommandType.SECURITY_INTELLIGENT_SCAN: lambda command: AegisIntelligentScanExecutor(
+                self.aegis,
+                lambda: self._security_scan(SecurityScanMode.SURFACE, command),
+            ),
             CommandType.SECURITY_SURFACE_SCAN: lambda command: self._security_scan(
                 SecurityScanMode.SURFACE, command
             ),
