@@ -279,7 +279,7 @@ class AIDAWindow(_BaseAIDAWindow):
         )
 
     def _reorder_header_controls(self, header_layout: QHBoxLayout) -> None:
-        """Keep live state and autonomy beside the orb, ahead of action buttons."""
+        """Anchor AIDA/orb left and the status/control cluster to the right."""
         for index in range(header_layout.count() - 1, -1, -1):
             item = header_layout.itemAt(index)
             if item.spacerItem() is not None:
@@ -297,7 +297,12 @@ class AIDAWindow(_BaseAIDAWindow):
         for widget in ordered_widgets:
             header_layout.removeWidget(widget)
 
+        # The flexible spacer lives between the orb and the control cluster.
+        # Maximizing therefore expands only this middle void: the orb remains
+        # locked to AIDA's identity while the controls remain locked right.
         insert_at = header_layout.indexOf(self.internal_orb) + 1
+        header_layout.insertStretch(insert_at, 1)
+        insert_at += 1
         for widget in ordered_widgets:
             header_layout.insertWidget(
                 insert_at,
@@ -306,8 +311,6 @@ class AIDAWindow(_BaseAIDAWindow):
                 Qt.AlignmentFlag.AlignVCenter,
             )
             insert_at += 1
-
-        header_layout.addStretch(1)
 
     def _protect_dashboard_status_values(self) -> None:
         """Keep dashboard values readable instead of allowing text clipping."""

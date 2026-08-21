@@ -184,7 +184,7 @@ class AIDAWindow(QMainWindow):
         header.setObjectName("appHeader")
         identity_panel = QWidget()
         identity_panel.setObjectName("appIdentity")
-        identity_panel.setFixedWidth(210)
+        identity_panel.setFixedWidth(200)
         identity_layout = QVBoxLayout(identity_panel)
         identity_layout.setContentsMargins(0, 0, 0, 0)
         identity_layout.setSpacing(2)
