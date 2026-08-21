@@ -46,6 +46,14 @@ CREATE INDEX IF NOT EXISTS idx_aegis_cases_status_time
 ON aegis_cases(status, updated_at DESC);
 """
 
+_OPEN_CASE_STATUSES = (
+    AegisCaseStatus.OBSERVED.value,
+    AegisCaseStatus.INVESTIGATING.value,
+    AegisCaseStatus.ACTION_PENDING.value,
+    AegisCaseStatus.THREAT_CONFIRMED.value,
+    AegisCaseStatus.MONITORING.value,
+)
+
 
 class AegisStore:
     """Local durable state for Aegis baselines and security cases."""
@@ -134,11 +142,11 @@ class AegisStore:
         return [_case_from_record(json.loads(row["payload_json"])) for row in rows]
 
     def open_case_count(self) -> int:
-        terminal = (AegisCaseStatus.RESOLVED.value,)
+        placeholders = ",".join("?" for _ in _OPEN_CASE_STATUSES)
         with self._lock, self._connect() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) AS count FROM aegis_cases WHERE status NOT IN (?)",
-                terminal,
+                f"SELECT COUNT(*) AS count FROM aegis_cases WHERE status IN ({placeholders})",
+                _OPEN_CASE_STATUSES,
             ).fetchone()
         return int(row["count"] if row is not None else 0)
 
