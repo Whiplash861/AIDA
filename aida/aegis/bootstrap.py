@@ -22,7 +22,7 @@ def build_aegis_engine(
     threat_analysis: ThreatAnalysisService,
     detection_reader=None,
 ) -> AegisEngine:
-    data_root = _aegis_data_root(config)
+    data_root = _aegis_data_root(config, memory)
     data_root.mkdir(parents=True, exist_ok=True)
     raw_reader = detection_reader or _read_defender_detections
 
@@ -55,11 +55,15 @@ def build_aegis_engine(
     )
 
 
-def _aegis_data_root(config: AidaConfig) -> Path:
+def _aegis_data_root(config: AidaConfig, memory: MemoryService) -> Path:
     configured = os.getenv("AIDA_AEGIS_DATA_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
-    memory_path = Path(config.memory_db_path).expanduser()
+    configured_memory = getattr(config, "memory_db_path", None)
+    database_path = configured_memory or getattr(memory.database, "path", "")
+    if not database_path:
+        raise ValueError("Aegis requires a durable local data path")
+    memory_path = Path(database_path).expanduser()
     aida_root = memory_path.parent.parent
     return aida_root / "aegis"
 
