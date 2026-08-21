@@ -204,6 +204,12 @@ class SecurityCase:
     hypotheses: tuple[AegisHypothesis, ...]
     escalation: str
     remaining_uncertainty: tuple[str, ...] = ()
+    scan_strategy: str = "adaptive"
+    learning_anomaly_score: float = 0.0
+    learning_confidence: float = 0.0
+    learning_model_version: int = 0
+    learning_sample_count: int = 0
+    learning_warmup: bool = True
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -219,6 +225,7 @@ class IntelligentScanResult:
     provider_scan_summary: str
     baseline_established: bool
     elapsed_seconds: float
+    learning_sample_accepted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,3 +237,6 @@ class AegisSnapshot:
     baseline_available: bool
     open_case_count: int
     degraded_reasons: tuple[str, ...] = ()
+    learning_model_version: int = 0
+    learning_sample_count: int = 0
+    learning_ready: bool = False
