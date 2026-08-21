@@ -25,6 +25,14 @@ _CAPABILITIES = (
         purpose="Measure unseen process, persistence, and listener identity patterns without storing raw identities.",
     ),
     LearningCapability(
+        name="relationship_novelty_detection",
+        problem_type="graph_pattern_novelty",
+        purpose=(
+            "Learn privacy-preserving parent/child and process-activity relationship "
+            "patterns so unusual execution relationships can raise investigation priority."
+        ),
+    ),
+    LearningCapability(
         name="confidence_calibration_foundation",
         problem_type="calibration",
         purpose="Expose model confidence separately from security likelihood so future validation can calibrate predictions.",
