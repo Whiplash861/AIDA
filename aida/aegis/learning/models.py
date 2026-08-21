@@ -5,6 +5,9 @@ from enum import StrEnum
 from typing import Any
 
 
+AEGIS_FEATURE_SCHEMA_VERSION = 1
+
+
 class LearningModelStage(StrEnum):
     ACTIVE = "active"
     SHADOW = "shadow"
@@ -53,6 +56,7 @@ class LearningCapability:
 class LearningModelSnapshot:
     model_id: str
     model_version: int
+    feature_schema_version: int
     stage: LearningModelStage
     sample_count: int
     minimum_samples: int
