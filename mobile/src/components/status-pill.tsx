@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { StatusTone } from '@/src/services/aida-api';
+import { StatusTone } from '@/src/core/runtime/aida-runtime';
 import {
   AIDA_COLORS,
   AIDA_FONTS,
