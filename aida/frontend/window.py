@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -131,7 +130,7 @@ class AIDAWindow(_BaseAIDAWindow):
         self.orb_status_indicator = QLabel(header)
         self.orb_status_indicator.setObjectName("orbStatusIndicator")
         self.orb_status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.orb_status_indicator.setFixedWidth(92)
+        self.orb_status_indicator.setFixedWidth(88)
         self.orb_status_indicator.setStyleSheet(
             """
             QLabel#orbStatusIndicator {
@@ -217,18 +216,6 @@ class AIDAWindow(_BaseAIDAWindow):
         self.status_label.hide()
         self.status_label.setMinimumWidth(0)
         self.status_label.setMaximumWidth(0)
-
-        # Protect AIDA's identity copy from being squeezed by action buttons.
-        self.app_title.setMinimumWidth(96)
-        self.app_subtitle.setMinimumWidth(188)
-        self.app_title.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
-            QSizePolicy.Policy.Preferred,
-        )
-        self.app_subtitle.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
-            QSizePolicy.Policy.Preferred,
-        )
 
         self.autonomy_panel = QFrame(header)
         self.autonomy_panel.setObjectName("headerControlModule")
