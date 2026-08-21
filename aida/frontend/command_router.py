@@ -14,6 +14,7 @@ class CommandType(Enum):
     QUICKSCAN = auto()
     PERFORMANCE_SCAN = auto()
     SECURITY_STATUS = auto()
+    SECURITY_INTELLIGENT_SCAN = auto()
     SECURITY_SURFACE_SCAN = auto()
     SECURITY_DEEP_SCAN = auto()
     SECURITY_FULL_SWEEP = auto()
