@@ -35,9 +35,19 @@ def test_artificer_bridge_excludes_security_evidence_contents(monkeypatch) -> No
             "provider_detection_count": 1,
             "risk_band": "high",
             "coverage_band": "high",
+            "scan_strategy": "adaptive",
+            "learning_model_version": 2,
+            "learning_model_stage": "active",
+            "learning_sample_count": 18,
+            "learning_ready": True,
+            "learning_anomaly_band": "low",
+            "engineering_manifest_version": "1.0",
+            "shadow_supported": True,
+            "rollback_supported": True,
             "path": r"C:\Users\Private\secret.exe",
             "sha256": "a" * 64,
             "network_endpoint": "203.0.113.20:443",
+            "learning_feature_token": "process:private",
         },
     )
 
@@ -46,7 +56,14 @@ def test_artificer_bridge_excludes_security_evidence_contents(monkeypatch) -> No
     assert metadata["state"] == "observing"
     assert metadata["provider_detection_count"] == 1
     assert metadata["risk_band"] == "high"
+    assert metadata["scan_strategy"] == "adaptive"
+    assert metadata["learning_model_version"] == 2
+    assert metadata["learning_sample_count"] == 18
+    assert metadata["learning_ready"] is True
+    assert metadata["shadow_supported"] is True
+    assert metadata["rollback_supported"] is True
     assert "path" not in metadata
     assert "sha256" not in metadata
     assert "network_endpoint" not in metadata
+    assert "learning_feature_token" not in metadata
     assert "secret.exe" not in repr(metadata)

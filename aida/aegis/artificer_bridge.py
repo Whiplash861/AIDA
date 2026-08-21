@@ -11,8 +11,9 @@ class AegisArtificerBridge:
 
     Artificer already scans AIDA's configured source tree, so Aegis source is
     automatically included in Codewright reviews. This bridge adds runtime
-    reliability/performance evidence without exposing file paths, hashes,
-    network endpoints, command lines, or case contents.
+    reliability, performance, and engineering-pattern evidence without exposing
+    file paths, hashes, network endpoints, command lines, model feature tokens,
+    or Security Case contents.
     """
 
     def publish(
@@ -53,6 +54,19 @@ def _safe_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "escalation",
         "sensor_error_count",
         "baseline_available",
+        "scan_strategy",
+        "learning_anomaly_band",
+        "learning_confidence_band",
+        "learning_model_version",
+        "learning_feature_schema_version",
+        "learning_model_stage",
+        "learning_sample_count",
+        "learning_ready",
+        "learning_sample_accepted",
+        "learning_capability_count",
+        "engineering_manifest_version",
+        "shadow_supported",
+        "rollback_supported",
     }
     output: dict[str, Any] = {}
     for key, value in metadata.items():

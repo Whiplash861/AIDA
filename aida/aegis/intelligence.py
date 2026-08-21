@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 
+from aida.aegis.learning.models import LearningAssessment
 from aida.aegis.models import (
     AegisCaseStatus,
     AegisHypothesis,
@@ -68,6 +69,7 @@ def assess_risk(
     analyses: tuple[ThreatAnalysisRecord, ...],
     delta: BaselineDelta,
     snapshot: SecuritySnapshot,
+    learning: LearningAssessment | None = None,
 ) -> RiskVector:
     likelihood, impact = 0.05, 0.10
     activity, persistence, exposure = 0.05, 0.05, 0.05
@@ -111,6 +113,26 @@ def assess_risk(
     if snapshot.provider_health.active is False:
         impact = max(impact, 0.65)
         likelihood = max(likelihood, 0.30)
+
+    # Learned anomaly is deliberately bounded advisory evidence. It can raise
+    # investigation priority, but cannot by itself create provider-confirmed or
+    # high-confidence malicious status and cannot directly justify remediation.
+    if (
+        learning is not None
+        and not learning.warmup
+        and learning.confidence >= 0.35
+        and learning.anomaly_score >= 0.55
+    ):
+        learned_weight = learning.anomaly_score * learning.confidence
+        likelihood = max(
+            likelihood,
+            min(0.42, 0.16 + learned_weight * 0.26),
+        )
+        activity = max(
+            activity,
+            min(0.36, 0.12 + learned_weight * 0.22),
+        )
+
     urgency = max(
         likelihood * max(impact, 0.25),
         activity * 0.70,
@@ -158,6 +180,7 @@ def build_hypotheses(
     detections: tuple[ProviderDetection, ...],
     analyses: tuple[ThreatAnalysisRecord, ...],
     delta: BaselineDelta,
+    learning: LearningAssessment | None = None,
 ) -> tuple[AegisHypothesis, ...]:
     hypotheses: list[AegisHypothesis] = []
     active = [
@@ -243,6 +266,31 @@ def build_hypotheses(
                 ),
             )
         )
+
+    if (
+        learning is not None
+        and not learning.warmup
+        and learning.confidence >= 0.35
+        and learning.anomaly_score >= 0.55
+    ):
+        hypotheses.append(
+            AegisHypothesis(
+                hypothesis_id=uuid4().hex,
+                title="Behavior deviates from Aegis learned machine baseline",
+                category="learned_anomaly",
+                confidence=_clamp(
+                    learning.anomaly_score * max(0.45, learning.confidence)
+                ),
+                evidence_for=learning.reasons[:4],
+                evidence_against=(
+                    "Learned anomaly is not proof of malware and has no execution authority.",
+                ),
+                unresolved_questions=(
+                    "Whether deterministic provider, file, persistence, or timeline evidence explains the learned anomaly.",
+                ),
+            )
+        )
+
     if delta.meaningful_change_count and not hypotheses:
         hypotheses.append(
             AegisHypothesis(

@@ -7,6 +7,7 @@ from typing import Any
 from aida.intent.defaults import build_default_intent_registry
 from aida.intent.early_alpha import register_early_alpha_intents
 from aida.intent.models import IntentContext
+from aida.intent.normalizer import normalize_input
 from aida.intent.resolver import IntentResolver
 from aida.technomancer.intents import register_technomancer_intents
 
@@ -86,6 +87,16 @@ class CommandRouter:
         }
     )
 
+    _CLARIFICATION_CANCEL_PHRASES = frozenset(
+        {
+            "cancel",
+            "cancel that",
+            "never mind",
+            "nevermind",
+            "forget it",
+        }
+    )
+
     def __init__(self, resolver: IntentResolver | None = None) -> None:
         if resolver is None:
             registry = build_default_intent_registry()
@@ -114,16 +125,61 @@ class CommandRouter:
         )
 
     def route(self, text: str) -> RoutedCommand | None:
+        normalized = normalize_input(text.strip())
+        pending = tuple(
+            self._context.extra.get("clarification_candidates") or ()
+        )
+        if (
+            pending
+            and self._context.active_task is None
+            and normalized in self._CLARIFICATION_CANCEL_PHRASES
+        ):
+            local_only = bool(
+                self._context.extra.get("clarification_local_only", False)
+            )
+            self._clear_clarification_context()
+            return RoutedCommand(
+                command_type=CommandType.INTENT_CLARIFICATION,
+                original_text=text,
+                local_only=local_only,
+                clarification_text="Okay. The pending clarification was cancelled.",
+            )
+
         resolution = self.resolver.resolve(text, self._context)
         if resolution.resolved is None:
             if resolution.clarification:
+                candidates = tuple(
+                    candidate.definition.intent_id
+                    for candidate in resolution.candidates
+                )
+                domains = {
+                    intent_id.split(".", 1)[0]
+                    for intent_id in candidates
+                    if intent_id
+                }
+                extra = dict(self._context.extra)
+                extra["clarification_candidates"] = candidates
+                extra["clarification_local_only"] = any(
+                    candidate.definition.local_only
+                    for candidate in resolution.candidates
+                )
+                self._context = IntentContext(
+                    last_intent_id=self._context.last_intent_id,
+                    current_domain=(
+                        next(iter(domains))
+                        if len(domains) == 1
+                        else self._context.current_domain
+                    ),
+                    last_path=self._context.last_path,
+                    active_task=self._context.active_task,
+                    pending_confirmation_id=self._context.pending_confirmation_id,
+                    pending_confirmation_action=self._context.pending_confirmation_action,
+                    extra=extra,
+                )
                 return RoutedCommand(
                     command_type=CommandType.INTENT_CLARIFICATION,
                     original_text=text,
-                    local_only=any(
-                        candidate.definition.local_only
-                        for candidate in resolution.candidates
-                    ),
+                    local_only=bool(extra["clarification_local_only"]),
                     clarification_text=resolution.clarification,
                 )
             return None
@@ -135,6 +191,9 @@ class CommandRouter:
             return None
 
         target_path = resolved.slots.get("target_path")
+        extra = dict(self._context.extra)
+        extra.pop("clarification_candidates", None)
+        extra.pop("clarification_local_only", None)
         self._context = IntentContext(
             last_intent_id=resolved.intent_id,
             current_domain=resolved.intent_id.split(".", 1)[0],
@@ -148,7 +207,7 @@ class CommandRouter:
             pending_confirmation_action=(
                 self._context.pending_confirmation_action
             ),
-            extra=self._context.extra,
+            extra=extra,
         )
         return RoutedCommand(
             command_type=command_type,
@@ -163,3 +222,17 @@ class CommandRouter:
 
     def is_control_command(self, command: RoutedCommand) -> bool:
         return command.command_type in self._CONTROL_COMMANDS
+
+    def _clear_clarification_context(self) -> None:
+        extra = dict(self._context.extra)
+        extra.pop("clarification_candidates", None)
+        extra.pop("clarification_local_only", None)
+        self._context = IntentContext(
+            last_intent_id=self._context.last_intent_id,
+            current_domain=self._context.current_domain,
+            last_path=self._context.last_path,
+            active_task=self._context.active_task,
+            pending_confirmation_id=self._context.pending_confirmation_id,
+            pending_confirmation_action=self._context.pending_confirmation_action,
+            extra=extra,
+        )

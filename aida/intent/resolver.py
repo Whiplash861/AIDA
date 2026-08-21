@@ -70,7 +70,7 @@ class IntentResolver:
                 candidates=tuple(candidates[:4]),
                 clarification=(
                     "What type of scan should AIDA run: diagnostic Quickscan, "
-                    "Surface Security Scan, targeted Deep Scan, or Full-System Sweep?"
+                    "Aegis Adaptive, Surface, targeted Deep, or Full-System Sweep?"
                 ),
             )
 
@@ -197,13 +197,12 @@ class IntentResolver:
                 score -= 0.10
 
         if (
-            definition.intent_id == "security.scan.surface"
-            and _is_unqualified_security_scan(normalized)
+            definition.intent_id == "security.scan.intelligent"
+            and _is_unqualified_security_request(normalized)
         ):
-            score = max(score, 0.92)
+            score = max(score, 0.94)
             reasons.append(
-                "explicit malware, antivirus, or security scan defaults "
-                "to Surface Security Scan"
+                "unqualified security scan requests default to Aegis Adaptive"
             )
 
         negatives = [
@@ -229,6 +228,13 @@ class IntentResolver:
             score += 0.08
             reasons.append("matches the pending confirmation")
 
+        pending_candidates = tuple(
+            context.extra.get("clarification_candidates") or ()
+        )
+        if definition.intent_id in pending_candidates:
+            score += 0.10
+            reasons.append("matches the pending clarification choices")
+
         return _ScoreParts(
             score=max(0.0, min(1.0, score)),
             reasons=tuple(reasons),
@@ -252,13 +258,21 @@ def _has_exact_phrase_match(candidate: IntentCandidate) -> bool:
     )
 
 
-def _is_unqualified_security_scan(normalized: str) -> bool:
+def _is_unqualified_security_request(normalized: str) -> bool:
     security_phrases = (
         "malware scan",
+        "virus scan",
         "antivirus scan",
         "anti virus scan",
         "security scan",
         "defender scan",
+        "check for malware",
+        "check for viruses",
+        "check for threats",
+        "computer for malware",
+        "pc for malware",
+        "computer for viruses",
+        "pc for viruses",
     )
     if not any(
         contains_phrase(normalized, phrase)
@@ -266,7 +280,13 @@ def _is_unqualified_security_scan(normalized: str) -> bool:
     ):
         return False
 
-    explicit_non_surface_modes = (
+    explicit_modes = (
+        "surface",
+        "low level",
+        "light security",
+        "basic malware",
+        "quick malware",
+        "quick security",
         "deep",
         "deeply",
         "targeted",
@@ -282,13 +302,14 @@ def _is_unqualified_security_scan(normalized: str) -> bool:
         "all drives",
     )
     return not any(
-        contains_phrase(normalized, term)
-        for term in explicit_non_surface_modes
+        contains_phrase(normalized, term) for term in explicit_modes
     )
 
 
 def _needs_scan_type_clarification(normalized: str) -> bool:
     if "scan" not in normalized and "sweep" not in normalized:
+        return False
+    if _is_unqualified_security_request(normalized):
         return False
     explicit = (
         "quick scan",
@@ -296,6 +317,10 @@ def _needs_scan_type_clarification(normalized: str) -> bool:
         "performance",
         "system health",
         "diagnostic",
+        "intelligent",
+        "adaptive",
+        "smart security",
+        "aegis",
         "surface",
         "low level",
         "light security",

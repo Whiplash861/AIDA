@@ -4,9 +4,11 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Any
 
 from aida.aegis.artificer_bridge import AegisArtificerBridge
 from aida.aegis.baseline import compare_snapshots
+from aida.aegis.engineering_manifest import bridge_metadata, build_engineering_manifest
 from aida.aegis.evidence_graph import EvidenceGraphBuilder
 from aida.aegis.intelligence import (
     assess_coverage,
@@ -18,6 +20,8 @@ from aida.aegis.intelligence import (
     remaining_uncertainty,
     select_candidate_paths,
 )
+from aida.aegis.learning.features import extract_feature_vector
+from aida.aegis.learning.service import AegisLearningService
 from aida.aegis.models import (
     AegisCaseStatus,
     AegisSnapshot,
@@ -27,12 +31,17 @@ from aida.aegis.models import (
     SecurityCase,
     utc_now,
 )
+from aida.aegis.scan_modes import AegisScanStrategy
 from aida.aegis.sensors import AegisSystemSensor
 from aida.aegis.store import AegisStore
 from aida.memory.models import ProcessOutcome
 from aida.memory.service import MemoryService
 from aida.security.models import ProviderDetection
-from aida.security.threat_analysis import ThreatAnalysisRecord, ThreatAnalysisService
+from aida.security.threat_analysis import (
+    ThreatAnalysisRecord,
+    ThreatAnalysisService,
+    ThreatAssessmentLevel,
+)
 
 
 DetectionReader = Callable[[], Iterable[ProviderDetection]]
@@ -41,11 +50,10 @@ DetectionReader = Callable[[], Iterable[ProviderDetection]]
 class AegisEngine:
     """AIDA's background defensive intelligence and investigation engine.
 
-    Early Alpha authority is deliberately narrow: Aegis observes, correlates,
-    analyzes, builds cases, runs explicitly requested Intelligent Security
-    Scans, and recommends escalation. It does not autonomously delete,
-    quarantine, restore, terminate, exclude, disable protection, or launch a
-    Full-System Sweep.
+    Aegis owns security orchestration and adds deterministic correlation plus a
+    local adaptive-learning layer. Learned inference is evidence, never
+    execution authority. Provider facts, current identity, authorization, and
+    policy remain authoritative.
     """
 
     def __init__(
@@ -56,6 +64,7 @@ class AegisEngine:
         threat_analysis: ThreatAnalysisService,
         detection_reader: DetectionReader,
         sensor: AegisSystemSensor,
+        learning: AegisLearningService,
         bridge: AegisArtificerBridge | None = None,
         observation_interval_seconds: int = 900,
         initial_observation_delay_seconds: float = 5.0,
@@ -66,6 +75,7 @@ class AegisEngine:
         self.threat_analysis = threat_analysis
         self.detection_reader = detection_reader
         self.sensor = sensor
+        self.learning = learning
         self.bridge = bridge or AegisArtificerBridge()
         self.observation_interval_seconds = max(
             60, int(observation_interval_seconds)
@@ -94,6 +104,9 @@ class AegisEngine:
         thread = self._thread
         return bool(thread is not None and thread.is_alive())
 
+    def engineering_manifest(self) -> dict[str, Any]:
+        return build_engineering_manifest(self.learning)
+
     def start(self) -> None:
         if not self.enabled or self.running:
             return
@@ -105,13 +118,20 @@ class AegisEngine:
             daemon=True,
         )
         self._thread.start()
+        metadata = {
+            "state": self.state.value,
+            "baseline_available": self.store.load_baseline() is not None,
+            **bridge_metadata(self.learning),
+        }
         self.bridge.publish(
             event_type="engine_started",
             status="completed",
-            metadata={
-                "state": self.state.value,
-                "baseline_available": self.store.load_baseline() is not None,
-            },
+            metadata=metadata,
+        )
+        self.bridge.publish(
+            event_type="engineering_manifest_available",
+            status="completed",
+            metadata=bridge_metadata(self.learning),
         )
 
     def stop(self, timeout: float = 3.0) -> None:
@@ -124,10 +144,11 @@ class AegisEngine:
         self.bridge.publish(
             event_type="engine_stopped",
             status="completed",
-            metadata={"state": self.state.value},
+            metadata={"state": self.state.value, **bridge_metadata(self.learning)},
         )
 
     def snapshot(self) -> AegisSnapshot:
+        learned = self.learning.snapshot()
         return AegisSnapshot(
             state=self.state,
             running=self.running,
@@ -136,13 +157,17 @@ class AegisEngine:
             baseline_available=self.store.load_baseline() is not None,
             open_case_count=self.store.open_case_count(),
             degraded_reasons=self._degraded_reasons,
+            learning_model_version=learned.model_version,
+            learning_sample_count=learned.sample_count,
+            learning_ready=learned.ready,
         )
 
     def observe_once(self) -> None:
-        """Perform a low-cost read-only background observation.
+        """Perform a low-cost read-only background observation and safe learning.
 
-        This never starts a provider scan. It records only meaningful drift,
-        active provider detections, or degraded visibility in ordinary Memory.
+        This never starts a provider scan. Learning is allowed only when an
+        existing machine baseline is present and no active threat, degraded
+        visibility, or material unexplained drift is being normalized.
         """
 
         started = time.monotonic()
@@ -164,16 +189,48 @@ class AegisEngine:
                     )
                 )
 
+            features = extract_feature_vector(
+                snapshot=snapshot,
+                delta=delta,
+                detections=active,
+                analyses=(),
+            )
+            learned = self.learning.assess(features)
+            learning_eligible = bool(
+                baseline is not None
+                and not active
+                and not self._degraded_reasons
+                and delta.meaningful_change_count <= 2
+                and (learned.warmup or learned.anomaly_score < 0.55)
+            )
+            learning_sample_accepted = self.learning.learn_if_safe(
+                features,
+                eligible=learning_eligible,
+            )
+
             if active:
                 self._set_state(AegisState.THREAT_CONFIRMED)
             elif self._degraded_reasons:
                 self._set_state(AegisState.DEGRADED)
-            elif delta.meaningful_change_count >= 4:
+            elif (
+                delta.meaningful_change_count >= 4
+                or (
+                    not learned.warmup
+                    and learned.confidence >= 0.50
+                    and learned.anomaly_score >= 0.75
+                )
+            ):
                 self._set_state(AegisState.ELEVATED)
             else:
                 self._set_state(AegisState.OBSERVING)
 
-            if active or self._degraded_reasons or delta.meaningful_change_count >= 4:
+            should_record = bool(
+                active
+                or self._degraded_reasons
+                or delta.meaningful_change_count >= 4
+                or learned.anomaly_score >= 0.65
+            )
+            if should_record:
                 outcome = (
                     ProcessOutcome.PARTIAL
                     if self._degraded_reasons
@@ -184,21 +241,26 @@ class AegisEngine:
                     "security.aegis",
                     (
                         f"Aegis observed {len(active)} active provider detection(s), "
-                        f"{delta.meaningful_change_count} baseline change(s), and "
-                        f"{len(self._degraded_reasons)} visibility degradation(s)."
+                        f"{delta.meaningful_change_count} baseline change(s), "
+                        f"{len(self._degraded_reasons)} visibility degradation(s), "
+                        f"and a learned anomaly score of {round(learned.anomaly_score * 100)}%."
                     ),
                     payload={
                         "active_provider_detections": len(active),
                         "baseline_change_count": delta.meaningful_change_count,
                         "degraded_reason_count": len(self._degraded_reasons),
                         "state": self.state.value,
+                        "learning_anomaly_score": learned.anomaly_score,
+                        "learning_confidence": learned.confidence,
+                        "learning_model_version": learned.model_version,
                     },
                     outcome=outcome,
-                    confidence=0.95,
+                    confidence=max(0.50, learned.confidence),
                     promote=bool(active),
                 )
 
             self._last_observation_at = utc_now()
+            current_model = self.learning.snapshot()
             self.bridge.publish(
                 event_type="observation_completed",
                 status=("degraded" if self._degraded_reasons else "completed"),
@@ -209,6 +271,12 @@ class AegisEngine:
                     "baseline_change_count": delta.meaningful_change_count,
                     "sensor_error_count": len(self._degraded_reasons),
                     "baseline_available": baseline is not None,
+                    "learning_anomaly_band": _band(learned.anomaly_score),
+                    "learning_confidence_band": _band(learned.confidence),
+                    "learning_model_version": current_model.model_version,
+                    "learning_sample_count": current_model.sample_count,
+                    "learning_ready": current_model.ready,
+                    "learning_sample_accepted": learning_sample_accepted,
                 },
             )
         except Exception:
@@ -228,21 +296,30 @@ class AegisEngine:
         self,
         *,
         provider_scan_summary: str = "",
+        scan_strategy: str = "adaptive",
     ) -> IntelligentScanResult:
-        """Run the Aegis adaptive evidence-correlation phase.
+        """Run Aegis correlation and learning around an authorized scan mode.
 
-        The caller may first run AIDA's existing Surface Security Scan and pass
-        its transcript here. Aegis then correlates the fresh provider state with
-        machine drift, volatile activity, persistence, network exposure, and
-        targeted local threat analyses. Full Sweep remains recommendation-only.
+        All serviceable security scan modes can call this phase. Adaptive uses
+        the Surface provider scan as its economical first stage; explicit
+        Surface, Deep, and Full modes retain their requested provider coverage
+        while gaining the same Aegis intelligence around the result.
         """
+
+        try:
+            strategy = AegisScanStrategy(scan_strategy)
+        except ValueError:
+            strategy = AegisScanStrategy.ADAPTIVE
 
         started = time.monotonic()
         self._set_state(AegisState.INVESTIGATING)
         self.bridge.publish(
             event_type="intelligent_scan_started",
             status="started",
-            metadata={"state": self.state.value},
+            metadata={
+                "state": self.state.value,
+                "scan_strategy": strategy.value,
+            },
         )
         try:
             snapshot = self.sensor.capture()
@@ -255,11 +332,19 @@ class AegisEngine:
                 detections=detections,
             )
             analyses = self._analyze_candidates(candidates, detections)
+            features = extract_feature_vector(
+                snapshot=snapshot,
+                delta=delta,
+                detections=detections,
+                analyses=analyses,
+            )
+            learned = self.learning.assess(features)
             risk = assess_risk(
                 detections=detections,
                 analyses=analyses,
                 delta=delta,
                 snapshot=snapshot,
+                learning=learned,
             )
             coverage = assess_coverage(
                 snapshot=snapshot,
@@ -271,6 +356,7 @@ class AegisEngine:
                 detections=detections,
                 analyses=analyses,
                 delta=delta,
+                learning=learned,
             )
             nodes, edges = self._graph.build(
                 snapshot=snapshot,
@@ -309,6 +395,12 @@ class AegisEngine:
                     coverage=coverage,
                     analyses=analyses,
                 ),
+                scan_strategy=strategy.value,
+                learning_anomaly_score=learned.anomaly_score,
+                learning_confidence=learned.confidence,
+                learning_model_version=learned.model_version,
+                learning_sample_count=learned.sample_count,
+                learning_warmup=learned.warmup,
             )
             self.store.store_case(case)
 
@@ -322,6 +414,19 @@ class AegisEngine:
                 self.store.store_baseline(snapshot)
                 baseline_established = True
 
+            learning_sample_accepted = self.learning.learn_if_safe(
+                features,
+                eligible=self._training_eligible(
+                    baseline_available=(baseline is not None or baseline_established),
+                    snapshot=snapshot,
+                    detections=detections,
+                    analyses=analyses,
+                    risk_overall=risk.overall,
+                    learned_anomaly=learned.anomaly_score,
+                    learned_warmup=learned.warmup,
+                ),
+            )
+
             self._last_intelligent_scan_at = utc_now()
             self._degraded_reasons = tuple(snapshot.sensor_errors)
             self._set_state(_state_for_case(case.status, self._degraded_reasons))
@@ -334,6 +439,7 @@ class AegisEngine:
                 payload={
                     "case_id": case.case_id,
                     "case_status": case.status.value,
+                    "scan_strategy": strategy.value,
                     "risk": risk.overall,
                     "coverage": coverage.overall,
                     "provider_detection_count": len(detections),
@@ -341,6 +447,10 @@ class AegisEngine:
                     "baseline_change_count": delta.meaningful_change_count,
                     "escalation": escalation,
                     "baseline_established": baseline_established,
+                    "learning_anomaly_score": learned.anomaly_score,
+                    "learning_confidence": learned.confidence,
+                    "learning_model_version": learned.model_version,
+                    "learning_sample_accepted": learning_sample_accepted,
                 },
                 outcome=(
                     ProcessOutcome.PARTIAL
@@ -350,12 +460,14 @@ class AegisEngine:
                 confidence=coverage.overall,
                 promote=(status is AegisCaseStatus.THREAT_CONFIRMED),
             )
+            current_model = self.learning.snapshot()
             self.bridge.publish(
                 event_type="intelligent_scan_completed",
                 status=("degraded" if self._degraded_reasons else "completed"),
                 duration_ms=elapsed * 1000,
                 metadata={
                     "state": self.state.value,
+                    "scan_strategy": strategy.value,
                     "case_status": case.status.value,
                     "provider_detection_count": len(detections),
                     "analyzed_file_count": len(analyses),
@@ -367,6 +479,12 @@ class AegisEngine:
                     "baseline_available": (
                         baseline is not None or baseline_established
                     ),
+                    "learning_anomaly_band": _band(learned.anomaly_score),
+                    "learning_confidence_band": _band(learned.confidence),
+                    "learning_model_version": current_model.model_version,
+                    "learning_sample_count": current_model.sample_count,
+                    "learning_ready": current_model.ready,
+                    "learning_sample_accepted": learning_sample_accepted,
                 },
             )
             return IntelligentScanResult(
@@ -374,6 +492,7 @@ class AegisEngine:
                 provider_scan_summary=provider_scan_summary,
                 baseline_established=baseline_established,
                 elapsed_seconds=elapsed,
+                learning_sample_accepted=learning_sample_accepted,
             )
         except Exception:
             self._set_state(AegisState.DEGRADED)
@@ -384,6 +503,7 @@ class AegisEngine:
                 duration_ms=(time.monotonic() - started) * 1000,
                 metadata={
                     "state": self.state.value,
+                    "scan_strategy": strategy.value,
                     "sensor_error_count": 1,
                 },
             )
@@ -434,6 +554,33 @@ class AegisEngine:
             and not errors
         )
 
+    @staticmethod
+    def _training_eligible(
+        *,
+        baseline_available: bool,
+        snapshot: object,
+        detections: tuple[ProviderDetection, ...],
+        analyses: tuple[ThreatAnalysisRecord, ...],
+        risk_overall: float,
+        learned_anomaly: float,
+        learned_warmup: bool,
+    ) -> bool:
+        if not baseline_available or detections or risk_overall >= 0.20:
+            return False
+        if tuple(getattr(snapshot, "sensor_errors", ())):
+            return False
+        if any(
+            analysis.assessment
+            in {
+                ThreatAssessmentLevel.SUSPICIOUS,
+                ThreatAssessmentLevel.LIKELY_MALICIOUS,
+                ThreatAssessmentLevel.PROVIDER_CONFIRMED_MALICIOUS,
+            }
+            for analysis in analyses
+        ):
+            return False
+        return learned_warmup or learned_anomaly < 0.55
+
     def _observation_loop(self) -> None:
         if self._stop_event.wait(self.initial_observation_delay_seconds):
             return
@@ -449,9 +596,11 @@ class AegisEngine:
 
 def render_intelligent_scan(result: IntelligentScanResult) -> str:
     case = result.case
+    strategy = case.scan_strategy.replace("_", " ").title()
     lines = [
-        "AEGIS INTELLIGENT SECURITY SCAN",
+        f"AEGIS {strategy.upper()} SECURITY SCAN",
         "",
+        f"Mode: {strategy}",
         f"Case: {case.case_id}",
         f"Assessment: {case.status.value.replace('_', ' ').title()}",
         f"Threat likelihood: {round(case.risk.likelihood * 100)}%",
@@ -462,6 +611,14 @@ def render_intelligent_scan(result: IntelligentScanResult) -> str:
         f"Urgency: {round(case.risk.urgency * 100)}%",
         f"Overall risk: {round(case.risk.overall * 100)}%",
         f"Evidence coverage: {round(case.coverage.overall * 100)}%",
+        "",
+        "Adaptive learning:",
+        f"- Model version: {case.learning_model_version}",
+        f"- Trusted samples before this assessment: {case.learning_sample_count}",
+        f"- Learned anomaly: {round(case.learning_anomaly_score * 100)}%",
+        f"- Learning confidence: {round(case.learning_confidence * 100)}%",
+        f"- Model state: {'WARMING UP' if case.learning_warmup else 'ACTIVE'}",
+        f"- Current sample accepted for learning: {'yes' if result.learning_sample_accepted else 'no'}",
         "",
         case.summary,
         "",
@@ -505,7 +662,7 @@ def render_intelligent_scan(result: IntelligentScanResult) -> str:
         )
     else:
         lines.append(
-            "- No Full-System Sweep is currently justified by the correlated evidence."
+            "- No further scan escalation is currently justified by the correlated evidence."
         )
     if case.remaining_uncertainty:
         lines.extend(["", "Remaining uncertainty:"])
@@ -513,6 +670,7 @@ def render_intelligent_scan(result: IntelligentScanResult) -> str:
     lines.extend(
         [
             "",
+            "Aegis learned inference is advisory and did not override provider evidence or security policy.",
             "Aegis did not delete, quarantine, restore, exclude, terminate, or weaken any security control.",
             f"Aegis correlation phase elapsed: {result.elapsed_seconds:.2f}s",
         ]

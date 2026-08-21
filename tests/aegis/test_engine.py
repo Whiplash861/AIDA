@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from aida.aegis.engine import AegisEngine
+from aida.aegis.learning.service import AegisLearningService
+from aida.aegis.learning.store import AegisLearningStore
 from aida.aegis.models import ProviderHealth, SecuritySnapshot
 from aida.aegis.store import AegisStore
 from aida.memory.database import MemoryDatabase
@@ -56,6 +58,10 @@ def _engine(tmp_path, *, detections=()) -> AegisEngine:
         ),
         detection_reader=lambda: tuple(detections),
         sensor=_StaticSensor(_clean_snapshot()),
+        learning=AegisLearningService(
+            AegisLearningStore(tmp_path / "learning.json"),
+            minimum_samples=3,
+        ),
         bridge=bridge,
         observation_interval_seconds=3600,
         initial_observation_delay_seconds=3600,
@@ -70,10 +76,12 @@ def test_clean_first_intelligent_scan_establishes_baseline(tmp_path) -> None:
     )
 
     assert result.baseline_established is True
+    assert result.learning_sample_accepted is True
     assert engine.store.load_baseline() is not None
     assert result.case.provider_detection_count == 0
     assert result.case.escalation == "no_escalation"
     assert result.case.status.value == "assessed"
+    assert result.case.scan_strategy == "adaptive"
     assert engine.store.open_case_count() == 0
 
 
@@ -88,11 +96,13 @@ def test_active_provider_detection_creates_confirmed_case(tmp_path) -> None:
     )
     engine = _engine(tmp_path, detections=(detection,))
 
-    result = engine.run_intelligent_scan()
+    result = engine.run_intelligent_scan(scan_strategy="full")
 
     assert result.baseline_established is False
+    assert result.learning_sample_accepted is False
     assert result.case.status.value == "threat_confirmed"
     assert result.case.escalation == "full_sweep_recommended"
     assert result.case.risk.likelihood >= 0.95
+    assert result.case.scan_strategy == "full"
     assert engine.store.get_case(result.case.case_id) is not None
     assert engine.store.open_case_count() == 1

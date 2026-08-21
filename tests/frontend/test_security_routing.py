@@ -17,15 +17,21 @@ def test_routes_security_status() -> None:
         "Run a surface-level security scan",
         "run a surface level security scan",
         "start surface security scan",
-        "initiate a malware scan",
     ],
 )
-def test_routes_surface_security_scan_separately_from_quickscan(
+def test_routes_explicit_surface_security_scan_separately_from_quickscan(
     text: str,
 ) -> None:
     command = CommandRouter().route(text)
     assert command is not None
     assert command.command_type is CommandType.SECURITY_SURFACE_SCAN
+    assert command.local_only is True
+
+
+def test_unqualified_malware_scan_defaults_to_aegis_adaptive() -> None:
+    command = CommandRouter().route("initiate a malware scan")
+    assert command is not None
+    assert command.command_type is CommandType.SECURITY_INTELLIGENT_SCAN
     assert command.local_only is True
 
 
