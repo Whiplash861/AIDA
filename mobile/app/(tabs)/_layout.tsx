@@ -67,7 +67,7 @@ export default function MobileLayout() {
       <Tabs.Screen
         name="more"
         options={{
-          title: 'More',
+          title: 'Control',
         }}
       />
     </Tabs>
