@@ -1,0 +1,175 @@
+name: Restore refined orb with Technomancer
+
+on:
+  push:
+    branches:
+      - feature/technomancer-engine
+    paths:
+      - .github/workflows/restore-orb-technomancer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/technomancer-engine
+          fetch-depth: 0
+
+      - name: Restore refined orb integration
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'anchor not found in {path}: {old[:80]!r}')
+              text = text.replace(old, new, count)
+              p.write_text(text, encoding='utf-8')
+
+          # CYAN becomes a first-class state in the established orb state machine.
+          replace(
+              'aida/frontend/internal_orb.py',
+              '    GREEN = "green"\n    PURPLE = "purple"\n    RED = "red"\n',
+              '    GREEN = "green"\n    PURPLE = "purple"\n    CYAN = "cyan"\n    RED = "red"\n',
+          )
+
+          green_palette = '''    OrbVisualState.GREEN: (\n        QColor("#20C879"),\n        QColor("#68F0B2"),\n        QColor("#F1FFF8"),\n        QColor("#06291B"),\n        QColor("#020B07"),\n    ),\n'''
+          replace(
+              'aida/frontend/internal_orb.py',
+              green_palette,
+              green_palette + '''    OrbVisualState.CYAN: (\n        QColor("#00E5FF"),\n        QColor("#7CF5FF"),\n        QColor("#F4FEFF"),\n        QColor("#04333A"),\n        QColor("#011114"),\n    ),\n''',
+          )
+
+          replace(
+              'aida/frontend/internal_orb.py',
+              '            OrbVisualState.PURPLE,\n            OrbVisualState.RED,\n',
+              '            OrbVisualState.PURPLE,\n            OrbVisualState.CYAN,\n            OrbVisualState.RED,\n',
+          )
+          replace(
+              'aida/frontend/internal_orb.py',
+              '            if OrbVisualState.PURPLE in states:\n                return OrbVisualState.PURPLE\n            if OrbVisualState.GREEN in states:\n',
+              '            if OrbVisualState.PURPLE in states:\n                return OrbVisualState.PURPLE\n            if OrbVisualState.CYAN in states:\n                return OrbVisualState.CYAN\n            if OrbVisualState.GREEN in states:\n',
+          )
+          replace(
+              'aida/frontend/internal_orb.py',
+              '"""Run BLUE -> GREEN -> PURPLE -> RED -> current live state."""',
+              '"""Run BLUE -> GREEN -> PURPLE -> CYAN -> RED -> current live state."""',
+          )
+
+          # Fold Technomancer directly into the refined AIDAStatusOrb instead of
+          # wrapping the renderer and impersonating GREEN at paint time.
+          replace(
+              'aida/frontend/status_orb.py',
+              '    def __init__(self, parent=None) -> None:\n        super().__init__(parent=parent)\n',
+              '    def __init__(self, parent=None) -> None:\n        self._technomancer_status = "idle"\n        self._active_technomancer_tasks: set[str] = set()\n        super().__init__(parent=parent)\n',
+          )
+
+          replace(
+              'aida/frontend/status_orb.py',
+              '        if self._live_status.name == "SHUTDOWN":\n            return "OFFLINE"\n        if (\n',
+              '        if self._live_status.name == "SHUTDOWN":\n            return "OFFLINE"\n        if self._technomancer_is_active():\n            return "TECHNOMANCER"\n        if (\n',
+          )
+
+          insert_anchor = '''    # ------------------------------------------------------------------\n    # RED ring scheduler\n    # ------------------------------------------------------------------\n'''
+          technomancer_methods = '''    # ------------------------------------------------------------------\n    # Technomancer live state\n    # ------------------------------------------------------------------\n\n    def _technomancer_is_active(self) -> bool:\n        return bool(\n            self._active_technomancer_tasks\n            or self._technomancer_status\n            in {"running", "working", "analyzing", "reviewing", "monitoring"}\n        )\n\n    def _resolve_live_state(self) -> OrbVisualState:\n        state = super()._resolve_live_state()\n        if state is OrbVisualState.RED:\n            return state\n        if self._technomancer_is_active():\n            return OrbVisualState.CYAN\n        return state\n\n    def set_technomancer_status(self, text: str) -> None:\n        normalized = text.strip().lower() or "idle"\n        self._technomancer_status = normalized\n        self.set_trouble_code(\n            "TECHNOMANCER-FAILURE",\n            active=normalized in {"error", "failed", "failure"},\n        )\n        self._refresh_live_visual_state()\n\n    def report_task_started(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if normalized.startswith("technomancer"):\n            self._active_technomancer_tasks.add(normalized)\n            self._technomancer_status = "running"\n            self.clear_trouble_code("TECHNOMANCER-FAILURE")\n        super().report_task_started(task_name)\n        if normalized.startswith("technomancer"):\n            self._refresh_live_visual_state()\n\n    def report_task_finished(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if normalized.startswith("technomancer"):\n            self._active_technomancer_tasks.discard(normalized)\n            if not self._active_technomancer_tasks:\n                self._technomancer_status = "idle"\n        super().report_task_finished(task_name)\n        if normalized.startswith("technomancer"):\n            QTimer.singleShot(0, self._refresh_live_visual_state)\n\n    def report_task_failed(self, task_name: str) -> None:\n        normalized = task_name.strip().lower()\n        if not normalized.startswith("technomancer"):\n            super().report_task_failed(task_name)\n            return\n        self._active_technomancer_tasks.discard(normalized)\n        self._technomancer_status = "error"\n        self.set_trouble_code("TECHNOMANCER-FAILURE", active=True)\n\n'''
+          replace(
+              'aida/frontend/status_orb.py',
+              insert_anchor,
+              technomancer_methods + insert_anchor,
+          )
+          replace(
+              'aida/frontend/status_orb.py',
+              '"""Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""',
+              '"""Run BLUE -> GREEN -> VIOLET -> CYAN -> RED -> current live state."""',
+          )
+
+          # Header uses the same refined renderer directly. Technomancer Cyan is
+          # now simply another native state and therefore gets identical pulse,
+          # geometry, RED scheduler isolation, and test behavior.
+          replace(
+              'aida/frontend/window.py',
+              'from aida.frontend.engine_status_orb import AIDAStatusOrb\n',
+              'from aida.frontend.status_orb import AIDAStatusOrb\n',
+          )
+          replace(
+              'aida/frontend/window.py',
+              '            ("Ctrl+Shift+3", OrbVisualState.PURPLE),\n            ("Ctrl+Shift+4", OrbVisualState.RED),\n',
+              '            ("Ctrl+Shift+3", OrbVisualState.PURPLE),\n            ("Ctrl+Shift+4", OrbVisualState.RED),\n            ("Ctrl+Shift+5", OrbVisualState.CYAN),\n',
+          )
+          cyan_shortcut = '''        self._orb_cyan_test_shortcut = QShortcut(\n            QKeySequence("Ctrl+Shift+5"),\n            self,\n        )\n        self._orb_cyan_test_shortcut.activated.connect(self.start_orb_cyan_test)\n\n'''
+          replace('aida/frontend/window.py', cyan_shortcut, '')
+          replace(
+              'aida/frontend/window.py',
+              '''    @Slot()\n    def start_orb_cyan_test(self) -> None:\n        """Show Technomancer cyan for ten seconds, then return to live state."""\n        self.internal_orb.start_cyan_color_test(\n            self._TARGETED_ORB_TEST_SECONDS\n        )\n        self.dashboard.add_activity(\n            f"ORB targeted color test: CYAN for "\n            f"{self._TARGETED_ORB_TEST_SECONDS:g}s"\n        )\n\n''',
+              '''    @Slot()\n    def start_orb_cyan_test(self) -> None:\n        """Show Technomancer cyan for ten seconds, then return to live state."""\n        self.start_orb_targeted_color_test(OrbVisualState.CYAN)\n\n''',
+          )
+          replace(
+              'aida/frontend/window.py',
+              '"""Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""',
+              '"""Run BLUE -> GREEN -> VIOLET -> CYAN -> RED -> current live state."""',
+          )
+          replace(
+              'aida/frontend/window.py',
+              '"ORB color test: BLUE > GREEN > VIOLET > RED > LIVE"',
+              '"ORB color test: BLUE > GREEN > VIOLET > CYAN > RED > LIVE"',
+          )
+
+          # Detached orb is again the exact same AIDAStatusOrb renderer as the
+          # embedded one, with only top-level window/click/drag behavior layered on.
+          replace(
+              'aida/frontend/live_overlay.py',
+              'from aida.frontend.engine_status_orb import AIDAStatusOrb\n',
+              'from aida.frontend.status_orb import AIDAStatusOrb\n',
+          )
+
+          # App-level Engine state drives both visible orb instances, including
+          # while the main window is minimized.
+          replace(
+              'aida/frontend/app.py',
+              'from aida.frontend.controller import AIDAController\n',
+              'from aida.frontend.controller import AIDAController\nfrom aida.frontend.engine_state import ENGINE_VISUAL_STATE\n',
+          )
+          app_anchor = '''    task_manager.task_started.connect(handle_overlay_task_started)\n    task_manager.task_finished.connect(handle_overlay_task_finished)\n    task_manager.task_failed.connect(handle_overlay_task_failed)\n\n    artificer_engine.start(run_startup_review=False)\n'''
+          app_insert = '''    task_manager.task_started.connect(handle_overlay_task_started)\n    task_manager.task_finished.connect(handle_overlay_task_finished)\n    task_manager.task_failed.connect(handle_overlay_task_failed)\n\n    technomancer_visual_timer = QTimer(app)\n    technomancer_visual_timer.setInterval(100)\n    last_technomancer_status: list[str | None] = [None]\n\n    def sync_technomancer_visual_state() -> None:\n        status = ENGINE_VISUAL_STATE.status("technomancer")\n        if status == last_technomancer_status[0]:\n            return\n        last_technomancer_status[0] = status\n        window.set_technomancer_status(status)\n        overlay.set_technomancer_status(status)\n\n    technomancer_visual_timer.timeout.connect(sync_technomancer_visual_state)\n    technomancer_visual_timer.start()\n    sync_technomancer_visual_state()\n\n    artificer_engine.start(run_startup_review=False)\n'''
+          replace('aida/frontend/app.py', app_anchor, app_insert)
+          replace(
+              'aida/frontend/app.py',
+              '    finally:\n        observation_timer.stop()\n',
+              '    finally:\n        technomancer_visual_timer.stop()\n        technomancer_visual_timer.timeout.disconnect(sync_technomancer_visual_state)\n        observation_timer.stop()\n',
+          )
+
+          # The wrapper was the regression source and is intentionally retired.
+          wrapper = Path('aida/frontend/engine_status_orb.py')
+          if wrapper.exists():
+              wrapper.unlink()
+          PY
+
+      - name: Validate syntax and Technomancer references
+        shell: bash
+        run: |
+          python -m py_compile \
+            aida/frontend/internal_orb.py \
+            aida/frontend/status_orb.py \
+            aida/frontend/live_overlay.py \
+            aida/frontend/window.py \
+            aida/frontend/app.py \
+            aida/frontend/engine_state.py \
+            aida/frontend/widgets.py \
+            aida/technomancer/engine.py
+          ! grep -R "engine_status_orb" -n aida/frontend --include='*.py'
+
+      - name: Commit restored frontend
+        shell: bash
+        run: |
+          git config user.name "AIDA GitHub Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Restore refined orb behavior with native Technomancer cyan"
+          git push origin HEAD:feature/technomancer-engine
