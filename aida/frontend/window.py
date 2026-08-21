@@ -127,24 +127,41 @@ class AIDAWindow(_BaseAIDAWindow):
         )
 
         self._orb_visual_override_active = False
-        self.orb_status_indicator = QLabel(header)
-        self.orb_status_indicator.setObjectName("orbStatusIndicator")
-        self.orb_status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.orb_status_indicator.setFixedWidth(88)
-        self.orb_status_indicator.setStyleSheet(
-            """
+        self.orb_status_panel = QFrame(header)
+        self.orb_status_panel.setObjectName("headerStateModule")
+        self.orb_status_panel.setFixedSize(132, 50)
+        self.orb_status_panel.setStyleSheet(
+            self._HEADER_MODULE_STYLE
+            + """
             QLabel#orbStatusIndicator {
-                color: rgba(201, 232, 255, 225);
-                font-size: 9px;
-                font-weight: 700;
+                color: rgba(201, 232, 255, 235);
+                font-family: "Cascadia Mono", "Consolas";
+                font-size: 10px;
+                font-weight: 750;
                 letter-spacing: 1px;
-                padding: 1px 3px;
             }
             """
         )
+        self.orb_status_caption = QLabel("CURRENT STATUS", self.orb_status_panel)
+        self.orb_status_caption.setObjectName("headerControlCaption")
+        self.orb_status_caption.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.orb_status_indicator = QLabel("STARTING", self.orb_status_panel)
+        self.orb_status_indicator.setObjectName("orbStatusIndicator")
+        self.orb_status_indicator.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        orb_status_layout = QVBoxLayout(self.orb_status_panel)
+        orb_status_layout.setContentsMargins(10, 5, 10, 5)
+        orb_status_layout.setSpacing(1)
+        orb_status_layout.addWidget(self.orb_status_caption)
+        orb_status_layout.addWidget(self.orb_status_indicator)
+
         header_layout.insertWidget(
             2,
-            self.orb_status_indicator,
+            self.orb_status_panel,
             0,
             Qt.AlignmentFlag.AlignVCenter,
         )
@@ -155,6 +172,7 @@ class AIDAWindow(_BaseAIDAWindow):
         self._refresh_orb_status_indicator()
 
         self._modernize_header_controls(header, header_layout)
+        self._reorder_header_controls(header_layout)
         self._protect_dashboard_status_values()
 
         self._orb_test_shortcut = QShortcut(
@@ -219,7 +237,7 @@ class AIDAWindow(_BaseAIDAWindow):
 
         self.autonomy_panel = QFrame(header)
         self.autonomy_panel.setObjectName("headerControlModule")
-        self.autonomy_panel.setFixedSize(136, 50)
+        self.autonomy_panel.setFixedSize(132, 50)
         self.autonomy_panel.setStyleSheet(
             self._HEADER_MODULE_STYLE + self._AUTONOMY_STYLE
         )
@@ -260,6 +278,37 @@ class AIDAWindow(_BaseAIDAWindow):
             Qt.AlignmentFlag.AlignVCenter,
         )
 
+    def _reorder_header_controls(self, header_layout: QHBoxLayout) -> None:
+        """Keep live state and autonomy beside the orb, ahead of action buttons."""
+        for index in range(header_layout.count() - 1, -1, -1):
+            item = header_layout.itemAt(index)
+            if item.spacerItem() is not None:
+                header_layout.takeAt(index)
+
+        ordered_widgets = (
+            self.orb_status_panel,
+            self.autonomy_panel,
+            self.bug_report_button,
+            self.memory_button,
+            self.threat_center_button,
+            self.task_center_button,
+            self.artificer_button,
+        )
+        for widget in ordered_widgets:
+            header_layout.removeWidget(widget)
+
+        insert_at = header_layout.indexOf(self.internal_orb) + 1
+        for widget in ordered_widgets:
+            header_layout.insertWidget(
+                insert_at,
+                widget,
+                0,
+                Qt.AlignmentFlag.AlignVCenter,
+            )
+            insert_at += 1
+
+        header_layout.addStretch(1)
+
     def _protect_dashboard_status_values(self) -> None:
         """Keep dashboard values readable instead of allowing text clipping."""
         self.dashboard.setMinimumWidth(258)
@@ -289,8 +338,11 @@ class AIDAWindow(_BaseAIDAWindow):
         self.autonomy_state_label.update()
 
     def _set_orb_status_text(self, heading: str, value: str) -> None:
+        self.orb_status_caption.setText(
+            heading.strip().upper() or "CURRENT STATUS"
+        )
         self.orb_status_indicator.setText(
-            f"{heading.strip().upper()}\n────────\n{value.strip().upper()}"
+            value.strip().upper() or "UNKNOWN"
         )
 
     def _refresh_orb_status_indicator(self) -> None:
