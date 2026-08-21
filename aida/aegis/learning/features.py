@@ -29,11 +29,15 @@ def extract_feature_vector(
             ThreatAssessmentLevel.PROVIDER_CONFIRMED_MALICIOUS,
         }
     )
+    parent_child_count = sum(
+        1 for process in snapshot.processes if process.parent_pid is not None
+    )
     numeric = {
         "process_count": float(len(snapshot.processes)),
         "persistence_count": float(len(snapshot.persistence)),
         "listener_count": float(len(snapshot.listeners)),
         "remote_endpoint_count": float(remote_endpoint_count),
+        "parent_child_relationship_count": float(parent_child_count),
         "new_process_count": float(len(delta.new_process_paths)),
         "new_persistence_count": float(len(delta.new_persistence)),
         "new_listener_count": float(len(delta.new_listeners)),
@@ -44,10 +48,36 @@ def extract_feature_vector(
     }
 
     identity_tokens: list[str] = []
+    process_by_pid = {process.pid: process for process in snapshot.processes}
     for process in snapshot.processes:
         identity = process.executable or process.name
-        if identity:
-            identity_tokens.append(_token("process", identity))
+        if not identity:
+            continue
+        identity_tokens.append(_token("process", identity))
+        parent = process_by_pid.get(process.parent_pid or -1)
+        if parent is not None:
+            parent_identity = parent.executable or parent.name
+            if parent_identity:
+                identity_tokens.append(
+                    _token(
+                        "parent_child",
+                        f"{parent_identity}|{identity}",
+                    )
+                )
+        if process.remote_endpoints:
+            identity_tokens.append(
+                _token(
+                    "process_remote_activity",
+                    f"{identity}|remote_present",
+                )
+            )
+        if process.listening_endpoints:
+            identity_tokens.append(
+                _token(
+                    "process_listener_activity",
+                    f"{identity}|listener_present",
+                )
+            )
     for item in snapshot.persistence:
         identity_tokens.append(
             _token(
