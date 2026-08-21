@@ -1,0 +1,124 @@
+name: Polish AIDA header controls
+
+on:
+  push:
+    branches:
+      - feature/technomancer-engine
+    paths:
+      - .github/workflows/polish-header-controls.yml
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/technomancer-engine
+          fetch-depth: 0
+
+      - name: Apply compact HUD controls
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"anchor not found in {path}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          # Header: convert autonomy and app state into paired compact HUD modules.
+          replace(
+              "aida/frontend/_window_base.py",
+              "    QMainWindow,\n    QPushButton,\n    QSplitter,\n",
+              "    QMainWindow,\n    QPushButton,\n    QSizePolicy,\n    QSplitter,\n",
+          )
+          replace(
+              "aida/frontend/_window_base.py",
+              '''        self.autonomy_switch = QCheckBox("AUTONOMY")\n        self.autonomy_switch.setObjectName("autonomySwitch")\n        self.autonomy_switch.setToolTip(\n            "When disabled, every operational decision is routed to the user first."\n        )\n        self.autonomy_state_label = QLabel("MANUAL")\n        self.autonomy_state_label.setObjectName("autonomyStateLabel")\n        self.autonomy_state_label.setMinimumWidth(72)\n        self.autonomy_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)\n\n        self.status_label = QLabel("STARTUP")\n        self.status_label.setObjectName("statusLabel")\n        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)\n        self.status_label.setMinimumWidth(110)\n''',
+              '''        self.autonomy_panel = QFrame()\n        self.autonomy_panel.setObjectName("headerControlModule")\n        self.autonomy_panel.setFixedSize(154, 54)\n        self.autonomy_caption = QLabel("AUTONOMY")\n        self.autonomy_caption.setObjectName("headerControlCaption")\n\n        self.autonomy_switch = QCheckBox("")\n        self.autonomy_switch.setObjectName("autonomySwitch")\n        self.autonomy_switch.setCursor(Qt.CursorShape.PointingHandCursor)\n        self.autonomy_switch.setFixedSize(34, 20)\n        self.autonomy_switch.setToolTip(\n            "Enable or disable Controlled Autonomy."\n        )\n        self.autonomy_state_label = QLabel("DISABLED")\n        self.autonomy_state_label.setObjectName("autonomyStateLabel")\n        self.autonomy_state_label.setProperty("state", "disabled")\n        self.autonomy_state_label.setMinimumWidth(82)\n        self.autonomy_state_label.setAlignment(\n            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter\n        )\n\n        self.status_panel = QFrame()\n        self.status_panel.setObjectName("headerStateModule")\n        self.status_panel.setFixedSize(116, 54)\n        self.status_caption = QLabel("CORE STATE")\n        self.status_caption.setObjectName("headerControlCaption")\n\n        self.status_label = QLabel("STARTUP")\n        self.status_label.setObjectName("statusLabel")\n        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)\n        self.status_label.setFixedWidth(96)\n        self.status_label.setMaximumHeight(27)\n        self.status_label.setSizePolicy(\n            QSizePolicy.Policy.Fixed,\n            QSizePolicy.Policy.Fixed,\n        )\n''',
+          )
+          replace(
+              "aida/frontend/_window_base.py",
+              '''        autonomy_layout = QHBoxLayout()\n        autonomy_layout.setContentsMargins(0, 0, 0, 0)\n        autonomy_layout.setSpacing(6)\n        autonomy_layout.addWidget(self.autonomy_switch)\n        autonomy_layout.addWidget(self.autonomy_state_label)\n\n        header_layout = QHBoxLayout()\n''',
+              '''        autonomy_value_layout = QHBoxLayout()\n        autonomy_value_layout.setContentsMargins(0, 0, 0, 0)\n        autonomy_value_layout.setSpacing(7)\n        autonomy_value_layout.addWidget(self.autonomy_switch)\n        autonomy_value_layout.addWidget(self.autonomy_state_label, stretch=1)\n\n        autonomy_layout = QVBoxLayout()\n        autonomy_layout.setContentsMargins(10, 6, 10, 6)\n        autonomy_layout.setSpacing(2)\n        autonomy_layout.addWidget(self.autonomy_caption)\n        autonomy_layout.addLayout(autonomy_value_layout)\n        self.autonomy_panel.setLayout(autonomy_layout)\n\n        status_layout = QVBoxLayout()\n        status_layout.setContentsMargins(10, 6, 10, 6)\n        status_layout.setSpacing(2)\n        status_layout.addWidget(self.status_caption)\n        status_layout.addWidget(\n            self.status_label,\n            0,\n            Qt.AlignmentFlag.AlignHCenter,\n        )\n        self.status_panel.setLayout(status_layout)\n\n        header_layout = QHBoxLayout()\n''',
+          )
+          replace(
+              "aida/frontend/_window_base.py",
+              '''        header_layout.addLayout(autonomy_layout)\n        header_layout.addWidget(self.status_label)\n''',
+              '''        header_layout.addWidget(self.autonomy_panel)\n        header_layout.addWidget(self.status_panel)\n''',
+          )
+          replace(
+              "aida/frontend/_window_base.py",
+              '''    def set_autonomy_status(self, text: str) -> None:\n        self.autonomy_state_label.setText(text.strip().upper() or "MANUAL")\n''',
+              '''    def set_autonomy_status(self, text: str) -> None:\n        normalized = text.strip().upper() or "DISABLED"\n        if normalized == "MANUAL":\n            normalized = "DISABLED"\n        self.autonomy_state_label.setText(normalized)\n        if normalized == "ENABLED":\n            state = "enabled"\n        elif normalized == "LOCKED":\n            state = "locked"\n        elif normalized == "UPDATING":\n            state = "updating"\n        else:\n            state = "disabled"\n        self.autonomy_state_label.setProperty("state", state)\n        style = self.autonomy_state_label.style()\n        style.unpolish(self.autonomy_state_label)\n        style.polish(self.autonomy_state_label)\n        self.autonomy_state_label.update()\n''',
+          )
+          replace(
+              "aida/frontend/_window_base.py",
+              "        header_layout.setSpacing(9)\n",
+              "        header_layout.setSpacing(7)\n",
+          )
+          replace(
+              "aida/frontend/_window_base.py",
+              "        self.workspace_splitter.setSizes([250, 900])\n",
+              "        self.workspace_splitter.setSizes([260, 890])\n",
+          )
+
+          # User-facing autonomy vocabulary: ENABLED / DISABLED, never MANUAL.
+          controller = Path("aida/frontend/controller.py")
+          text = controller.read_text(encoding="utf-8")
+          text = text.replace('else "MANUAL"', 'else "DISABLED"')
+          controller.write_text(text, encoding="utf-8")
+
+          # Status dashboard: reserve sufficient width for complete values.
+          replace(
+              "aida/frontend/widgets.py",
+              "        self.setMinimumWidth(78)\n",
+              "        self.setMinimumWidth(96)\n",
+          )
+          replace(
+              "aida/frontend/widgets.py",
+              "        self.setMinimumWidth(220)\n        self.setMaximumWidth(380)\n",
+              "        self.setMinimumWidth(246)\n        self.setMaximumWidth(400)\n",
+          )
+          replace(
+              "aida/frontend/widgets.py",
+              "        status_grid.setHorizontalSpacing(18)\n",
+              "        status_grid.setHorizontalSpacing(12)\n        status_grid.setColumnMinimumWidth(1, 96)\n",
+          )
+
+          # Theme: paired HUD modules, modern switch, semantic autonomy colors,
+          # and a tighter state pill rather than a tall stretched slab.
+          replace(
+              "aida/frontend/theme.py",
+              '''QLabel#statusLabel {\n    color: #afc2d1;\n\n    background:\n        qlineargradient(\n            x1: 0,\n            y1: 0,\n            x2: 0,\n            y2: 1,\n            stop: 0 rgba(51, 69, 82, 205),\n            stop: 1 rgba(24, 35, 45, 220)\n        );\n\n    border: 1px solid rgba(147, 194, 221, 70);\n    border-radius: 15px;\n\n    padding: 7px 16px;\n\n    font-size: 9pt;\n    font-weight: 700;\n    letter-spacing: 1px;\n}\n''',
+              '''QFrame#headerControlModule,\nQFrame#headerStateModule {\n    background:\n        qlineargradient(\n            x1: 0,\n            y1: 0,\n            x2: 1,\n            y2: 1,\n            stop: 0 rgba(12, 35, 49, 218),\n            stop: 1 rgba(5, 21, 31, 232)\n        );\n    border: 1px solid rgba(91, 207, 240, 72);\n    border-radius: 12px;\n}\n\nQFrame#headerControlModule:hover,\nQFrame#headerStateModule:hover {\n    border-color: rgba(91, 220, 255, 120);\n}\n\nQLabel#headerControlCaption {\n    color: #718c9d;\n    font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Segoe UI";\n    font-size: 6pt;\n    font-weight: 650;\n    letter-spacing: 2px;\n}\n\nQCheckBox#autonomySwitch {\n    spacing: 0;\n    padding: 0;\n}\n\nQCheckBox#autonomySwitch::indicator {\n    width: 28px;\n    height: 14px;\n    border: 1px solid rgba(139, 168, 186, 105);\n    border-radius: 7px;\n    background: rgba(23, 38, 48, 235);\n}\n\nQCheckBox#autonomySwitch::indicator:hover {\n    border-color: rgba(105, 220, 255, 175);\n}\n\nQCheckBox#autonomySwitch::indicator:checked {\n    background: qlineargradient(\n        x1: 0, y1: 0, x2: 1, y2: 0,\n        stop: 0 rgba(25, 155, 104, 240),\n        stop: 1 rgba(53, 231, 166, 245)\n    );\n    border-color: rgba(102, 246, 190, 210);\n}\n\nQLabel#autonomyStateLabel {\n    color: #8fa4b3;\n    font-family: "Cascadia Mono", "Consolas";\n    font-size: 7.5pt;\n    font-weight: 700;\n    letter-spacing: 1px;\n}\n\nQLabel#autonomyStateLabel[state="enabled"] { color: #59f0b3; }\nQLabel#autonomyStateLabel[state="disabled"] { color: #91a5b3; }\nQLabel#autonomyStateLabel[state="updating"] { color: #68d8ff; }\nQLabel#autonomyStateLabel[state="locked"] { color: #ff9b79; }\n\nQLabel#statusLabel {\n    color: #afc2d1;\n    background: rgba(18, 36, 48, 210);\n    border: 1px solid rgba(117, 186, 215, 62);\n    border-radius: 8px;\n    padding: 3px 7px;\n    font-size: 8pt;\n    font-weight: 750;\n    letter-spacing: 1px;\n}\n''',
+          )
+          PY
+
+      - name: Validate frontend syntax
+        shell: bash
+        run: |
+          python -m py_compile \
+            aida/frontend/_window_base.py \
+            aida/frontend/controller.py \
+            aida/frontend/widgets.py \
+            aida/frontend/theme.py \
+            aida/frontend/window.py \
+            aida/frontend/status_orb.py \
+            aida/frontend/live_overlay.py
+          ! grep -R '"MANUAL"' -n aida/frontend --include='*.py'
+
+      - name: Commit frontend polish
+        shell: bash
+        run: |
+          git config user.name "AIDA GitHub Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add aida/frontend/_window_base.py aida/frontend/controller.py aida/frontend/widgets.py aida/frontend/theme.py
+          git commit -m "Polish header controls and prevent status clipping"
+          git push origin HEAD:feature/technomancer-engine
