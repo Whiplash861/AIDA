@@ -24,6 +24,7 @@ from aida.frontend.command_manager import CommandManager
 from aida.frontend.command_router import CommandRouter, CommandType, RoutedCommand
 from aida.frontend.commands.registry import CommandRegistry
 from aida.frontend.controller import AIDAController
+from aida.frontend.engine_state import ENGINE_VISUAL_STATE
 from aida.frontend.live_overlay import AIDALiveOverlay
 from aida.frontend.memory_dialog import MemoryBankDialog
 from aida.frontend.models import ChatHistory, ChatMessage, MessageSender
@@ -240,6 +241,22 @@ def main() -> int:
     task_manager.task_started.connect(handle_overlay_task_started)
     task_manager.task_finished.connect(handle_overlay_task_finished)
     task_manager.task_failed.connect(handle_overlay_task_failed)
+
+    technomancer_visual_timer = QTimer(app)
+    technomancer_visual_timer.setInterval(100)
+    last_technomancer_status: list[str | None] = [None]
+
+    def sync_technomancer_visual_state() -> None:
+        status = ENGINE_VISUAL_STATE.status("technomancer")
+        if status == last_technomancer_status[0]:
+            return
+        last_technomancer_status[0] = status
+        window.set_technomancer_status(status)
+        overlay.set_technomancer_status(status)
+
+    technomancer_visual_timer.timeout.connect(sync_technomancer_visual_state)
+    technomancer_visual_timer.start()
+    sync_technomancer_visual_state()
 
     artificer_engine.start(run_startup_review=False)
     artificer_qt_bridge.emit_current()
@@ -490,6 +507,8 @@ def main() -> int:
     try:
         return app.exec()
     finally:
+        technomancer_visual_timer.stop()
+        technomancer_visual_timer.timeout.disconnect(sync_technomancer_visual_state)
         observation_timer.stop()
         observation_timer.timeout.disconnect(run_observation_if_idle)
         window.autonomy_toggled.disconnect(handle_autonomy_observation_schedule)

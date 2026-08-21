@@ -18,6 +18,7 @@ class OrbVisualState(str, Enum):
     BLUE = "blue"
     GREEN = "green"
     PURPLE = "purple"
+    CYAN = "cyan"
     RED = "red"
 
 
@@ -52,6 +53,13 @@ _PALETTES: dict[
         QColor("#F1FFF8"),
         QColor("#06291B"),
         QColor("#020B07"),
+    ),
+    OrbVisualState.CYAN: (
+        QColor("#00E5FF"),
+        QColor("#7CF5FF"),
+        QColor("#F4FEFF"),
+        QColor("#04333A"),
+        QColor("#011114"),
     ),
     OrbVisualState.PURPLE: (
         QColor("#8A5CFF"),
@@ -120,6 +128,7 @@ class AIDAInternalOrb(AIDAOverlay):
             OrbVisualState.BLUE,
             OrbVisualState.GREEN,
             OrbVisualState.PURPLE,
+            OrbVisualState.CYAN,
             OrbVisualState.RED,
         )
         self._test_timer = QTimer(self)
@@ -235,7 +244,7 @@ class AIDAInternalOrb(AIDAOverlay):
         return tuple(sorted(self._trouble_codes))
 
     def start_color_test(self) -> None:
-        """Run BLUE -> GREEN -> PURPLE -> RED -> current live state."""
+        """Run BLUE -> GREEN -> PURPLE -> CYAN -> RED -> current live state."""
         self._test_timer.stop()
         self._test_active = True
         self._test_index = 0
@@ -268,6 +277,8 @@ class AIDAInternalOrb(AIDAOverlay):
                 return OrbVisualState.RED
             if OrbVisualState.PURPLE in states:
                 return OrbVisualState.PURPLE
+            if OrbVisualState.CYAN in states:
+                return OrbVisualState.CYAN
             if OrbVisualState.GREEN in states:
                 return OrbVisualState.GREEN
 

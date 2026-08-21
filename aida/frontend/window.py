@@ -5,7 +5,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from aida.frontend._window_base import AIDAWindow as _BaseAIDAWindow
-from aida.frontend.engine_status_orb import AIDAStatusOrb
+from aida.frontend.status_orb import AIDAStatusOrb
 from aida.frontend.internal_orb import (
     OrbTroubleCode,
     OrbVisualState,
@@ -98,18 +98,13 @@ class AIDAWindow(_BaseAIDAWindow):
             ("Ctrl+Shift+2", OrbVisualState.GREEN),
             ("Ctrl+Shift+3", OrbVisualState.PURPLE),
             ("Ctrl+Shift+4", OrbVisualState.RED),
+            ("Ctrl+Shift+5", OrbVisualState.CYAN),
         ):
             shortcut = QShortcut(QKeySequence(key_sequence), self)
             shortcut.activated.connect(
                 lambda state=state: self.start_orb_targeted_color_test(state)
             )
             self._orb_targeted_test_shortcuts.append(shortcut)
-
-        self._orb_cyan_test_shortcut = QShortcut(
-            QKeySequence("Ctrl+Shift+5"),
-            self,
-        )
-        self._orb_cyan_test_shortcut.activated.connect(self.start_orb_cyan_test)
 
         self._orb_live_shortcut = QShortcut(
             QKeySequence("Ctrl+Shift+0"),
@@ -238,13 +233,7 @@ class AIDAWindow(_BaseAIDAWindow):
     @Slot()
     def start_orb_cyan_test(self) -> None:
         """Show Technomancer cyan for ten seconds, then return to live state."""
-        self.internal_orb.start_cyan_color_test(
-            self._TARGETED_ORB_TEST_SECONDS
-        )
-        self.dashboard.add_activity(
-            f"ORB targeted color test: CYAN for "
-            f"{self._TARGETED_ORB_TEST_SECONDS:g}s"
-        )
+        self.start_orb_targeted_color_test(OrbVisualState.CYAN)
 
     @Slot()
     def return_orb_to_live(self) -> None:
@@ -270,8 +259,8 @@ class AIDAWindow(_BaseAIDAWindow):
 
     @Slot()
     def start_orb_color_test(self) -> None:
-        """Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""
+        """Run BLUE -> GREEN -> VIOLET -> CYAN -> RED -> current live state."""
         self.internal_orb.start_color_test()
         self.dashboard.add_activity(
-            "ORB color test: BLUE > GREEN > VIOLET > RED > LIVE"
+            "ORB color test: BLUE > GREEN > VIOLET > CYAN > RED > LIVE"
         )

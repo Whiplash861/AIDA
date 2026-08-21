@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter
 
-from aida.frontend.engine_status_orb import AIDAStatusOrb
+from aida.frontend.status_orb import AIDAStatusOrb
 from aida.frontend.internal_orb import OrbTroubleCode, OrbVisualState
 from aida.frontend.overlay import AIDAOverlay
 from aida.frontend.status import AIDAStatus

@@ -42,6 +42,8 @@ class AIDAStatusOrb(AIDAInternalOrb):
     _CORE_PROFILE_WEIGHTS = (40, 40, 20)
 
     def __init__(self, parent=None) -> None:
+        self._technomancer_status = "idle"
+        self._active_technomancer_tasks: set[str] = set()
         super().__init__(parent=parent)
 
         # The visible orb remains 74px, while every offscreen glitch layer gets a
@@ -101,6 +103,8 @@ class AIDAStatusOrb(AIDAInternalOrb):
             return "SYSTEM FAULT"
         if self._live_status.name == "SHUTDOWN":
             return "OFFLINE"
+        if self._technomancer_is_active():
+            return "TECHNOMANCER"
         if (
             self._active_artificer_tasks
             or self._artificer_status in _ACTIVE_ARTIFICER_STATES
@@ -258,7 +262,7 @@ class AIDAStatusOrb(AIDAInternalOrb):
         self._cancel_temporary_override(return_to_live=True, announce=True)
 
     def start_color_test(self) -> None:
-        """Run BLUE -> GREEN -> VIOLET -> RED -> current live state."""
+        """Run BLUE -> GREEN -> VIOLET -> CYAN -> RED -> current live state."""
         self._cancel_temporary_override(return_to_live=False, announce=False)
         self._test_timer.stop()
         self._test_active = True
@@ -296,6 +300,63 @@ class AIDAStatusOrb(AIDAInternalOrb):
         if self._test_active or self._temporary_override_state is not None:
             return
         self._set_display_state(self._resolve_live_state())
+
+    # ------------------------------------------------------------------
+    # Technomancer live state
+    # ------------------------------------------------------------------
+
+    def _technomancer_is_active(self) -> bool:
+        return bool(
+            self._active_technomancer_tasks
+            or self._technomancer_status
+            in {"running", "working", "analyzing", "reviewing", "monitoring"}
+        )
+
+    def _resolve_live_state(self) -> OrbVisualState:
+        state = super()._resolve_live_state()
+        if state is OrbVisualState.RED:
+            return state
+        if self._technomancer_is_active():
+            return OrbVisualState.CYAN
+        return state
+
+    def set_technomancer_status(self, text: str) -> None:
+        normalized = text.strip().lower() or "idle"
+        self._technomancer_status = normalized
+        self.set_trouble_code(
+            "TECHNOMANCER-FAILURE",
+            active=normalized in {"error", "failed", "failure"},
+        )
+        self._refresh_live_visual_state()
+
+    def report_task_started(self, task_name: str) -> None:
+        normalized = task_name.strip().lower()
+        if normalized.startswith("technomancer"):
+            self._active_technomancer_tasks.add(normalized)
+            self._technomancer_status = "running"
+            self.clear_trouble_code("TECHNOMANCER-FAILURE")
+        super().report_task_started(task_name)
+        if normalized.startswith("technomancer"):
+            self._refresh_live_visual_state()
+
+    def report_task_finished(self, task_name: str) -> None:
+        normalized = task_name.strip().lower()
+        if normalized.startswith("technomancer"):
+            self._active_technomancer_tasks.discard(normalized)
+            if not self._active_technomancer_tasks:
+                self._technomancer_status = "idle"
+        super().report_task_finished(task_name)
+        if normalized.startswith("technomancer"):
+            QTimer.singleShot(0, self._refresh_live_visual_state)
+
+    def report_task_failed(self, task_name: str) -> None:
+        normalized = task_name.strip().lower()
+        if not normalized.startswith("technomancer"):
+            super().report_task_failed(task_name)
+            return
+        self._active_technomancer_tasks.discard(normalized)
+        self._technomancer_status = "error"
+        self.set_trouble_code("TECHNOMANCER-FAILURE", active=True)
 
     # ------------------------------------------------------------------
     # RED ring scheduler
