@@ -13,58 +13,87 @@ type OperationRow = {
   title: string;
   detail: string;
   badge: string;
-  tone: 'next' | 'protected';
+  tone: 'ready' | 'staged' | 'protected';
 };
 
 const GROUPS: { title: string; items: OperationRow[] }[] = [
   {
-    title: 'OVERSIGHT',
+    title: 'SYSTEM',
     items: [
       {
-        title: 'Tasks',
-        detail: 'Durable background assistance and progress.',
-        badge: 'NEXT',
-        tone: 'next',
+        title: 'Android Device',
+        detail: 'Local platform identity and capability discovery.',
+        badge: 'READY',
+        tone: 'ready',
       },
       {
-        title: 'Threats',
-        detail: 'Findings, evidence, and response plans.',
-        badge: 'NEXT',
-        tone: 'next',
-      },
-      {
-        title: 'Artificer',
-        detail: 'Reviews, proposals, risk, and audit history.',
-        badge: 'NEXT',
-        tone: 'next',
+        title: 'Notifications',
+        detail: 'Local and autonomous mobile alerts.',
+        badge: 'STAGED',
+        tone: 'staged',
       },
     ],
   },
   {
-    title: 'KNOWLEDGE & SUPPORT',
+    title: 'AIDA',
     items: [
       {
         title: 'Memory',
-        detail: 'Saved findings, preferences, and procedures.',
-        badge: 'NEXT',
-        tone: 'next',
+        detail: 'Persistent mobile findings, preferences, and procedures.',
+        badge: 'STAGED',
+        tone: 'staged',
       },
       {
-        title: 'Report Bug',
-        detail: 'Submit notes and screenshots to the developer.',
-        badge: 'NEXT',
-        tone: 'next',
+        title: 'Threats',
+        detail: 'Device-local findings, evidence, and response plans.',
+        badge: 'STAGED',
+        tone: 'staged',
+      },
+      {
+        title: 'Tasks',
+        detail: 'Durable background assistance and progress.',
+        badge: 'STAGED',
+        tone: 'staged',
       },
     ],
   },
   {
-    title: 'AUTHORITY',
+    title: 'ENGINES',
+    items: [
+      {
+        title: 'Artificer',
+        detail: 'Mobile compatibility reviews, proposals, and governance.',
+        badge: 'STAGED',
+        tone: 'staged',
+      },
+      {
+        title: 'Technomancer',
+        detail: 'Permission-aware Android application and device assistance.',
+        badge: 'STAGED',
+        tone: 'staged',
+      },
+      {
+        title: 'Perception',
+        detail: 'Camera, screenshot, and image evidence intake.',
+        badge: 'STAGED',
+        tone: 'staged',
+      },
+    ],
+  },
+  {
+    title: 'CONTROL & SUPPORT',
     items: [
       {
         title: 'Autonomy',
-        detail: 'Remote authority changes require reauthentication.',
+        detail: 'Authority remains device-scoped and confirmation-bound.',
         badge: 'PROTECTED',
         tone: 'protected',
+      },
+      {
+        title: 'Report Bug',
+        detail: 'Submit Early Alpha feedback from this AIDA instance.',
+        badge: 'STAGED',
+        tone: 'staged',
       },
     ],
   },
@@ -73,15 +102,15 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
 export default function MoreScreen() {
   return (
     <PageShell
-      title="More"
-      subtitle="Operational tools, grouped without crowding the primary AIDA interface."
+      title="Control"
+      subtitle="Mobile-friendly access to AIDA systems, Engines, authority, and support."
     >
       <GlassPanel variant="header" style={styles.noticeCard}>
-        <Text style={styles.noticeTitle}>EARLY ALPHA CONTROL BOUNDARY</Text>
+        <Text style={styles.noticeTitle}>STANDALONE MOBILE EARLY ALPHA</Text>
         <Text style={styles.noticeBody}>
-          Status and activity are live and read-only. Consequential controls
-          remain unavailable until mobile reauthentication and confirmation are
-          implemented.
+          This AIDA instance initializes locally on the mobile device. Desktop
+          AIDA is not required for normal startup, status, activity, or local
+          directive intake.
         </Text>
       </GlassPanel>
 
@@ -102,22 +131,8 @@ export default function MoreScreen() {
                   <Text style={styles.rowDetail}>{item.detail}</Text>
                 </View>
 
-                <View
-                  style={[
-                    styles.badge,
-                    item.tone === 'protected'
-                      ? styles.protectedBadge
-                      : styles.nextBadge,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.badgeText,
-                      item.tone === 'protected'
-                        ? styles.protectedText
-                        : styles.nextText,
-                    ]}
-                  >
+                <View style={[styles.badge, badgeStyle(item.tone)]}>
+                  <Text style={[styles.badgeText, badgeTextStyle(item.tone)]}>
                     {item.badge}
                   </Text>
                 </View>
@@ -128,6 +143,26 @@ export default function MoreScreen() {
       ))}
     </PageShell>
   );
+}
+
+function badgeStyle(tone: OperationRow['tone']) {
+  if (tone === 'ready') {
+    return styles.readyBadge;
+  }
+  if (tone === 'protected') {
+    return styles.protectedBadge;
+  }
+  return styles.stagedBadge;
+}
+
+function badgeTextStyle(tone: OperationRow['tone']) {
+  if (tone === 'ready') {
+    return styles.readyText;
+  }
+  if (tone === 'protected') {
+    return styles.protectedText;
+  }
+  return styles.stagedText;
 }
 
 const styles = StyleSheet.create({
@@ -196,9 +231,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
-  nextBadge: {
-    backgroundColor: 'rgba(8, 39, 59, 0.88)',
-    borderColor: 'rgba(88, 207, 255, 0.42)',
+  readyBadge: {
+    backgroundColor: 'rgba(9, 42, 34, 0.90)',
+    borderColor: 'rgba(77, 236, 171, 0.42)',
+  },
+  stagedBadge: {
+    backgroundColor: 'rgba(25, 35, 43, 0.90)',
+    borderColor: 'rgba(136, 166, 187, 0.30)',
   },
   protectedBadge: {
     backgroundColor: 'rgba(48, 36, 12, 0.88)',
@@ -210,8 +249,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.8,
   },
-  nextText: {
-    color: AIDA_COLORS.cyanGlow,
+  readyText: {
+    color: AIDA_COLORS.mint,
+  },
+  stagedText: {
+    color: AIDA_COLORS.textMuted,
   },
   protectedText: {
     color: AIDA_COLORS.warning,
