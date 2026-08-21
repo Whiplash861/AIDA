@@ -102,45 +102,6 @@ class AIDAWindow(_BaseAIDAWindow):
         QLabel#autonomyStateLabel[state="locked"] { color: #ff9b79; }
     """
 
-    _CORE_STATE_STYLE = """
-        QLabel#statusLabel {
-            color: #afc2d1;
-            background: rgba(18, 36, 48, 210);
-            border: 1px solid rgba(117, 186, 215, 62);
-            border-radius: 8px;
-            padding: 3px 6px;
-            font-family: "Cascadia Mono", "Consolas";
-            font-size: 10px;
-            font-weight: 750;
-            letter-spacing: 1px;
-        }
-        QLabel#statusLabel[tone="ready"] {
-            color: #59f0b3;
-            background: rgba(15, 63, 48, 220);
-            border-color: rgba(77, 236, 171, 105);
-        }
-        QLabel#statusLabel[tone="active"] {
-            color: #68d8ff;
-            background: rgba(10, 49, 70, 225);
-            border-color: rgba(88, 207, 255, 120);
-        }
-        QLabel#statusLabel[tone="warning"] {
-            color: #ffd875;
-            background: rgba(67, 49, 15, 225);
-            border-color: rgba(255, 205, 91, 120);
-        }
-        QLabel#statusLabel[tone="error"] {
-            color: #ff7d8d;
-            background: rgba(68, 22, 30, 225);
-            border-color: rgba(255, 105, 126, 125);
-        }
-        QLabel#statusLabel[tone="idle"] {
-            color: #a9bbc8;
-            background: rgba(26, 39, 48, 220);
-            border-color: rgba(136, 166, 187, 65);
-        }
-    """
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -156,7 +117,7 @@ class AIDAWindow(_BaseAIDAWindow):
         # only the vertical header padding keeps the overall header close to its
         # previous height while preserving a small gap to the frame itself.
         header_layout.setContentsMargins(14, 1, 14, 1)
-        header_layout.setSpacing(7)
+        header_layout.setSpacing(6)
 
         self.internal_orb = _HeaderStatusOrb(parent=header)
         header_layout.insertWidget(
@@ -170,7 +131,7 @@ class AIDAWindow(_BaseAIDAWindow):
         self.orb_status_indicator = QLabel(header)
         self.orb_status_indicator.setObjectName("orbStatusIndicator")
         self.orb_status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.orb_status_indicator.setMinimumWidth(96)
+        self.orb_status_indicator.setFixedWidth(92)
         self.orb_status_indicator.setStyleSheet(
             """
             QLabel#orbStatusIndicator {
@@ -228,23 +189,65 @@ class AIDAWindow(_BaseAIDAWindow):
         header: QFrame,
         header_layout: QHBoxLayout,
     ) -> None:
-        """Repackage autonomy and core-state controls as compact HUD modules."""
+        """Build one compact autonomy module and retire redundant header state UI."""
+        # The base window originally adds AUTONOMY as a nested layout and the
+        # legacy AIDA status as a separate widget. Remove those layout entries
+        # explicitly before reusing their widgets; simply reparenting a widget
+        # can leave its old QLayoutItem behind and consume space as a ghost.
+        for index in range(header_layout.count() - 1, -1, -1):
+            item = header_layout.itemAt(index)
+            if item.widget() is self.status_label:
+                header_layout.takeAt(index)
+                continue
+
+            nested = item.layout()
+            if nested is None:
+                continue
+            contains_autonomy = any(
+                nested.itemAt(child_index).widget()
+                in {self.autonomy_switch, self.autonomy_state_label}
+                for child_index in range(nested.count())
+            )
+            if contains_autonomy:
+                header_layout.takeAt(index)
+
+        # CURRENT STATUS beside the orb supersedes the old CORE STATE tile.
+        # Keep the legacy label alive for existing status-update code, but do
+        # not allocate any header geometry to it.
+        self.status_label.hide()
+        self.status_label.setMinimumWidth(0)
+        self.status_label.setMaximumWidth(0)
+
+        # Protect AIDA's identity copy from being squeezed by action buttons.
+        self.app_title.setMinimumWidth(96)
+        self.app_subtitle.setMinimumWidth(188)
+        self.app_title.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.app_subtitle.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Preferred,
+        )
+
         self.autonomy_panel = QFrame(header)
         self.autonomy_panel.setObjectName("headerControlModule")
-        self.autonomy_panel.setFixedSize(154, 54)
+        self.autonomy_panel.setFixedSize(136, 50)
         self.autonomy_panel.setStyleSheet(
             self._HEADER_MODULE_STYLE + self._AUTONOMY_STYLE
         )
 
         autonomy_caption = QLabel("AUTONOMY", self.autonomy_panel)
         autonomy_caption.setObjectName("headerControlCaption")
+
         self.autonomy_switch.setParent(self.autonomy_panel)
         self.autonomy_switch.setText("")
-        self.autonomy_switch.setFixedSize(34, 20)
+        self.autonomy_switch.setFixedSize(32, 18)
         self.autonomy_switch.setCursor(Qt.CursorShape.PointingHandCursor)
         self.autonomy_switch.setToolTip("Enable or disable Controlled Autonomy.")
+
         self.autonomy_state_label.setParent(self.autonomy_panel)
-        self.autonomy_state_label.setMinimumWidth(82)
+        self.autonomy_state_label.setMinimumWidth(72)
         self.autonomy_state_label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
@@ -254,57 +257,18 @@ class AIDAWindow(_BaseAIDAWindow):
 
         autonomy_value_layout = QHBoxLayout()
         autonomy_value_layout.setContentsMargins(0, 0, 0, 0)
-        autonomy_value_layout.setSpacing(7)
+        autonomy_value_layout.setSpacing(6)
         autonomy_value_layout.addWidget(self.autonomy_switch)
         autonomy_value_layout.addWidget(self.autonomy_state_label, stretch=1)
 
         autonomy_layout = QVBoxLayout(self.autonomy_panel)
-        autonomy_layout.setContentsMargins(10, 6, 10, 6)
-        autonomy_layout.setSpacing(2)
+        autonomy_layout.setContentsMargins(9, 5, 9, 5)
+        autonomy_layout.setSpacing(1)
         autonomy_layout.addWidget(autonomy_caption)
         autonomy_layout.addLayout(autonomy_value_layout)
 
-        self.status_panel = QFrame(header)
-        self.status_panel.setObjectName("headerStateModule")
-        self.status_panel.setFixedSize(116, 54)
-        self.status_panel.setStyleSheet(
-            self._HEADER_MODULE_STYLE + self._CORE_STATE_STYLE
-        )
-        status_caption = QLabel("CORE STATE", self.status_panel)
-        status_caption.setObjectName("headerControlCaption")
-        self.status_label.setParent(self.status_panel)
-        self.status_label.setFixedWidth(96)
-        self.status_label.setMaximumHeight(27)
-        self.status_label.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Fixed,
-        )
-
-        status_layout = QVBoxLayout(self.status_panel)
-        status_layout.setContentsMargins(10, 6, 10, 6)
-        status_layout.setSpacing(2)
-        status_layout.addWidget(status_caption)
-        status_layout.addWidget(
-            self.status_label,
-            0,
-            Qt.AlignmentFlag.AlignHCenter,
-        )
-
-        # Reparenting removes the old widgets from their base layouts. Discard
-        # any now-empty nested layout so it does not consume header spacing.
-        for index in range(header_layout.count() - 1, -1, -1):
-            item = header_layout.itemAt(index)
-            nested = item.layout()
-            if nested is not None and nested.count() == 0:
-                header_layout.takeAt(index)
-
         header_layout.addWidget(
             self.autonomy_panel,
-            0,
-            Qt.AlignmentFlag.AlignVCenter,
-        )
-        header_layout.addWidget(
-            self.status_panel,
             0,
             Qt.AlignmentFlag.AlignVCenter,
         )
