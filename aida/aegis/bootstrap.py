@@ -5,6 +5,8 @@ from pathlib import Path
 
 from aida.aegis.artificer_bridge import AegisArtificerBridge
 from aida.aegis.engine import AegisEngine
+from aida.aegis.learning.service import AegisLearningService
+from aida.aegis.learning.store import AegisLearningStore
 from aida.aegis.models import ProviderHealth
 from aida.aegis.sensors import AegisSystemSensor
 from aida.aegis.store import AegisStore
@@ -34,12 +36,21 @@ def build_aegis_engine(
         return tuple(item for item in rows if _is_unresolved(item))
 
     sensor = AegisSystemSensor(provider_health_reader=_read_provider_health)
+    learning = AegisLearningService(
+        AegisLearningStore(data_root / "learning-model.json"),
+        minimum_samples=_env_int(
+            "AIDA_AEGIS_LEARNING_MINIMUM_SAMPLES",
+            8,
+            minimum=3,
+        ),
+    )
     return AegisEngine(
         store=AegisStore(data_root / "aegis.db"),
         memory=memory,
         threat_analysis=threat_analysis,
         detection_reader=unresolved_reader,
         sensor=sensor,
+        learning=learning,
         bridge=AegisArtificerBridge(),
         observation_interval_seconds=_env_int(
             "AIDA_AEGIS_OBSERVATION_INTERVAL_SECONDS",
