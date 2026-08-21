@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from aida.aegis.learning.models import AegisFeatureVector, LearningAssessment
+from aida.aegis.learning.models import (
+    AEGIS_FEATURE_SCHEMA_VERSION,
+    AegisFeatureVector,
+    LearningAssessment,
+)
 
 
 @dataclass(slots=True)
@@ -44,6 +48,7 @@ class RunningStat:
 class OnlineAnomalyModel:
     model_id: str = field(default_factory=lambda: uuid4().hex)
     model_version: int = 1
+    feature_schema_version: int = AEGIS_FEATURE_SCHEMA_VERSION
     minimum_samples: int = 8
     sample_count: int = 0
     numeric_stats: dict[str, RunningStat] = field(default_factory=dict)
@@ -57,6 +62,12 @@ class OnlineAnomalyModel:
     updated_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+
+    def __post_init__(self) -> None:
+        if self.feature_schema_version != AEGIS_FEATURE_SCHEMA_VERSION:
+            raise ValueError(
+                "Aegis learning model feature schema is incompatible with this runtime"
+            )
 
     @property
     def ready(self) -> bool:
@@ -106,7 +117,7 @@ class OnlineAnomalyModel:
                 )
         if unseen:
             reasons.append(
-                f"{unseen} observed identity pattern(s) were not present in the learned baseline."
+                f"{unseen} observed identity/relationship pattern(s) were not present in the learned baseline."
             )
         if warmup:
             reasons.append(
@@ -144,6 +155,7 @@ class OnlineAnomalyModel:
         return {
             "model_id": self.model_id,
             "model_version": self.model_version,
+            "feature_schema_version": self.feature_schema_version,
             "minimum_samples": self.minimum_samples,
             "sample_count": self.sample_count,
             "numeric_stats": {
@@ -162,6 +174,9 @@ class OnlineAnomalyModel:
         return cls(
             model_id=str(record.get("model_id") or uuid4().hex),
             model_version=int(record.get("model_version") or 1),
+            feature_schema_version=int(
+                record.get("feature_schema_version") or AEGIS_FEATURE_SCHEMA_VERSION
+            ),
             minimum_samples=max(3, int(record.get("minimum_samples") or 8)),
             sample_count=max(0, int(record.get("sample_count") or 0)),
             numeric_stats={
