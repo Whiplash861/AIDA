@@ -1,0 +1,64 @@
+name: Anchor AIDA header groups
+
+on:
+  push:
+    branches:
+      - feature/technomancer-engine
+    paths:
+      - .github/workflows/anchor-header-groups.yml
+
+permissions:
+  contents: write
+
+jobs:
+  anchor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/technomancer-engine
+          fetch-depth: 0
+
+      - name: Anchor left identity/orb and right controls
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          base = Path('aida/frontend/_window_base.py')
+          text = base.read_text(encoding='utf-8')
+          old = '        identity_panel.setFixedWidth(210)\n'
+          new = '        identity_panel.setFixedWidth(200)\n'
+          if old not in text:
+              raise SystemExit('identity width anchor not found')
+          base.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          window = Path('aida/frontend/window.py')
+          text = window.read_text(encoding='utf-8')
+          old = '''    def _reorder_header_controls(self, header_layout: QHBoxLayout) -> None:\n        \"\"\"Keep live state and autonomy beside the orb, ahead of action buttons.\"\"\"\n        for index in range(header_layout.count() - 1, -1, -1):\n            item = header_layout.itemAt(index)\n            if item.spacerItem() is not None:\n                header_layout.takeAt(index)\n\n        ordered_widgets = (\n            self.orb_status_panel,\n            self.autonomy_panel,\n            self.bug_report_button,\n            self.memory_button,\n            self.threat_center_button,\n            self.task_center_button,\n            self.artificer_button,\n        )\n        for widget in ordered_widgets:\n            header_layout.removeWidget(widget)\n\n        insert_at = header_layout.indexOf(self.internal_orb) + 1\n        for widget in ordered_widgets:\n            header_layout.insertWidget(\n                insert_at,\n                widget,\n                0,\n                Qt.AlignmentFlag.AlignVCenter,\n            )\n            insert_at += 1\n\n        header_layout.addStretch(1)\n'''
+          new = '''    def _reorder_header_controls(self, header_layout: QHBoxLayout) -> None:\n        \"\"\"Anchor AIDA/orb left and the status/control cluster to the right.\"\"\"\n        for index in range(header_layout.count() - 1, -1, -1):\n            item = header_layout.itemAt(index)\n            if item.spacerItem() is not None:\n                header_layout.takeAt(index)\n\n        ordered_widgets = (\n            self.orb_status_panel,\n            self.autonomy_panel,\n            self.bug_report_button,\n            self.memory_button,\n            self.threat_center_button,\n            self.task_center_button,\n            self.artificer_button,\n        )\n        for widget in ordered_widgets:\n            header_layout.removeWidget(widget)\n\n        # The flexible spacer lives between the orb and the control cluster.\n        # Maximizing therefore expands only this middle void: the orb remains\n        # locked to AIDA's identity while the controls remain locked right.\n        insert_at = header_layout.indexOf(self.internal_orb) + 1\n        header_layout.insertStretch(insert_at, 1)\n        insert_at += 1\n        for widget in ordered_widgets:\n            header_layout.insertWidget(\n                insert_at,\n                widget,\n                0,\n                Qt.AlignmentFlag.AlignVCenter,\n            )\n            insert_at += 1\n'''
+          if old not in text:
+              raise SystemExit('header reorder anchor not found')
+          window.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Validate frontend syntax and anchors
+        shell: bash
+        run: |
+          python -m py_compile \
+            aida/frontend/_window_base.py \
+            aida/frontend/window.py \
+            aida/frontend/status_orb.py \
+            aida/frontend/live_overlay.py \
+            aida/frontend/app.py
+          grep -n 'identity_panel.setFixedWidth(200)' aida/frontend/_window_base.py
+          grep -n 'header_layout.insertStretch(insert_at, 1)' aida/frontend/window.py
+
+      - name: Commit anchored header groups
+        shell: bash
+        run: |
+          git config user.name "AIDA GitHub Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add aida/frontend/_window_base.py aida/frontend/window.py
+          git commit -m "Anchor orb left and header controls right"
+          git push origin HEAD:feature/technomancer-engine
