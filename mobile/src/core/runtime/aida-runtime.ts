@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
+import { speakAidaText } from '@/src/core/interaction/speech-output';
 import { MOBILE_REASONING } from '@/src/core/reasoning/service';
 import {
   loadActivity,
@@ -13,20 +14,13 @@ import {
 export type StatusTone = 'ready' | 'active' | 'warning' | 'error' | 'idle' | 'offline';
 export type LocalRuntimeStatus = 'STARTING' | 'STANDBY' | 'ANALYZING' | 'WARNING' | 'ERROR';
 
-export type SubsystemStatus = {
-  id: string;
-  label: string;
-  value: string;
-  tone: StatusTone;
-};
-
+export type SubsystemStatus = { id: string; label: string; value: string; tone: StatusTone };
 export type RuntimeCapability = {
   id: string;
   label: string;
   state: 'supported' | 'limited' | 'staged';
   detail: string;
 };
-
 export type RuntimeActivityItem = {
   id: string;
   category: string;
@@ -35,7 +29,6 @@ export type RuntimeActivityItem = {
   source: string;
   created_at: string;
 };
-
 export type MobileRuntimeSnapshot = {
   instance_id: string;
   identity_persistent: boolean;
@@ -48,10 +41,7 @@ export type MobileRuntimeSnapshot = {
   initialized_at: string;
   updated_at: string;
   speech_enabled: boolean;
-  autonomy: {
-    enabled: boolean;
-    label: string;
-  };
+  autonomy: { enabled: boolean; label: string };
   statuses: SubsystemStatus[];
   capabilities: RuntimeCapability[];
 };
@@ -146,13 +136,13 @@ export async function submitLocalDirective(message: string): Promise<string> {
     response.provider,
   );
   setAgentState('STANDBY', response.mode === 'remote' ? 'READY' : 'STAGED', 'ready');
+  void speakResponseIfEnabled(response.text);
   return response.text;
 }
 
 async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
   const platform = platformLabel();
   const model = deviceModel();
-
   try {
     const [identity, state, storedActivity] = await Promise.all([
       loadOrCreateInstanceId(Platform.OS),
@@ -232,70 +222,38 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
   }
 }
 
+async function speakResponseIfEnabled(text: string) {
+  if (!snapshot.speech_enabled) return;
+  await speakAidaText(text, {
+    onStart: () => setSubsystemStatus('speech', 'SPEAKING', 'active'),
+    onDone: () => setSubsystemStatus('speech', 'READY', 'ready'),
+    onError: () => setSubsystemStatus('speech', 'ERROR', 'warning'),
+  });
+}
+
+function setSubsystemStatus(id: string, value: string, tone: StatusTone) {
+  snapshot = {
+    ...snapshot,
+    updated_at: new Date().toISOString(),
+    statuses: snapshot.statuses.map((item) =>
+      item.id === id ? { ...item, value, tone } : item,
+    ),
+  };
+  notifyRuntime();
+}
+
 function buildCapabilities(platform: string, gatewayReady: boolean): RuntimeCapability[] {
   return [
-    {
-      id: 'runtime.local',
-      label: 'Local AIDA runtime',
-      state: 'supported',
-      detail: 'AIDA initializes and maintains runtime state on this device without a desktop bridge.',
-    },
-    {
-      id: 'identity.persistent',
-      label: 'Persistent instance identity',
-      state: 'supported',
-      detail: 'This AIDA instance retains a secure device-local identity across application restarts.',
-    },
-    {
-      id: 'platform.identity',
-      label: 'Platform awareness',
-      state: 'supported',
-      detail: `AIDA identifies this host as ${platform} ${String(Platform.Version)}.`,
-    },
-    {
-      id: 'conversation.local',
-      label: 'Local directive intake',
-      state: 'supported',
-      detail: 'The mobile runtime accepts directives locally and routes them through the configured reasoning provider.',
-    },
-    {
-      id: 'activity.persistent',
-      label: 'Persistent activity journal',
-      state: 'supported',
-      detail: 'Runtime activity is stored locally and restored when this mobile AIDA instance starts again.',
-    },
-    {
-      id: 'memory.persistent',
-      label: 'Persistent mobile storage',
-      state: 'supported',
-      detail: 'AIDA has persistent local runtime storage; the full semantic memory layer remains a later milestone.',
-    },
-    {
-      id: 'reasoning.provider',
-      label: 'Reasoning provider interface',
-      state: 'supported',
-      detail: `AIDA currently uses ${MOBILE_REASONING.currentProviderId()} and can switch providers without changing the frontend.`,
-    },
-    {
-      id: 'reasoning.gateway',
-      label: 'AIDA reasoning gateway',
-      state: gatewayReady ? 'supported' : 'staged',
-      detail: gatewayReady
-        ? 'Authenticated independent reasoning is configured for this mobile AIDA instance.'
-        : 'Independent reasoning remains staged until enrollment supplies a secure gateway session credential.',
-    },
-    {
-      id: 'speech.output',
-      label: 'AIDA speech output',
-      state: 'supported',
-      detail: 'AIDA can speak responses through the mobile operating system speech service.',
-    },
-    {
-      id: 'voice.input',
-      label: 'Voice input and transcription',
-      state: 'staged',
-      detail: 'Microphone capture and transcription remain staged until the secure transcription path is connected.',
-    },
+    { id: 'runtime.local', label: 'Local AIDA runtime', state: 'supported', detail: 'AIDA initializes and maintains runtime state on this device without a desktop bridge.' },
+    { id: 'identity.persistent', label: 'Persistent instance identity', state: 'supported', detail: 'This AIDA instance retains a secure device-local identity across application restarts.' },
+    { id: 'platform.identity', label: 'Platform awareness', state: 'supported', detail: `AIDA identifies this host as ${platform} ${String(Platform.Version)}.` },
+    { id: 'conversation.local', label: 'Local directive intake', state: 'supported', detail: 'The mobile runtime accepts directives locally and routes them through the configured reasoning provider.' },
+    { id: 'activity.persistent', label: 'Persistent activity journal', state: 'supported', detail: 'Runtime activity is stored locally and restored when this mobile AIDA instance starts again.' },
+    { id: 'memory.persistent', label: 'Persistent mobile storage', state: 'supported', detail: 'AIDA has persistent local runtime storage; the full semantic memory layer remains a later milestone.' },
+    { id: 'reasoning.provider', label: 'Reasoning provider interface', state: 'supported', detail: `AIDA currently uses ${MOBILE_REASONING.currentProviderId()} and can switch providers without changing the frontend.` },
+    { id: 'reasoning.gateway', label: 'AIDA reasoning gateway', state: gatewayReady ? 'supported' : 'staged', detail: gatewayReady ? 'Authenticated independent reasoning is configured for this mobile AIDA instance.' : 'Independent reasoning remains staged until enrollment supplies a secure gateway session credential.' },
+    { id: 'speech.output', label: 'AIDA speech output', state: 'supported', detail: 'AIDA can speak responses through the mobile operating system speech service.' },
+    { id: 'voice.input', label: 'Voice input and transcription', state: 'staged', detail: 'Microphone capture and transcription remain staged until the secure transcription path is connected.' },
   ];
 }
 
@@ -357,13 +315,7 @@ function setAgentState(next: LocalRuntimeStatus, brainValue: string, agentTone: 
   notifyRuntime();
 }
 
-async function addActivity(
-  category: string,
-  message: string,
-  severity: RuntimeActivityItem['severity'],
-  source: string,
-  persist = true,
-) {
+async function addActivity(category: string, message: string, severity: RuntimeActivityItem['severity'], source: string, persist = true) {
   const item: RuntimeActivityItem = {
     id: `activity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     category,
