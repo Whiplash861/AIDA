@@ -5,33 +5,69 @@ import {
   ReasoningProvider,
   ReasoningResponse,
 } from '@/src/core/reasoning/types';
+import { loadGatewayConfiguration } from '@/src/core/services/gateway-config';
 import {
-  loadGatewaySessionToken,
-  loadGatewayUrl,
   saveGatewaySessionToken,
   saveGatewayUrl,
 } from '@/src/core/storage/mobile-storage';
+
+export type GatewayRuntimeState = {
+  configured: boolean;
+  source: 'development' | 'enrolled' | 'none';
+  reasoningConfigured: boolean;
+  speechConfigured: boolean;
+  error: string;
+};
 
 class MobileReasoningService {
   private readonly localProvider = new LocalRuntimeReasoningProvider();
   private provider: ReasoningProvider = this.localProvider;
   private initialized = false;
+  private gatewayState: GatewayRuntimeState = {
+    configured: false,
+    source: 'none',
+    reasoningConfigured: false,
+    speechConfigured: false,
+    error: '',
+  };
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
 
-    const [storedUrl, sessionToken] = await Promise.all([
-      loadGatewayUrl(),
-      loadGatewaySessionToken(),
-    ]);
-    const environmentUrl = (
-      process.env.EXPO_PUBLIC_AIDA_REASONING_GATEWAY_URL ?? ''
-    ).trim();
-    const gatewayUrl = storedUrl || environmentUrl;
+    const configuration = await loadGatewayConfiguration();
+    if (!configuration.baseUrl || !configuration.token) {
+      return;
+    }
 
-    if (gatewayUrl && sessionToken) {
-      this.provider = new GatewayReasoningProvider(gatewayUrl, sessionToken);
+    this.gatewayState = {
+      ...this.gatewayState,
+      configured: true,
+      source: configuration.source,
+    };
+
+    try {
+      const ready = await probeGateway(configuration.baseUrl, configuration.token);
+      this.gatewayState = {
+        configured: true,
+        source: configuration.source,
+        reasoningConfigured: ready.reasoning_configured,
+        speechConfigured: ready.speech_configured,
+        error: ready.reasoning_configured
+          ? ''
+          : 'Gateway reached, but Azure/OpenAI reasoning is not configured.',
+      };
+      if (ready.reasoning_configured) {
+        this.provider = new GatewayReasoningProvider(
+          configuration.baseUrl,
+          configuration.token,
+        );
+      }
+    } catch (error) {
+      this.gatewayState = {
+        ...this.gatewayState,
+        error: error instanceof Error ? error.message : 'Gateway initialization failed.',
+      };
     }
   }
 
@@ -44,7 +80,9 @@ class MobileReasoningService {
 
     const ready = await probeGateway(cleanUrl, cleanToken);
     if (!ready.reasoning_configured) {
-      throw new Error('Gateway reached, but Azure/OpenAI reasoning is not configured on the server.');
+      throw new Error(
+        'Gateway reached, but Azure/OpenAI reasoning is not configured on the server.',
+      );
     }
 
     await Promise.all([
@@ -53,11 +91,13 @@ class MobileReasoningService {
     ]);
     this.provider = new GatewayReasoningProvider(cleanUrl, cleanToken);
     this.initialized = true;
-  }
-
-  setProvider(provider: ReasoningProvider) {
-    this.provider = provider;
-    this.initialized = true;
+    this.gatewayState = {
+      configured: true,
+      source: 'enrolled',
+      reasoningConfigured: true,
+      speechConfigured: ready.speech_configured,
+      error: '',
+    };
   }
 
   currentProviderId() {
@@ -66,6 +106,10 @@ class MobileReasoningService {
 
   isRemoteConfigured() {
     return this.provider.id === 'aida-gateway';
+  }
+
+  gatewayRuntimeState(): GatewayRuntimeState {
+    return { ...this.gatewayState };
   }
 
   async respond(
@@ -78,6 +122,9 @@ class MobileReasoningService {
       return this.localProvider.respond(input, context);
     }
 
+    // Once an authenticated gateway is active, do not silently replace a
+    // failed native AIDA brain request with a canned mobile response. Native
+    // AIDA surfaces brain failures; mobile must do the same.
     return this.provider.respond(input, context);
   }
 }
@@ -85,6 +132,7 @@ class MobileReasoningService {
 type GatewayReadyResponse = {
   reasoning_configured?: boolean;
   speech_configured?: boolean;
+  detail?: unknown;
 };
 
 async function probeGateway(
@@ -95,19 +143,18 @@ async function probeGateway(
   const timeout = setTimeout(() => controller.abort(), 8_000);
 
   try {
-    const response = await fetch(`${baseUrl}/v1/ready`, {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/ready`, {
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${token}`,
       },
       signal: controller.signal,
     });
-    const payload = (await response.json().catch(() => null)) as GatewayReadyResponse | null;
+    const payload = (await response.json().catch(() => null)) as
+      | GatewayReadyResponse
+      | null;
     if (!response.ok) {
-      const detail =
-        payload && typeof payload === 'object' && 'detail' in payload
-          ? String((payload as { detail?: unknown }).detail ?? '')
-          : '';
+      const detail = payload?.detail ? String(payload.detail) : '';
       throw new Error(
         detail || `Gateway enrollment probe returned HTTP ${response.status}.`,
       );
@@ -118,7 +165,9 @@ async function probeGateway(
     };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Gateway enrollment timed out. Verify the URL, network, and Windows Firewall.');
+      throw new Error(
+        'Gateway enrollment timed out. Verify the gateway host and network path.',
+      );
     }
     throw error;
   } finally {
