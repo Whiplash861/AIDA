@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import aida.services_gateway.service as gateway_module
@@ -92,3 +93,25 @@ def test_speech_uses_canonical_cleanup_before_shared_synthesis(monkeypatch) -> N
     assert result.content_type == "audio/mpeg"
     assert captured["text"] == "Status. tool executable . ready"
     assert captured["config"] is gateway._config
+
+
+def test_mobile_transcription_is_disposable_and_reuses_native_provider(monkeypatch) -> None:
+    gateway = AidaServicesGateway()
+    captured: dict[str, Any] = {}
+
+    class FakeTranscriber:
+        def transcribe(self, path: str | Path) -> str:
+            candidate = Path(path)
+            assert candidate.is_file()
+            captured["path"] = candidate
+            captured["bytes"] = candidate.read_bytes()
+            return "Run a quick scan."
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-transcription-key")
+    gateway._transcriber = FakeTranscriber()  # type: ignore[assignment]
+
+    result = gateway.transcribe(b"temporary-audio", file_extension=".m4a")
+
+    assert result.text == "Run a quick scan."
+    assert captured["bytes"] == b"temporary-audio"
+    assert not captured["path"].exists()
