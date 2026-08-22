@@ -1,5 +1,4 @@
-import { useFocusEffect } from '@react-navigation/native';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { GlassPanel } from '@/src/components/glass-panel';
@@ -10,6 +9,7 @@ import {
   MobileRuntimeSnapshot,
   StatusTone,
   SubsystemStatus,
+  subscribeRuntime,
 } from '@/src/core/runtime/aida-runtime';
 import {
   AIDA_COLORS,
@@ -21,6 +21,8 @@ import {
 const CORE_IDS = new Set([
   'agent',
   'brain',
+  'speech',
+  'diagnostics',
   'memory',
   'artificer',
   'technomancer',
@@ -37,11 +39,7 @@ export default function SystemsScreen() {
     setSnapshot({ ...getRuntimeSnapshot() });
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [load]),
-  );
+  useEffect(() => subscribeRuntime(setSnapshot), []);
 
   const attention = useMemo(
     () =>
@@ -77,7 +75,7 @@ export default function SystemsScreen() {
   return (
     <PageShell
       title="Systems"
-      subtitle="Device-local status for this AIDA mobile instance."
+      subtitle="Device-local status for this AIDA instance."
       onRefresh={load}
     >
       <GlassPanel variant="header" style={styles.overallCard}>
