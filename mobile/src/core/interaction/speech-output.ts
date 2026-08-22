@@ -74,51 +74,54 @@ async function runAidaSpeechSequence(
   await setAudioModeAsync({ playsInSilentMode: true });
 
   let transport: SpeechTransport = 'silent';
-  let hardFailure: string | null = null;
 
+  // Native AIDA treats missing/failed cue playback as an audio warning and
+  // continues the spoken line. A tone failure must not suppress ElevenLabs.
   try {
-    // Native AIDA brackets every spoken line with the same canonical WAV
-    // cues. These files are synchronized from the root repository before
-    // Metro starts so desktop and mobile cannot drift independently.
     await playAudioSourceAndWait(START_TONE, 12_000);
+  } catch (error) {
+    callbacks.onWarning?.(
+      `AIDA start tone failed. ${errorMessage(error)}`,
+    );
+  }
 
-    const gateway = await loadGatewayConfiguration();
-    if (gateway.baseUrl && gateway.token) {
-      try {
-        await playGatewaySpeech(text, gateway.baseUrl, gateway.token);
-        transport = 'elevenlabs';
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'AIDA voice service failed.';
-        callbacks.onWarning?.(`AIDA ElevenLabs voice unavailable. ${message}`);
-        // When AIDA voice is configured, do not impersonate it with a
-        // different operating-system voice. Native AIDA simply completes the
-        // speech cycle when provider audio is unavailable.
-        transport = 'silent';
-      }
-    } else {
+  const gateway = await loadGatewayConfiguration();
+  if (gateway.baseUrl && gateway.token) {
+    try {
+      await playGatewaySpeech(text, gateway.baseUrl, gateway.token);
+      transport = 'elevenlabs';
+    } catch (error) {
       callbacks.onWarning?.(
-        'AIDA voice service is not configured. Android speech fallback engaged.',
+        `AIDA ElevenLabs voice unavailable. ${errorMessage(error)}`,
       );
+      // When an AIDA voice service is configured, do not silently impersonate
+      // AIDA with an operating-system voice. Native AIDA completes the speech
+      // cycle without substitute speech when the provider returns no audio.
+      transport = 'silent';
+    }
+  } else {
+    callbacks.onWarning?.(
+      'AIDA voice service is not configured. Android speech fallback engaged.',
+    );
+    try {
       await playSystemSpeech(text);
       transport = 'system';
-    }
-  } catch (error) {
-    hardFailure =
-      error instanceof Error ? error.message : 'AIDA speech sequence failed.';
-  } finally {
-    try {
-      await playAudioSourceAndWait(END_TONE, 12_000);
     } catch (error) {
-      const toneError =
-        error instanceof Error ? error.message : 'AIDA end tone failed.';
-      hardFailure = hardFailure ? `${hardFailure} ${toneError}` : toneError;
+      callbacks.onWarning?.(
+        `Android speech fallback failed. ${errorMessage(error)}`,
+      );
+      transport = 'silent';
     }
   }
 
-  if (hardFailure) {
-    callbacks.onError?.(hardFailure);
+  try {
+    await playAudioSourceAndWait(END_TONE, 12_000);
+  } catch (error) {
+    callbacks.onWarning?.(
+      `AIDA end tone failed. ${errorMessage(error)}`,
+    );
   }
+
   callbacks.onDone?.();
   return transport;
 }
@@ -238,10 +241,9 @@ function playAudioSourceAndWait(
     const subscription = player.addListener(
       'playbackStatusUpdate',
       (status: AudioStatus) => {
-        if (status.error) {
-          settle(new Error(status.error));
-          return;
-        }
+        // Expo SDK 54 AudioStatus has no playback error field. Playback API
+        // exceptions are handled synchronously and an uncompleted player is
+        // bounded by the watchdog below.
         if (status.didJustFinish) {
           settle();
         }
@@ -277,4 +279,8 @@ function playAudioSourceAndWait(
 
 function normalizeSpeechText(text: string) {
   return (text || '').trim().replace(/\s+/g, ' ');
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'Unknown audio error.';
 }
