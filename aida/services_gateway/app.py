@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -40,6 +41,15 @@ class SpeechResponse(BaseModel):
     content_type: str
 
 
+class TranscriptionRequest(BaseModel):
+    audio_base64: str = Field(min_length=1, max_length=18_000_000)
+    file_extension: str = Field(default=".m4a", min_length=1, max_length=16)
+
+
+class TranscriptionResponse(BaseModel):
+    transcript: str
+
+
 def create_app(service: AidaServicesGateway | None = None) -> FastAPI:
     gateway = service or AidaServicesGateway()
 
@@ -47,7 +57,8 @@ def create_app(service: AidaServicesGateway | None = None) -> FastAPI:
         title="AIDA Services Gateway",
         description=(
             "Authenticated service boundary for AIDA intent resolution, "
-            "reasoning, and speech. Provider credentials remain server-side."
+            "reasoning, speech, and disposable voice transcription. "
+            "Provider credentials remain server-side."
         ),
         version="0.1.0",
     )
@@ -120,6 +131,37 @@ def create_app(service: AidaServicesGateway | None = None) -> FastAPI:
                 audio_base64=base64.b64encode(result.audio).decode("ascii"),
                 content_type=result.content_type,
             )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/v1/transcription",
+        response_model=TranscriptionResponse,
+        dependencies=[Depends(verify_gateway_access)],
+    )
+    def transcription(request: TranscriptionRequest) -> TranscriptionResponse:
+        try:
+            audio = base64.b64decode(request.audio_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Voice recording payload is not valid base64 audio.",
+            ) from exc
+
+        try:
+            result = gateway.transcribe(
+                audio,
+                file_extension=request.file_extension,
+            )
+            return TranscriptionResponse(transcript=result.text)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
