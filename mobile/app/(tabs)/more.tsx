@@ -41,7 +41,6 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
     title: 'AIDA',
     items: [
       { title: 'Memory', detail: 'Persistent storage foundation is active; semantic memory parity remains staged.', badge: 'FOUNDATION', tone: 'ready' },
-      { title: 'Voice Input', detail: 'Android capture will mirror native LISTENING and PROCESSING behavior.', badge: 'STAGED', tone: 'staged' },
       { title: 'Threats', detail: 'Device-local findings, evidence, and response plans.', badge: 'STAGED', tone: 'staged' },
       { title: 'Tasks', detail: 'Durable background assistance and progress.', badge: 'STAGED', tone: 'staged' },
     ],
@@ -89,6 +88,8 @@ export default function MoreScreen() {
   const brainValue = runtime.statuses.find((item) => item.id === 'brain')?.value;
   const gatewayReady = brainValue === 'IDLE';
   const developmentAuto = gateway.source === 'development';
+  const voiceCapability = runtime.capabilities.find((item) => item.id === 'voice.input');
+  const voiceReady = voiceCapability?.state === 'supported';
 
   async function toggleSpeech() {
     if (speechUpdating) return;
@@ -109,7 +110,7 @@ export default function MoreScreen() {
       setGatewayToken('');
       const configuration = await loadGatewayConfiguration();
       setGateway(configuration);
-      setGatewayMessage('Gateway enrolled. Native AIDA reasoning is available.');
+      setGatewayMessage('Gateway enrolled. Native AIDA provider services are available.');
     } catch (error) {
       setGatewayMessage(error instanceof Error ? error.message : 'Gateway enrollment failed.');
     } finally {
@@ -127,7 +128,8 @@ export default function MoreScreen() {
         <Text style={styles.noticeBody}>
           This AIDA instance initializes locally on the mobile device. Desktop
           AIDA is not required. Shared provider services supply native AIDA
-          reasoning and voice without making another AIDA instance a dependency.
+          reasoning, voice, and transcription without making another AIDA
+          instance a dependency.
         </Text>
       </GlassPanel>
 
@@ -147,7 +149,7 @@ export default function MoreScreen() {
           </View>
         </View>
         <Text style={styles.gatewayDetail}>
-          Native intent resolution, AIDABrain reasoning, and the configured AIDA ElevenLabs voice. Provider credentials remain outside the mobile application.
+          Native intent resolution, AIDABrain reasoning, configured AIDA ElevenLabs voice, and disposable voice transcription. Provider credentials remain outside the mobile application.
         </Text>
 
         {developmentAuto ? (
@@ -199,7 +201,7 @@ export default function MoreScreen() {
       <GlassPanel variant="deep" style={styles.groupCard}>
         <Text style={styles.groupTitle}>INTERACTION</Text>
         <View style={styles.rows}>
-          <View style={styles.row}>
+          <View style={[styles.row, styles.rowBorder]}>
             <View style={styles.rowText}>
               <Text style={styles.rowTitle}>Speech Output</Text>
               <Text style={styles.rowDetail}>
@@ -218,6 +220,20 @@ export default function MoreScreen() {
             >
               <View style={[styles.switchThumb, runtime.speech_enabled && styles.switchThumbEnabled]} />
             </Pressable>
+          </View>
+
+          <View style={styles.row}>
+            <View style={styles.rowText}>
+              <Text style={styles.rowTitle}>Voice Input</Text>
+              <Text style={styles.rowDetail}>
+                {voiceCapability?.detail ?? 'Push-to-talk voice input is initializing.'}
+              </Text>
+            </View>
+            <View style={[styles.badge, voiceReady ? styles.readyBadge : styles.stagedBadge]}>
+              <Text style={[styles.badgeText, voiceReady ? styles.readyText : styles.stagedText]}>
+                {voiceReady ? 'READY' : 'STAGED'}
+              </Text>
+            </View>
           </View>
         </View>
       </GlassPanel>
