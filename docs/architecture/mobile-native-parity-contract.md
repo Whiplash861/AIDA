@@ -204,7 +204,7 @@ Provider credentials must not be embedded in mobile builds.
 
 The AIDA Services Gateway may synthesize speech server-side by calling the same canonical voice module used by desktop AIDA.
 
-Android/iOS system TTS is a degraded fallback only when no AIDA voice service is configured. If an enrolled AIDA voice service fails, the application must surface the failure rather than silently impersonate AIDA with another voice.
+Android/iOS operating-system TTS must not substitute for AIDA's configured ElevenLabs voice. If the AIDA voice service is unavailable, the client may complete the canonical cue cycle and surface the provider failure, but it must not impersonate AIDA with another voice.
 
 ## 12. Speech serialization
 
@@ -216,7 +216,11 @@ Mobile must serialize the complete audio cycle, including start tone, provider s
 
 ## 13. Voice input state machine
 
-Authoritative source: `aida/interaction/qt_bridge.py`.
+Authoritative sources:
+
+- `aida/interaction/qt_bridge.py`
+- `aida/interaction/voice_capture.py`
+- `aida/interaction/transcription.py`
 
 The interaction contract is:
 
@@ -224,17 +228,18 @@ READY -> LISTENING -> PROCESSING -> transcript/result -> READY
 
 Cancellation and errors are explicit states/events.
 
-Android/iOS recording APIs may differ, but the user-facing state machine must remain AIDA's existing one.
+Android/iOS recording APIs may differ, but the user-facing state machine must remain AIDA's existing one. Capture remains user-initiated, bounded to 120 seconds, disposable, and excluded from AIDA memory as raw audio. The resulting transcript enters the same directive path as typed input.
 
-## 14. Reasoning service boundary
+## 14. Reasoning and provider service boundary
 
 Standalone mobile AIDA must not depend on Desktop AIDA being open.
 
-During Early Alpha, provider-backed reasoning and voice may be supplied through the AIDA Services Gateway. The gateway:
+During Early Alpha, provider-backed reasoning, voice, and transcription may be supplied through the AIDA Services Gateway. The gateway:
 
-- holds Azure/OpenAI and ElevenLabs credentials server-side
+- holds Azure/OpenAI, OpenAI transcription, and ElevenLabs credentials server-side
 - invokes canonical AIDABrain
 - invokes canonical AIDA voice synthesis
+- invokes AIDA's existing transcription provider for disposable audio
 - may expose canonical intent resolution
 - must not execute client-device commands on the gateway host
 
@@ -278,7 +283,9 @@ Before a mobile behavior is considered complete, verify:
 - Does a command preserve transcript-versus-speech distinction?
 - Are capability claims backed by a deterministic mobile provider?
 - Does speech use start tone -> canonical ElevenLabs voice -> end tone?
+- Is any substitute operating-system voice prohibited?
 - Are utterances serialized?
+- Does voice input preserve LISTENING -> PROCESSING -> transcript semantics and delete raw audio?
 - Do public statuses use AIDA's canonical state vocabulary?
 - Does the orb follow native state/color precedence?
 - Are local-only exchanges excluded from Brain context?
