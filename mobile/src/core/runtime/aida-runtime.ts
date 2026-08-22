@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
-import { speakAidaText } from '@/src/core/interaction/speech-output';
+import { speakAidaText, testAidaSpeech } from '@/src/core/interaction/speech-output';
 import { MOBILE_REASONING } from '@/src/core/reasoning/service';
 import {
   loadActivity,
@@ -93,7 +93,7 @@ export async function setSpeechEnabled(enabled: boolean): Promise<void> {
     updated_at: new Date().toISOString(),
     statuses: snapshot.statuses.map((item) =>
       item.id === 'speech'
-        ? { ...item, value: enabled ? 'READY' : 'MUTED', tone: enabled ? 'ready' : 'idle' }
+        ? { ...item, value: enabled ? 'TESTING' : 'MUTED', tone: enabled ? 'active' : 'idle' }
         : item,
     ),
   };
@@ -108,6 +108,17 @@ export async function setSpeechEnabled(enabled: boolean): Promise<void> {
     'info',
     'mobile.speech',
   );
+
+  if (enabled) {
+    await testAidaSpeech({
+      onStart: () => setSubsystemStatus('speech', 'SPEAKING', 'active'),
+      onDone: () => setSubsystemStatus('speech', 'READY', 'ready'),
+      onError: (message) => {
+        setSubsystemStatus('speech', 'ERROR', 'warning');
+        void addActivity('SPEECH', `Speech self-test failed: ${message}`, 'warning', 'mobile.speech');
+      },
+    });
+  }
 }
 
 export async function submitLocalDirective(message: string): Promise<string> {
@@ -227,7 +238,10 @@ async function speakResponseIfEnabled(text: string) {
   await speakAidaText(text, {
     onStart: () => setSubsystemStatus('speech', 'SPEAKING', 'active'),
     onDone: () => setSubsystemStatus('speech', 'READY', 'ready'),
-    onError: () => setSubsystemStatus('speech', 'ERROR', 'warning'),
+    onError: (message) => {
+      setSubsystemStatus('speech', 'ERROR', 'warning');
+      void addActivity('SPEECH', `Speech output failed: ${message}`, 'warning', 'mobile.speech');
+    },
   });
 }
 
