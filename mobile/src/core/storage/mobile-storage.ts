@@ -2,11 +2,13 @@ import * as SecureStore from 'expo-secure-store';
 import Storage from 'expo-sqlite/kv-store';
 
 const INSTANCE_ID_KEY = 'aida.mobile.instance-id.v1';
+const GATEWAY_SESSION_TOKEN_KEY = 'aida.mobile.gateway-session-token.v1';
 const RUNTIME_STATE_KEY = 'aida.mobile.runtime-state.v1';
 const ACTIVITY_KEY = 'aida.mobile.activity.v1';
 
 export type StoredRuntimeState = {
   autonomy_enabled: boolean;
+  speech_enabled: boolean;
 };
 
 export async function loadOrCreateInstanceId(
@@ -22,10 +24,29 @@ export async function loadOrCreateInstanceId(
   return { instanceId, created: true };
 }
 
+export async function loadGatewaySessionToken(): Promise<string> {
+  return (await SecureStore.getItemAsync(GATEWAY_SESSION_TOKEN_KEY))?.trim() ?? '';
+}
+
+export async function saveGatewaySessionToken(token: string): Promise<void> {
+  const clean = token.trim();
+  if (!clean) {
+    await clearGatewaySessionToken();
+    return;
+  }
+  await SecureStore.setItemAsync(GATEWAY_SESSION_TOKEN_KEY, clean);
+}
+
+export async function clearGatewaySessionToken(): Promise<void> {
+  await SecureStore.deleteItemAsync(GATEWAY_SESSION_TOKEN_KEY);
+}
+
 export async function loadRuntimeState(): Promise<StoredRuntimeState> {
-  return readJson<StoredRuntimeState>(RUNTIME_STATE_KEY, {
-    autonomy_enabled: false,
-  });
+  const state = await readJson<Partial<StoredRuntimeState>>(RUNTIME_STATE_KEY, {});
+  return {
+    autonomy_enabled: Boolean(state.autonomy_enabled),
+    speech_enabled: Boolean(state.speech_enabled),
+  };
 }
 
 export async function saveRuntimeState(state: StoredRuntimeState): Promise<void> {
