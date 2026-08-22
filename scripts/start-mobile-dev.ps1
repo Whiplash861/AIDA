@@ -53,6 +53,16 @@ function Wait-GatewayReady([string]$url) {
 
 Set-Location $repoRoot
 $python = Resolve-Python
+
+# Compile parity-critical Python modules before starting a provider service.
+& $python -m compileall -q `
+    (Join-Path $repoRoot "aida\services_gateway") `
+    (Join-Path $repoRoot "aida\audio\text.py") `
+    (Join-Path $repoRoot "aida\intent\technomancer.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "AIDA parity-critical Python modules failed syntax validation."
+}
+
 $lanIp = Resolve-LanIPv4
 $token = & $python -c "import secrets; print(secrets.token_urlsafe(32))"
 $token = ($token | Out-String).Trim()
@@ -89,18 +99,30 @@ try {
         -PassThru
 
     $health = Wait-GatewayReady $localGatewayUrl
+    Write-Host "Gateway intent resolution: $($health.intent_resolution_configured)"
     Write-Host "Gateway reasoning configured: $($health.reasoning_configured)"
     Write-Host "Gateway speech configured:    $($health.speech_configured)"
 
     Set-Location $mobileRoot
 
-    if (-not (Test-Path (Join-Path $mobileRoot "node_modules\expo-audio"))) {
-        Write-Host "Installing updated mobile dependencies..." -ForegroundColor Yellow
-        npm install
+    # npm install is intentionally safe/repeatable here. It keeps node_modules
+    # and the generated lock state aligned with package.json before TypeScript
+    # validation, rather than guessing from the presence of one dependency.
+    Write-Host "Reconciling mobile dependencies..." -ForegroundColor DarkCyan
+    npm install
+    if ($LASTEXITCODE -ne 0) {
+        throw "Mobile dependency installation failed."
     }
 
     npm run sync-aida-assets
+    if ($LASTEXITCODE -ne 0) {
+        throw "Canonical AIDA audio asset synchronization failed."
+    }
+
     npm run typecheck
+    if ($LASTEXITCODE -ne 0) {
+        throw "AIDA Mobile TypeScript validation failed."
+    }
 
     if ($ClearMetro) {
         npx expo start --clear
