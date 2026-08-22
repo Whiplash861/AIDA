@@ -25,35 +25,31 @@ export class LocalRuntimeReasoningProvider implements ReasoningProvider {
     ) {
       text =
         'AIDA. Analytical Intelligent Diagnostic Agent. ' +
-        `Standalone mobile instance ${context.instanceId}. ` +
+        `Instance: ${context.instanceId}. ` +
         `Platform: ${context.platform} ${context.platformVersion}. ` +
         `Device: ${context.deviceModel}. ` +
-        'Local runtime, platform awareness, persistent identity, and registered device-local capabilities are online. ' +
-        'Language-model reasoning gateway: not connected.';
-    } else if (containsAny(normalized, ['status', 'system status', 'how are you'])) {
+        'Local runtime and registered device-local capabilities are online. ' +
+        'Provider-backed language reasoning: unavailable.';
+    } else if (containsAny(normalized, ['status', 'system status'])) {
       text =
         `Status: local AIDA runtime online on ${context.platform} ${context.platformVersion}. ` +
-        'Standalone mobile operation confirmed. Desktop AIDA not required.';
-    } else if (containsAny(normalized, ['platform', 'android', 'device', 'where are you'])) {
+        'Provider-backed language reasoning: unavailable.';
+    } else if (containsAny(normalized, ['platform', 'android', 'device'])) {
       text =
-        `Platform identified: ${context.platform} ${context.platformVersion}. ` +
-        `Device: ${context.deviceModel}. Runtime mode: standalone mobile instance.`;
+        `Platform: ${context.platform} ${context.platformVersion}. ` +
+        `Device: ${context.deviceModel}.`;
     } else if (containsAny(normalized, ['identity', 'instance id', 'instance'])) {
       text =
         `Instance identity: ${context.instanceId}. ` +
-        'Identity storage: secure device-local persistence. Reused across application restarts.';
+        'Storage: secure device-local persistence.';
     } else if (containsAny(normalized, ['capability', 'capabilities', 'what can you do'])) {
       text =
         `Registered local capabilities: ${context.supportedCapabilities.join(', ')}. ` +
-        'Independent language-model reasoning and deeper platform providers remain staged.';
-    } else if (containsAny(normalized, ['hello', 'hi', 'hey'])) {
-      text =
-        'AIDA Mobile runtime online. Android environment recognized. Standalone operation confirmed.';
+        'Unregistered operations remain unavailable.';
     } else {
       text =
-        'Input received. Local runtime online. ' +
-        'Language-model reasoning gateway not connected. ' +
-        'Available local functions include runtime status, platform identity, persistent instance identity, and registered capability reporting.';
+        'Analysis unavailable. Provider-backed language reasoning is not connected. ' +
+        'Local runtime status and registered device-local capabilities remain available.';
     }
 
     return {
