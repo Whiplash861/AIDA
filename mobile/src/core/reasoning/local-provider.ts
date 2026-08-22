@@ -14,7 +14,21 @@ export class LocalRuntimeReasoningProvider implements ReasoningProvider {
     const normalized = input.trim().toLowerCase();
     let text: string;
 
-    if (containsAny(normalized, ['status', 'system status', 'how are you'])) {
+    if (
+      containsAny(normalized, [
+        'identify yourself',
+        'who are you',
+        'what are you',
+        'your identity',
+        'your name',
+      ])
+    ) {
+      text =
+        'I am AIDA, the Analytical Intelligent Diagnostic Agent. ' +
+        `This is my standalone mobile instance ${context.instanceId}, running locally on ` +
+        `${context.platform} ${context.platformVersion} on ${context.deviceModel}. ` +
+        'My full language-model reasoning gateway is not connected yet, but my local runtime, platform awareness, persistent identity, and supported device-local capabilities are online.';
+    } else if (containsAny(normalized, ['status', 'system status', 'how are you'])) {
       text =
         `Local AIDA runtime is online on ${context.platform} ${context.platformVersion}. ` +
         'This mobile instance is operating independently of Desktop AIDA.';
