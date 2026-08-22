@@ -3,9 +3,13 @@
   "main": "expo-router/entry",
   "version": "0.1.0",
   "scripts": {
+    "sync-aida-assets": "node ./scripts/sync-aida-assets.js",
+    "prestart": "npm run sync-aida-assets",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
+    "preandroid": "npm run sync-aida-assets",
     "android": "expo start --android",
+    "preios": "npm run sync-aida-assets",
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
