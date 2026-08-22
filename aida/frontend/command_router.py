@@ -8,6 +8,7 @@ from aida.intent.defaults import build_default_intent_registry
 from aida.intent.early_alpha import register_early_alpha_intents
 from aida.intent.models import IntentContext
 from aida.intent.resolver import IntentResolver
+from aida.intent.technomancer import register_technomancer_intents
 
 
 class CommandType(Enum):
@@ -47,6 +48,12 @@ class CommandType(Enum):
     THREAT_DELETE_BLOCKED = auto()
     THREAT_CENTER_SHOW = auto()
     TASK_CENTER_SHOW = auto()
+    TECHNOMANCER_HEALTH = auto()
+    TECHNOMANCER_HARDWARE = auto()
+    TECHNOMANCER_UPGRADES = auto()
+    TECHNOMANCER_ADVISORIES = auto()
+    TECHNOMANCER_BACKGROUND_ENABLE = auto()
+    TECHNOMANCER_BACKGROUND_DISABLE = auto()
     INTENT_CLARIFICATION = auto()
 
 
@@ -65,7 +72,7 @@ class RoutedCommand:
 
 
 class CommandRouter:
-    """Routes speech or typed language through AIDA's local intent resolver."""
+    """Routes speech or typed language through AIDA's native intent resolver."""
 
     _CONTROL_COMMANDS = frozenset(
         {
@@ -82,6 +89,7 @@ class CommandRouter:
         if resolver is None:
             registry = build_default_intent_registry()
             register_early_alpha_intents(registry)
+            register_technomancer_intents(registry)
             resolver = IntentResolver(registry)
         self.resolver = resolver
         self._context = IntentContext()
