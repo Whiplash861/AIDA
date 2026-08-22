@@ -127,15 +127,25 @@ export default function HomeScreen() {
     setShowQuickActions(false);
 
     try {
-      const reply = await submitLocalDirective(clean, conversationContext);
-      setMessages((current) => [
-        ...current,
-        {
-          id: `aida-${Date.now()}`,
-          sender: 'aida',
-          text: reply,
-        },
-      ]);
+      const result = await submitLocalDirective(clean, conversationContext);
+      setMessages((current) => {
+        const contextualized = result.includeInContext
+          ? current
+          : current.map((message) =>
+              message.id === userMessage.id
+                ? { ...message, includeInContext: false }
+                : message,
+            );
+        return [
+          ...contextualized,
+          {
+            id: `aida-${Date.now()}`,
+            sender: 'aida',
+            text: result.text,
+            includeInContext: result.includeInContext,
+          },
+        ];
+      });
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'Unknown brain error.';
       setMessages((current) => [
@@ -158,6 +168,7 @@ export default function HomeScreen() {
         text:
           `${label} is staged for the native ${runtime.platform} provider. ` +
           'No unregistered device operation was executed.',
+        includeInContext: false,
       },
     ]);
     setShowQuickActions(false);
@@ -315,15 +326,18 @@ export default function HomeScreen() {
 }
 
 function buildConversationContext(messages: MobileMessage[]): string[] {
-  return messages.slice(-12).map((message) => {
-    const sender =
-      message.sender === 'user'
-        ? 'User'
-        : message.sender === 'aida'
-          ? 'AIDA'
-          : 'System';
-    return `${sender}: ${message.text.trim()}`;
-  });
+  return messages
+    .filter((message) => message.includeInContext !== false)
+    .slice(-12)
+    .map((message) => {
+      const sender =
+        message.sender === 'user'
+          ? 'User'
+          : message.sender === 'aida'
+            ? 'AIDA'
+            : 'System';
+      return `${sender}: ${message.text.trim()}`;
+    });
 }
 
 function mapRuntimeStatus(status: LocalRuntimeStatus): AidaRuntimeStatus {
