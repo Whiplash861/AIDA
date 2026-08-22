@@ -205,7 +205,7 @@ export default function MoreScreen() {
             <View style={styles.rowText}>
               <Text style={styles.rowTitle}>Speech Output</Text>
               <Text style={styles.rowDetail}>
-                Canonical start tone, configured AIDA ElevenLabs voice, and canonical end tone. Android TTS is degraded fallback only when no AIDA voice service is configured.
+                Canonical start tone, configured AIDA ElevenLabs voice, and canonical end tone. No operating-system voice substitutes for AIDA if the voice provider is unavailable.
               </Text>
             </View>
             <Pressable
