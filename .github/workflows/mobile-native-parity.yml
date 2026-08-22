@@ -1,0 +1,52 @@
+name: AIDA Mobile Native Parity
+
+on:
+  push:
+    branches:
+      - feature/aida-mobile-standalone-alpha
+  pull_request:
+    paths:
+      - 'aida/**'
+      - 'mobile/**'
+      - 'tests/test_services_gateway_parity.py'
+      - 'scripts/start-mobile-dev.ps1'
+      - 'docs/architecture/mobile-native-parity-contract.md'
+      - '.github/workflows/mobile-native-parity.yml'
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install parity-test Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest openai python-dotenv requests fastapi 'playsound==1.2.2'
+
+      - name: Run gateway parity tests
+        run: python -m pytest -q tests/test_services_gateway_parity.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm install
+
+      - name: Sync canonical AIDA audio assets
+        working-directory: mobile
+        run: npm run sync-aida-assets
+
+      - name: Type-check mobile runtime
+        working-directory: mobile
+        run: npm run typecheck
