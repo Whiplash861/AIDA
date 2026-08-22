@@ -16,6 +16,7 @@ export type GatewayRuntimeState = {
   source: 'development' | 'enrolled' | 'none';
   reasoningConfigured: boolean;
   speechConfigured: boolean;
+  transcriptionConfigured: boolean;
   error: string;
 };
 
@@ -28,6 +29,7 @@ class MobileReasoningService {
     source: 'none',
     reasoningConfigured: false,
     speechConfigured: false,
+    transcriptionConfigured: false,
     error: '',
   };
 
@@ -53,6 +55,7 @@ class MobileReasoningService {
         source: configuration.source,
         reasoningConfigured: ready.reasoning_configured,
         speechConfigured: ready.speech_configured,
+        transcriptionConfigured: ready.transcription_configured,
         error: ready.reasoning_configured
           ? ''
           : 'Gateway reached, but Azure/OpenAI reasoning is not configured.',
@@ -96,6 +99,7 @@ class MobileReasoningService {
       source: 'enrolled',
       reasoningConfigured: true,
       speechConfigured: ready.speech_configured,
+      transcriptionConfigured: ready.transcription_configured,
       error: '',
     };
   }
@@ -132,13 +136,18 @@ class MobileReasoningService {
 type GatewayReadyResponse = {
   reasoning_configured?: boolean;
   speech_configured?: boolean;
+  transcription_configured?: boolean;
   detail?: unknown;
 };
 
 async function probeGateway(
   baseUrl: string,
   token: string,
-): Promise<{ reasoning_configured: boolean; speech_configured: boolean }> {
+): Promise<{
+  reasoning_configured: boolean;
+  speech_configured: boolean;
+  transcription_configured: boolean;
+}> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8_000);
 
@@ -162,6 +171,7 @@ async function probeGateway(
     return {
       reasoning_configured: Boolean(payload?.reasoning_configured),
       speech_configured: Boolean(payload?.speech_configured),
+      transcription_configured: Boolean(payload?.transcription_configured),
     };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
