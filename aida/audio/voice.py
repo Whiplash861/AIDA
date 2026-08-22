@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 import threading
@@ -19,13 +20,14 @@ log = get_logger(__name__)
 
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 
-# Serialize ALL voice output so lines never overlap
-_speak_lock = threading.Lock()
+# Serialize voice generation/playback so AIDA utterances never overlap and so
+# every runtime uses one canonical ElevenLabs implementation.
+_voice_lock = threading.RLock()
 
-# Reuse HTTP connections for speed
+# Reuse HTTP connections for speed.
 _session = requests.Session()
 
-# Small in-memory LRU cache for repeated lines
+# Small in-memory LRU cache for repeated lines.
 _CACHE_MAX_ITEMS = 32
 _cache: "OrderedDict[str, bytes]" = OrderedDict()
 _cache_lock = threading.Lock()
@@ -41,45 +43,65 @@ class VoiceSettings:
 _DEFAULT_SETTINGS = VoiceSettings()
 
 
-def speak_text(text: str, config: AidaConfig, settings: VoiceSettings = _DEFAULT_SETTINGS) -> None:
-    """
-    Speak a single line using ElevenLabs TTS.
+def synthesize_text(
+    text: str,
+    config: AidaConfig,
+    settings: VoiceSettings = _DEFAULT_SETTINGS,
+) -> Optional[bytes]:
+    """Generate AIDA's canonical ElevenLabs audio without playing it locally.
 
-    Guarantees:
-    - Blocking playback (prevents overlapping lines)
-    - Thread-safe (multiple calls serialize)
-    - Retries on transient failures (429/5xx/network)
-    - Connection pooling via requests.Session
-    - Small LRU cache to avoid repeated API calls
+    This is the shared synthesis boundary used by desktop playback and remote
+    AIDA runtimes. Provider keys and the configured AIDA voice ID remain on the
+    trusted host running this function.
     """
-    text = _normalize_text(text)
-    if not text:
-        return
+    normalized = _normalize_text(text)
+    if not normalized:
+        return None
 
     if not getattr(config, "voice_enabled", False):
-        log.info("Voice disabled. Skipping TTS.")
-        return
+        log.info("Voice disabled. Skipping TTS synthesis.")
+        return None
 
     api_key = getattr(config, "elevenlabs_api_key", None)
     voice_id = getattr(config, "elevenlabs_voice_id", None)
     if not api_key or not voice_id:
-        log.warning("ElevenLabs API key or voice ID missing. Skipping TTS.")
+        log.warning("ElevenLabs API key or voice ID missing. Skipping TTS synthesis.")
+        return None
+
+    with _voice_lock:
+        return _get_tts_bytes_cached(normalized, api_key, voice_id, settings)
+
+
+def speak_text(
+    text: str,
+    config: AidaConfig,
+    settings: VoiceSettings = _DEFAULT_SETTINGS,
+) -> None:
+    """Speak a single line using AIDA's canonical ElevenLabs voice.
+
+    Guarantees:
+    - Blocking playback (prevents overlapping lines)
+    - Thread-safe serialization
+    - Retries on transient failures (429/5xx/network)
+    - Connection pooling via requests.Session
+    - Small LRU cache to avoid repeated provider calls
+    """
+    normalized = _normalize_text(text)
+    if not normalized:
         return
 
-    # Prevent any overlap regardless of call site
-    with _speak_lock:
-        audio_bytes = _get_tts_bytes_cached(text, api_key, voice_id, settings)
+    # Keep generation and local playback inside one serialized operation. The
+    # RLock lets synthesize_text reuse the same canonical boundary safely.
+    with _voice_lock:
+        audio_bytes = synthesize_text(normalized, config, settings)
         if not audio_bytes:
             return
-
         _play_mp3_bytes_blocking(audio_bytes)
 
 
 def _normalize_text(text: str) -> str:
-    # Conservative normalization: remove leading/trailing whitespace and collapse runs
     t = (text or "").strip()
-    t = " ".join(t.split())
-    return t
+    return " ".join(t.split())
 
 
 def _get_tts_bytes_cached(
@@ -109,7 +131,10 @@ def _get_tts_bytes_cached(
 
 
 def _cache_key(text: str, voice_id: str, settings: VoiceSettings) -> str:
-    payload = f"{voice_id}|{settings.model_id}|{settings.stability:.3f}|{settings.similarity_boost:.3f}|{text}"
+    payload = (
+        f"{voice_id}|{settings.model_id}|{settings.stability:.3f}|"
+        f"{settings.similarity_boost:.3f}|{text}"
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -121,7 +146,6 @@ def _request_tts_with_retries(
 ) -> Optional[bytes]:
     max_attempts = 4
     base_sleep = 0.6
-
     last_err: Optional[str] = None
 
     for attempt in range(1, max_attempts + 1):
@@ -130,10 +154,8 @@ def _request_tts_with_retries(
             if audio:
                 return audio
             last_err = "No audio returned (non-200, 429, 5xx, or empty body)."
-
         except (requests.Timeout, requests.ConnectionError) as exc:
             last_err = f"Network error: {exc}"
-
         except Exception as exc:
             last_err = f"Unexpected error: {exc}"
 
@@ -141,7 +163,10 @@ def _request_tts_with_retries(
             sleep_s = base_sleep * (1.7 ** (attempt - 1))
             log.warning(
                 "TTS attempt %d/%d failed. Retrying in %.2fs. (%s)",
-                attempt, max_attempts, sleep_s, last_err
+                attempt,
+                max_attempts,
+                sleep_s,
+                last_err,
             )
             time.sleep(sleep_s)
 
@@ -149,7 +174,12 @@ def _request_tts_with_retries(
     return None
 
 
-def _request_tts(text: str, api_key: str, voice_id: str, settings: VoiceSettings) -> Optional[bytes]:
+def _request_tts(
+    text: str,
+    api_key: str,
+    voice_id: str,
+    settings: VoiceSettings,
+) -> Optional[bytes]:
     url = f"{ELEVENLABS_TTS_URL}/{voice_id}"
     headers = {
         "xi-api-key": api_key,
@@ -165,13 +195,9 @@ def _request_tts(text: str, api_key: str, voice_id: str, settings: VoiceSettings
         },
     }
 
-    # Generation may take time; connect fast, read longer
-    timeout = (5, 45)
-
     log.info("Sending TTS request to ElevenLabs. Text length: %d", len(text))
-    resp = _session.post(url, headers=headers, json=payload, timeout=timeout)
+    resp = _session.post(url, headers=headers, json=payload, timeout=(5, 45))
 
-    # Retry-worthy statuses
     if resp.status_code == 429:
         log.warning("ElevenLabs rate-limited (429).")
         return None
@@ -181,18 +207,12 @@ def _request_tts(text: str, api_key: str, voice_id: str, settings: VoiceSettings
 
     if resp.status_code != 200:
         body = resp.text
-
         log.error(
-            "ElevenLabs TTS failed.\n"
-            "Status: %d\n"
-            "Response:\n%s",
+            "ElevenLabs TTS failed.\nStatus: %d\nResponse:\n%s",
             resp.status_code,
             body,
         )
-
-        raise RuntimeError(
-            f"ElevenLabs returned {resp.status_code}:\n{body}"
-        )
+        raise RuntimeError(f"ElevenLabs returned {resp.status_code}:\n{body}")
 
     data = resp.content
     if not data:
@@ -204,30 +224,22 @@ def _request_tts(text: str, api_key: str, voice_id: str, settings: VoiceSettings
 
 
 def _play_mp3_bytes_blocking(audio_bytes: bytes) -> None:
-    """
-    playsound requires a filename. Write to a deterministic temp cache file and play blocking.
-    """
+    """Write generated audio to the deterministic temp cache and play it."""
     tmp_dir = os.path.join(tempfile.gettempdir(), "AIDA_TTS_CACHE")
     os.makedirs(tmp_dir, exist_ok=True)
 
-    # Store per content-hash so repeated lines don't rewrite
     h = hashlib.sha256(audio_bytes).hexdigest()
     mp3_path = os.path.join(tmp_dir, f"aida_{h}.mp3")
 
     try:
         if not os.path.exists(mp3_path):
-            with open(mp3_path, "wb") as f:
-                f.write(audio_bytes)
-
-        # BLOCK until playback completes (prevents overlap)
+            with open(mp3_path, "wb") as file_obj:
+                file_obj.write(audio_bytes)
         playsound(mp3_path, block=True)
-
     except Exception as exc:
         log.exception("Error playing TTS audio: %s", exc)
-        
-import logging
+
 
 def set_quiet_logs() -> None:
-    # Silence noisy transport logs
     logging.getLogger("aida.audio.voice").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
