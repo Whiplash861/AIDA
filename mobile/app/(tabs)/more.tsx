@@ -10,7 +10,10 @@ import {
   setSpeechEnabled,
   subscribeRuntime,
 } from '@/src/core/runtime/aida-runtime';
-import { loadGatewayUrl } from '@/src/core/storage/mobile-storage';
+import {
+  GatewayConfiguration,
+  loadGatewayConfiguration,
+} from '@/src/core/services/gateway-config';
 import {
   AIDA_COLORS,
   AIDA_FONTS,
@@ -37,8 +40,8 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
   {
     title: 'AIDA',
     items: [
-      { title: 'Memory', detail: 'Persistent storage foundation is active; semantic memory is the next layer.', badge: 'FOUNDATION', tone: 'ready' },
-      { title: 'Voice Input', detail: 'Microphone capture and transcription through a secure mobile path.', badge: 'STAGED', tone: 'staged' },
+      { title: 'Memory', detail: 'Persistent storage foundation is active; semantic memory parity remains staged.', badge: 'FOUNDATION', tone: 'ready' },
+      { title: 'Voice Input', detail: 'Android capture will mirror native LISTENING and PROCESSING behavior.', badge: 'STAGED', tone: 'staged' },
       { title: 'Threats', detail: 'Device-local findings, evidence, and response plans.', badge: 'STAGED', tone: 'staged' },
       { title: 'Tasks', detail: 'Durable background assistance and progress.', badge: 'STAGED', tone: 'staged' },
     ],
@@ -60,9 +63,16 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
   },
 ];
 
+const EMPTY_GATEWAY: GatewayConfiguration = {
+  baseUrl: '',
+  token: '',
+  source: 'none',
+};
+
 export default function MoreScreen() {
   const [runtime, setRuntime] = useState<MobileRuntimeSnapshot>(() => getRuntimeSnapshot());
   const [speechUpdating, setSpeechUpdating] = useState(false);
+  const [gateway, setGateway] = useState<GatewayConfiguration>(EMPTY_GATEWAY);
   const [gatewayUrl, setGatewayUrl] = useState('');
   const [gatewayToken, setGatewayToken] = useState('');
   const [gatewaySaving, setGatewaySaving] = useState(false);
@@ -70,10 +80,15 @@ export default function MoreScreen() {
 
   useEffect(() => subscribeRuntime(setRuntime), []);
   useEffect(() => {
-    void loadGatewayUrl().then(setGatewayUrl);
+    void loadGatewayConfiguration().then((configuration) => {
+      setGateway(configuration);
+      setGatewayUrl(configuration.baseUrl);
+    });
   }, []);
 
-  const gatewayReady = runtime.statuses.find((item) => item.id === 'brain')?.value === 'READY';
+  const brainValue = runtime.statuses.find((item) => item.id === 'brain')?.value;
+  const gatewayReady = brainValue === 'IDLE';
+  const developmentAuto = gateway.source === 'development';
 
   async function toggleSpeech() {
     if (speechUpdating) return;
@@ -86,13 +101,15 @@ export default function MoreScreen() {
   }
 
   async function enrollGateway() {
-    if (gatewaySaving) return;
+    if (gatewaySaving || developmentAuto) return;
     setGatewaySaving(true);
     setGatewayMessage('');
     try {
       await configureServicesGateway(gatewayUrl, gatewayToken);
       setGatewayToken('');
-      setGatewayMessage('Gateway enrolled. Reasoning provider ready.');
+      const configuration = await loadGatewayConfiguration();
+      setGateway(configuration);
+      setGatewayMessage('Gateway enrolled. Native AIDA reasoning is available.');
     } catch (error) {
       setGatewayMessage(error instanceof Error ? error.message : 'Gateway enrollment failed.');
     } finally {
@@ -103,14 +120,14 @@ export default function MoreScreen() {
   return (
     <PageShell
       title="Control"
-      subtitle="Mobile-friendly access to AIDA systems, Engines, authority, and support."
+      subtitle="AIDA systems, Engines, authority, and support."
     >
       <GlassPanel variant="header" style={styles.noticeCard}>
         <Text style={styles.noticeTitle}>STANDALONE MOBILE EARLY ALPHA</Text>
         <Text style={styles.noticeBody}>
           This AIDA instance initializes locally on the mobile device. Desktop
-          AIDA is not required for normal startup, status, activity, or local
-          directive intake.
+          AIDA is not required. Shared provider services supply native AIDA
+          reasoning and voice without making another AIDA instance a dependency.
         </Text>
       </GlassPanel>
 
@@ -119,40 +136,63 @@ export default function MoreScreen() {
           <Text style={styles.groupTitle}>AIDA SERVICES GATEWAY</Text>
           <View style={[styles.badge, gatewayReady ? styles.readyBadge : styles.stagedBadge]}>
             <Text style={[styles.badgeText, gatewayReady ? styles.readyText : styles.stagedText]}>
-              {gatewayReady ? 'READY' : 'NOT ENROLLED'}
+              {developmentAuto && gatewayReady
+                ? 'DEVELOPMENT AUTO'
+                : gatewayReady
+                  ? 'READY'
+                  : gateway.source === 'none'
+                    ? 'NOT ENROLLED'
+                    : 'ATTENTION'}
             </Text>
           </View>
         </View>
         <Text style={styles.gatewayDetail}>
-          Secure reasoning and AIDA voice services. Provider credentials remain outside the mobile application.
+          Native intent resolution, AIDABrain reasoning, and the configured AIDA ElevenLabs voice. Provider credentials remain outside the mobile application.
         </Text>
-        <TextInput
-          value={gatewayUrl}
-          onChangeText={setGatewayUrl}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          placeholder="http://192.168.x.x:8787"
-          placeholderTextColor={AIDA_COLORS.textDim}
-          style={styles.input}
-        />
-        <TextInput
-          value={gatewayToken}
-          onChangeText={setGatewayToken}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-          placeholder="Gateway session token"
-          placeholderTextColor={AIDA_COLORS.textDim}
-          style={styles.input}
-        />
-        <Pressable
-          onPress={() => void enrollGateway()}
-          disabled={gatewaySaving}
-          style={({ pressed }) => [styles.gatewayButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.gatewayButtonText}>{gatewaySaving ? 'ENROLLING...' : 'ENROLL GATEWAY'}</Text>
-        </Pressable>
+
+        {developmentAuto ? (
+          <View style={styles.developmentCard}>
+            <Text style={styles.developmentLabel}>AUTOMATIC DEVELOPMENT SESSION</Text>
+            <Text style={styles.developmentValue} numberOfLines={1}>
+              {gateway.baseUrl}
+            </Text>
+            <Text style={styles.gatewayDetail}>
+              The development launcher supplied an ephemeral session credential. No manual token entry is required.
+            </Text>
+          </View>
+        ) : (
+          <>
+            <TextInput
+              value={gatewayUrl}
+              onChangeText={setGatewayUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              placeholder="Gateway URL"
+              placeholderTextColor={AIDA_COLORS.textDim}
+              style={styles.input}
+            />
+            <TextInput
+              value={gatewayToken}
+              onChangeText={setGatewayToken}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+              placeholder="Gateway enrollment credential"
+              placeholderTextColor={AIDA_COLORS.textDim}
+              style={styles.input}
+            />
+            <Pressable
+              onPress={() => void enrollGateway()}
+              disabled={gatewaySaving}
+              style={({ pressed }) => [styles.gatewayButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.gatewayButtonText}>
+                {gatewaySaving ? 'ENROLLING...' : 'ENROLL GATEWAY'}
+              </Text>
+            </Pressable>
+          </>
+        )}
         {gatewayMessage ? <Text style={styles.gatewayMessage}>{gatewayMessage}</Text> : null}
       </GlassPanel>
 
@@ -163,7 +203,7 @@ export default function MoreScreen() {
             <View style={styles.rowText}>
               <Text style={styles.rowTitle}>Speech Output</Text>
               <Text style={styles.rowDetail}>
-                Allow AIDA to speak responses. Android TTS is the current local fallback.
+                Canonical start tone, configured AIDA ElevenLabs voice, and canonical end tone. Android TTS is degraded fallback only when no AIDA voice service is configured.
               </Text>
             </View>
             <Pressable
@@ -224,8 +264,11 @@ const styles = StyleSheet.create({
   groupTitle: { color: AIDA_COLORS.cyanStrong, fontFamily: AIDA_FONTS.display, fontSize: 10, fontWeight: '700', letterSpacing: 1.6 },
   gatewayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: AIDA_SPACING.sm },
   gatewayDetail: { marginTop: AIDA_SPACING.sm, color: AIDA_COLORS.textMuted, fontSize: 12, lineHeight: 18 },
-  input: { marginTop: AIDA_SPACING.sm, minHeight: 42, borderWidth: 1, borderColor: AIDA_COLORS.borderSoft, borderRadius: AIDA_RADIUS.md, backgroundColor: 'rgba(5, 13, 20, 0.88)', color: AIDA_COLORS.textBright, paddingHorizontal: 12, fontFamily: AIDA_FONTS.mono, fontSize: 11 },
-  gatewayButton: { marginTop: AIDA_SPACING.sm, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(100, 216, 255, 0.45)', borderRadius: AIDA_RADIUS.md, backgroundColor: 'rgba(8, 39, 59, 0.86)' },
+  developmentCard: { marginTop: AIDA_SPACING.sm, borderWidth: 1, borderColor: AIDA_COLORS.borderSoft, borderRadius: AIDA_RADIUS.small, backgroundColor: 'rgba(5, 13, 20, 0.72)', padding: AIDA_SPACING.sm },
+  developmentLabel: { color: AIDA_COLORS.mint, fontFamily: AIDA_FONTS.mono, fontSize: 8, fontWeight: '700', letterSpacing: 0.8 },
+  developmentValue: { marginTop: 6, color: AIDA_COLORS.textPrimary, fontFamily: AIDA_FONTS.mono, fontSize: 10 },
+  input: { marginTop: AIDA_SPACING.sm, minHeight: 42, borderWidth: 1, borderColor: AIDA_COLORS.borderSoft, borderRadius: AIDA_RADIUS.small, backgroundColor: 'rgba(5, 13, 20, 0.88)', color: AIDA_COLORS.textBright, paddingHorizontal: 12, fontFamily: AIDA_FONTS.mono, fontSize: 11 },
+  gatewayButton: { marginTop: AIDA_SPACING.sm, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(100, 216, 255, 0.45)', borderRadius: AIDA_RADIUS.small, backgroundColor: 'rgba(8, 39, 59, 0.86)' },
   gatewayButtonText: { color: AIDA_COLORS.cyanStrong, fontFamily: AIDA_FONTS.display, fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
   gatewayMessage: { marginTop: AIDA_SPACING.sm, color: AIDA_COLORS.textMuted, fontSize: 11, lineHeight: 17 },
   rows: { marginTop: AIDA_SPACING.sm },
