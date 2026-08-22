@@ -58,7 +58,8 @@ $python = Resolve-Python
 & $python -m compileall -q `
     (Join-Path $repoRoot "aida\services_gateway") `
     (Join-Path $repoRoot "aida\audio\text.py") `
-    (Join-Path $repoRoot "aida\intent\technomancer.py")
+    (Join-Path $repoRoot "aida\intent\technomancer.py") `
+    (Join-Path $repoRoot "aida\interaction\transcription.py")
 if ($LASTEXITCODE -ne 0) {
     throw "AIDA parity-critical Python modules failed syntax validation."
 }
@@ -99,9 +100,14 @@ try {
         -PassThru
 
     $health = Wait-GatewayReady $localGatewayUrl
-    Write-Host "Gateway intent resolution: $($health.intent_resolution_configured)"
-    Write-Host "Gateway reasoning configured: $($health.reasoning_configured)"
-    Write-Host "Gateway speech configured:    $($health.speech_configured)"
+    Write-Host "Gateway intent resolution:       $($health.intent_resolution_configured)"
+    Write-Host "Gateway reasoning configured:    $($health.reasoning_configured)"
+    Write-Host "Gateway speech configured:       $($health.speech_configured)"
+    Write-Host "Gateway transcription configured: $($health.transcription_configured)"
+
+    if (-not $health.transcription_configured) {
+        Write-Host "Voice input will remain staged until OPENAI_API_KEY is configured for AIDA transcription." -ForegroundColor Yellow
+    }
 
     Set-Location $mobileRoot
 
