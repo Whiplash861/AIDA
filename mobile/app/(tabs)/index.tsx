@@ -39,6 +39,19 @@ import {
   AidaRuntimeStatus,
 } from '@/src/theme/aida-theme';
 
+const NATIVE_STARTUP_MESSAGES: MobileMessage[] = [
+  {
+    id: 'startup-system',
+    sender: 'system',
+    text: 'Analytical Intelligent Diagnostic Agent is activated.',
+  },
+  {
+    id: 'startup-aida',
+    sender: 'aida',
+    text: 'State malfunction parameters.',
+  },
+];
+
 export default function HomeScreen() {
   const [runtime, setRuntime] = useState<MobileRuntimeSnapshot>(() =>
     getRuntimeSnapshot(),
@@ -47,13 +60,7 @@ export default function HomeScreen() {
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [messages, setMessages] = useState<MobileMessage[]>(() => [
-    {
-      id: 'runtime-online',
-      sender: 'aida',
-      text:
-        `AIDA Mobile runtime online. ${getRuntimeSnapshot().platform} environment recognized. ` +
-        'This instance is operating locally without requiring Desktop AIDA.',
-    },
+    ...NATIVE_STARTUP_MESSAGES,
   ]);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -61,6 +68,7 @@ export default function HomeScreen() {
   const tone = AIDA_STATUS_TONES[status];
   const orb = deriveOrbPresentation(runtime.status);
   const appVersion = Constants.expoConfig?.version ?? '0.1.0';
+  const inputReady = runtime.status === 'STANDBY';
 
   const platformLine = useMemo(
     () =>
@@ -101,10 +109,13 @@ export default function HomeScreen() {
 
   async function submitMessage() {
     const clean = draft.trim();
-    if (!clean || runtime.status === 'ANALYZING') {
+    if (!clean || !inputReady) {
       return;
     }
 
+    // Native AIDA captures the previous eligible conversation before adding
+    // the current User message, then passes that recent context to AIDABrain.
+    const conversationContext = buildConversationContext(messages);
     const userMessage: MobileMessage = {
       id: `user-${Date.now()}`,
       sender: 'user',
@@ -116,7 +127,7 @@ export default function HomeScreen() {
     setShowQuickActions(false);
 
     try {
-      const reply = await submitLocalDirective(clean);
+      const reply = await submitLocalDirective(clean, conversationContext);
       setMessages((current) => [
         ...current,
         {
@@ -126,12 +137,13 @@ export default function HomeScreen() {
         },
       ]);
     } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Unknown brain error.';
       setMessages((current) => [
         ...current,
         {
           id: `system-${Date.now()}`,
           sender: 'system',
-          text: error instanceof Error ? error.message : 'AIDA runtime error.',
+          text: `AIDA brain request failed: ${detail}`,
         },
       ]);
     }
@@ -144,8 +156,8 @@ export default function HomeScreen() {
         id: `system-${label}-${Date.now()}`,
         sender: 'system',
         text:
-          `${label} is staged for the native Android provider. ` +
-          'The standalone runtime remains online in Expo Go.',
+          `${label} is staged for the native ${runtime.platform} provider. ` +
+          'No unregistered device operation was executed.',
       },
     ]);
     setShowQuickActions(false);
@@ -209,7 +221,7 @@ export default function HomeScreen() {
               <View>
                 <Text style={styles.sectionTitle}>COMMUNICATION FEED</Text>
                 <Text style={styles.feedSubline} numberOfLines={1}>
-                  DEVICE-LOCAL RUNTIME
+                  AIDA RUNTIME
                 </Text>
               </View>
               <View style={styles.localBadge}>
@@ -273,7 +285,7 @@ export default function HomeScreen() {
                 onChangeText={setDraft}
                 onFocus={() => scrollMessagesToEnd(false)}
                 onSubmitEditing={() => void submitMessage()}
-                editable={runtime.status !== 'ANALYZING'}
+                editable={inputReady}
                 placeholder="State malfunction parameters..."
                 placeholderTextColor="#657684"
                 returnKeyType="send"
@@ -284,12 +296,11 @@ export default function HomeScreen() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Send directive to AIDA"
-                disabled={!draft.trim() || runtime.status === 'ANALYZING'}
+                disabled={!draft.trim() || !inputReady}
                 onPress={() => void submitMessage()}
                 style={({ pressed }) => [
                   styles.sendButton,
-                  (!draft.trim() || runtime.status === 'ANALYZING') &&
-                    styles.sendButtonDisabled,
+                  (!draft.trim() || !inputReady) && styles.sendButtonDisabled,
                   pressed && styles.pressed,
                 ]}
               >
@@ -301,6 +312,18 @@ export default function HomeScreen() {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+function buildConversationContext(messages: MobileMessage[]): string[] {
+  return messages.slice(-12).map((message) => {
+    const sender =
+      message.sender === 'user'
+        ? 'User'
+        : message.sender === 'aida'
+          ? 'AIDA'
+          : 'System';
+    return `${sender}: ${message.text.trim()}`;
+  });
 }
 
 function mapRuntimeStatus(status: LocalRuntimeStatus): AidaRuntimeStatus {
@@ -320,11 +343,20 @@ function deriveOrbPresentation(status: LocalRuntimeStatus): {
   if (status === 'STARTING') {
     return { state: 'GREEN', label: 'STARTING' };
   }
+  if (status === 'LISTENING') {
+    return { state: 'VIOLET', label: 'LISTENING' };
+  }
   if (status === 'ANALYZING') {
     return { state: 'GREEN', label: 'ANALYZING' };
   }
+  if (status === 'SPEAKING') {
+    return { state: 'BLUE', label: 'SPEAKING' };
+  }
   if (status === 'WARNING') {
     return { state: 'BLUE', label: 'ATTENTION' };
+  }
+  if (status === 'SHUTDOWN') {
+    return { state: 'BLUE', label: 'SHUTDOWN' };
   }
   return { state: 'BLUE', label: 'STANDBY' };
 }
