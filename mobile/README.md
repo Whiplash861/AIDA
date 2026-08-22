@@ -6,7 +6,7 @@ React Native / Expo frontend and mobile runtime for **AIDA — Analytical Intell
 
 AIDA Mobile is a platform port of AIDA, not a separately designed assistant or remote frontend for Desktop AIDA.
 
-The native Windows/Python implementation is the present behavioral reference. Android may replace PySide, Windows diagnostics, filesystem navigation, audio playback, storage APIs, and other operating-system providers, but AIDA's identity, language rules, intent semantics, reasoning prompt, speech identity, audio cues, safety boundaries, and public operational states remain shared.
+The native Windows/Python implementation is the present behavioral reference. Android may replace PySide, Windows diagnostics, filesystem navigation, audio playback, storage APIs, permissions, and other operating-system providers, but AIDA's identity, language rules, intent semantics, reasoning prompt, speech identity, audio cues, safety boundaries, and public operational states remain shared.
 
 See:
 
@@ -106,7 +106,7 @@ assets/sounds/aida_end.wav
 
 `mobile/scripts/sync-aida-assets.js` copies those exact files into the Expo bundle before normal start commands.
 
-Android system TTS is a degraded fallback only when no AIDA voice service is configured. It is not AIDA's normal voice identity.
+No Android or iOS system voice substitutes for AIDA. If the configured AIDA ElevenLabs service is unavailable, the provider failure is surfaced and the spoken payload is withheld rather than replacing AIDA's voice identity.
 
 ## Voice-input contract
 
@@ -163,6 +163,7 @@ After starting the development launcher, scan the Expo QR code and verify:
 - an ordinary typed question is answered by canonical AIDABrain rather than the bounded mobile fallback
 - a follow-up typed question uses recent conversation context
 - Speech Output produces start cue -> AIDA ElevenLabs voice -> end cue
+- no operating-system TTS voice substitutes for AIDA if the voice provider fails
 - pressing MIC requests Android microphone permission only when needed
 - while recording, AIDA enters `LISTENING` and the orb follows the native GREEN active-state mapping
 - pressing `STOP MIC` enters transcription processing and the resulting transcript appears as the user directive
