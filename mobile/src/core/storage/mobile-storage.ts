@@ -59,7 +59,11 @@ export async function loadRuntimeState(): Promise<StoredRuntimeState> {
   const state = await readJson<Partial<StoredRuntimeState>>(RUNTIME_STATE_KEY, {});
   return {
     autonomy_enabled: Boolean(state.autonomy_enabled),
-    speech_enabled: Boolean(state.speech_enabled),
+    // Native frontend AIDA always routes response output through the speaker.
+    // Mobile retains a user mute control, but a brand-new runtime therefore
+    // starts with speech enabled unless an explicit persisted choice exists.
+    speech_enabled:
+      typeof state.speech_enabled === 'boolean' ? state.speech_enabled : true,
   };
 }
 
