@@ -10,6 +10,7 @@ export type MobileMessage = {
   id: string;
   sender: 'aida' | 'user' | 'system';
   text: string;
+  includeInContext?: boolean;
 };
 
 type MessageCardProps = {
@@ -59,7 +60,7 @@ const styles = StyleSheet.create({
   },
   aida: {
     backgroundColor: AIDA_COLORS.glassAida,
-    borderColor: 'rgba(92, 218, 232, 0.36)',
+    borderColor: 'rgba(85, 215, 228, 0.24)',
   },
   user: {
     backgroundColor: AIDA_COLORS.glassUser,
@@ -67,18 +68,18 @@ const styles = StyleSheet.create({
   },
   system: {
     backgroundColor: AIDA_COLORS.glassSystem,
-    borderColor: 'rgba(85, 176, 224, 0.32)',
+    borderColor: 'rgba(76, 185, 236, 0.25)',
   },
   sender: {
     marginBottom: 5,
     fontFamily: AIDA_FONTS.display,
-    fontSize: 10,
+    fontSize: 8,
     fontWeight: '700',
-    letterSpacing: 1.4,
+    letterSpacing: 1.25,
   },
   body: {
     color: AIDA_COLORS.textPrimary,
-    fontSize: 15,
-    lineHeight: 21,
+    fontSize: 13,
+    lineHeight: 19,
   },
 });
