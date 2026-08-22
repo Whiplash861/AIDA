@@ -5,7 +5,12 @@ import {
   ReasoningProvider,
   ReasoningResponse,
 } from '@/src/core/reasoning/types';
-import { loadGatewaySessionToken } from '@/src/core/storage/mobile-storage';
+import {
+  loadGatewaySessionToken,
+  loadGatewayUrl,
+  saveGatewaySessionToken,
+  saveGatewayUrl,
+} from '@/src/core/storage/mobile-storage';
 
 class MobileReasoningService {
   private readonly localProvider = new LocalRuntimeReasoningProvider();
@@ -13,19 +18,36 @@ class MobileReasoningService {
   private initialized = false;
 
   async initialize(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
+    if (this.initialized) return;
     this.initialized = true;
 
-    const gatewayUrl = (
+    const [storedUrl, sessionToken] = await Promise.all([
+      loadGatewayUrl(),
+      loadGatewaySessionToken(),
+    ]);
+    const environmentUrl = (
       process.env.EXPO_PUBLIC_AIDA_REASONING_GATEWAY_URL ?? ''
     ).trim();
-    const sessionToken = await loadGatewaySessionToken();
+    const gatewayUrl = storedUrl || environmentUrl;
 
     if (gatewayUrl && sessionToken) {
       this.provider = new GatewayReasoningProvider(gatewayUrl, sessionToken);
     }
+  }
+
+  async configureGateway(baseUrl: string, token: string): Promise<void> {
+    const cleanUrl = baseUrl.trim().replace(/\/$/, '');
+    const cleanToken = token.trim();
+    if (!cleanUrl || !cleanToken) {
+      throw new Error('Gateway URL and session token are required.');
+    }
+
+    await Promise.all([
+      saveGatewayUrl(cleanUrl),
+      saveGatewaySessionToken(cleanToken),
+    ]);
+    this.provider = new GatewayReasoningProvider(cleanUrl, cleanToken);
+    this.initialized = true;
   }
 
   setProvider(provider: ReasoningProvider) {
