@@ -4,6 +4,7 @@ export type ReasoningContext = {
   deviceModel: string;
   instanceId: string;
   supportedCapabilities: string[];
+  conversationContext: string[];
 };
 
 export type ReasoningResponse = {
