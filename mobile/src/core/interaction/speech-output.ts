@@ -4,14 +4,13 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as Speech from 'expo-speech';
 
 import { loadGatewayConfiguration } from '@/src/core/services/gateway-config';
 
 const START_TONE = require('../../../assets/sounds/aida_start.wav');
 const END_TONE = require('../../../assets/sounds/aida_end.wav');
 
-export type SpeechTransport = 'elevenlabs' | 'system' | 'silent';
+export type SpeechTransport = 'elevenlabs' | 'silent';
 
 export type SpeechOutputCallbacks = {
   onStart?: () => void;
@@ -43,7 +42,6 @@ export function testAidaSpeech(
 }
 
 export async function stopAidaSpeech(): Promise<void> {
-  await Speech.stop();
   if (activePlayer) {
     try {
       activePlayer.pause();
@@ -80,9 +78,7 @@ async function runAidaSpeechSequence(
   try {
     await playAudioSourceAndWait(START_TONE, 12_000);
   } catch (error) {
-    callbacks.onWarning?.(
-      `AIDA start tone failed. ${errorMessage(error)}`,
-    );
+    callbacks.onWarning?.(`AIDA start tone failed. ${errorMessage(error)}`);
   }
 
   const gateway = await loadGatewayConfiguration();
@@ -94,32 +90,20 @@ async function runAidaSpeechSequence(
       callbacks.onWarning?.(
         `AIDA ElevenLabs voice unavailable. ${errorMessage(error)}`,
       );
-      // When an AIDA voice service is configured, do not silently impersonate
-      // AIDA with an operating-system voice. Native AIDA completes the speech
-      // cycle without substitute speech when the provider returns no audio.
+      // Native AIDA never substitutes a different operating-system voice for
+      // the configured ElevenLabs identity. Complete the cue cycle silently.
       transport = 'silent';
     }
   } else {
     callbacks.onWarning?.(
-      'AIDA voice service is not configured. Android speech fallback engaged.',
+      'AIDA voice service is not configured. Spoken payload skipped.',
     );
-    try {
-      await playSystemSpeech(text);
-      transport = 'system';
-    } catch (error) {
-      callbacks.onWarning?.(
-        `Android speech fallback failed. ${errorMessage(error)}`,
-      );
-      transport = 'silent';
-    }
   }
 
   try {
     await playAudioSourceAndWait(END_TONE, 12_000);
   } catch (error) {
-    callbacks.onWarning?.(
-      `AIDA end tone failed. ${errorMessage(error)}`,
-    );
+    callbacks.onWarning?.(`AIDA end tone failed. ${errorMessage(error)}`);
   }
 
   callbacks.onDone?.();
@@ -186,43 +170,6 @@ async function playGatewaySpeech(
   } finally {
     clearTimeout(timeout);
   }
-}
-
-async function playSystemSpeech(text: string): Promise<void> {
-  await Speech.stop();
-
-  const exposedLimit = Number(Speech.maxSpeechInputLength);
-  const safeLimit =
-    Number.isFinite(exposedLimit) && exposedLimit > 0
-      ? Math.trunc(exposedLimit)
-      : 3500;
-  const utterance = text.slice(0, safeLimit);
-  if (!utterance) {
-    throw new Error('Speech utterance was empty.');
-  }
-
-  const voices = await Speech.getAvailableVoicesAsync();
-  const englishVoice = voices.find((voice) =>
-    voice.language?.toLowerCase().startsWith('en'),
-  );
-
-  await new Promise<void>((resolve, reject) => {
-    Speech.speak(utterance, {
-      language: 'en-US',
-      voice: englishVoice?.identifier,
-      rate: 0.94,
-      pitch: 1.0,
-      onDone: resolve,
-      onStopped: resolve,
-      onError: (error) => {
-        reject(
-          error instanceof Error
-            ? error
-            : new Error('AIDA system speech output failed.'),
-        );
-      },
-    });
-  });
 }
 
 function playAudioSourceAndWait(
