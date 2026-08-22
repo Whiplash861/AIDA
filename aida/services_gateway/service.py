@@ -7,6 +7,7 @@ from aida.audio.text import clean_for_tts
 from aida.audio.voice import synthesize_text
 from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
+from aida.frontend.command_router import CommandRouter
 
 
 @dataclass(frozen=True)
@@ -20,24 +21,77 @@ class SpeechResult:
     content_type: str = "audio/mpeg"
 
 
+@dataclass(frozen=True)
+class DirectiveRouteResult:
+    matched: bool
+    command_type: str = ""
+    intent_id: str = ""
+    local_only: bool = False
+    confidence: float | None = None
+    requires_confirmation: bool = False
+    target_path: str | None = None
+    slots: dict[str, Any] | None = None
+    clarification_text: str = ""
+
+
 class AidaServicesGateway:
     """Provider boundary shared by standalone AIDA runtimes.
 
     The gateway does not define a second AIDA personality or voice. Reasoning
     goes through AIDABrain and its canonical AIDA_SYSTEM_PROMPT. Speech goes
     through the same ElevenLabs synthesis implementation used by desktop AIDA.
+    Intent resolution reuses AIDA's native CommandRouter but never executes the
+    returned command on the gateway host.
     """
 
     def __init__(self) -> None:
         self._brain: AIDABrain | None = None
         self._config = get_config()
+        self._routers: dict[str, CommandRouter] = {}
 
     def health(self) -> dict[str, Any]:
         return {
             "service": "AIDA Services Gateway",
             "reasoning_configured": self._reasoning_configured(),
             "speech_configured": self._speech_configured(),
+            "intent_resolution_configured": True,
         }
+
+    def resolve(
+        self,
+        user_input: str,
+        context: dict[str, Any] | None = None,
+    ) -> DirectiveRouteResult:
+        clean = user_input.strip()
+        if not clean:
+            raise ValueError("Directive input cannot be empty.")
+
+        runtime_context = context or {}
+        instance_id = str(runtime_context.get("instanceId") or "anonymous").strip()
+        router = self._routers.get(instance_id)
+        if router is None:
+            router = CommandRouter()
+            self._routers[instance_id] = router
+            if len(self._routers) > 128:
+                oldest_key = next(iter(self._routers))
+                if oldest_key != instance_id:
+                    self._routers.pop(oldest_key, None)
+
+        routed = router.route(clean)
+        if routed is None:
+            return DirectiveRouteResult(matched=False)
+
+        return DirectiveRouteResult(
+            matched=True,
+            command_type=routed.command_type.name,
+            intent_id=routed.intent_id or "",
+            local_only=routed.local_only,
+            confidence=routed.confidence,
+            requires_confirmation=routed.requires_confirmation,
+            target_path=routed.target_path,
+            slots=dict(routed.slots),
+            clarification_text=routed.clarification_text,
+        )
 
     def reason(
         self,
