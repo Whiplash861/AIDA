@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+import base64
+
+from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from .security import verify_gateway_access
@@ -20,6 +22,11 @@ class SpeechRequest(BaseModel):
     text: str = Field(min_length=1, max_length=5_000)
 
 
+class SpeechResponse(BaseModel):
+    audio_base64: str
+    content_type: str
+
+
 def create_app(service: AidaServicesGateway | None = None) -> FastAPI:
     gateway = service or AidaServicesGateway()
 
@@ -34,6 +41,13 @@ def create_app(service: AidaServicesGateway | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
+        return gateway.health()
+
+    @app.get(
+        "/v1/ready",
+        dependencies=[Depends(verify_gateway_access)],
+    )
+    def ready() -> dict:
         return gateway.health()
 
     @app.post(
@@ -58,12 +72,16 @@ def create_app(service: AidaServicesGateway | None = None) -> FastAPI:
 
     @app.post(
         "/v1/speech",
+        response_model=SpeechResponse,
         dependencies=[Depends(verify_gateway_access)],
     )
-    def speech(request: SpeechRequest) -> Response:
+    def speech(request: SpeechRequest) -> SpeechResponse:
         try:
             result = gateway.speak(request.text)
-            return Response(content=result.audio, media_type=result.content_type)
+            return SpeechResponse(
+                audio_base64=base64.b64encode(result.audio).decode("ascii"),
+                content_type=result.content_type,
+            )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
