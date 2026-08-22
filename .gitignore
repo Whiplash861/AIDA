@@ -58,6 +58,7 @@ Desktop.ini
 *.bak
 *.swp
 *~
+
 # Node.js and Expo
 **/node_modules/
 **/.expo/
@@ -65,6 +66,9 @@ Desktop.ini
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Mobile copies are generated from the canonical root AIDA sound assets.
+/mobile/assets/sounds/
 
 # Temporary SDK backup
 /mobile-sdk57-backup/
