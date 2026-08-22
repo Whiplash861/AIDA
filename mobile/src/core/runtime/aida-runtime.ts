@@ -85,6 +85,26 @@ export function subscribeRuntimeActivity(listener: ActivityListener): () => void
   return () => activityListeners.delete(listener);
 }
 
+export async function configureServicesGateway(baseUrl: string, token: string): Promise<void> {
+  await initializeAidaRuntime();
+  await MOBILE_REASONING.configureGateway(baseUrl, token);
+  snapshot = {
+    ...snapshot,
+    updated_at: new Date().toISOString(),
+    statuses: snapshot.statuses.map((item) =>
+      item.id === 'brain' ? { ...item, value: 'READY', tone: 'ready' as const } : item,
+    ),
+    capabilities: buildCapabilities(snapshot.platform, true),
+  };
+  notifyRuntime();
+  await addActivity(
+    'GATEWAY',
+    'Authenticated AIDA services gateway enrolled for this mobile instance.',
+    'info',
+    'mobile.reasoning',
+  );
+}
+
 export async function setSpeechEnabled(enabled: boolean): Promise<void> {
   await initializeAidaRuntime();
   snapshot = {
