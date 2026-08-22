@@ -3,6 +3,7 @@ import Storage from 'expo-sqlite/kv-store';
 
 const INSTANCE_ID_KEY = 'aida.mobile.instance-id.v1';
 const GATEWAY_SESSION_TOKEN_KEY = 'aida.mobile.gateway-session-token.v1';
+const GATEWAY_URL_KEY = 'aida.mobile.gateway-url.v1';
 const RUNTIME_STATE_KEY = 'aida.mobile.runtime-state.v1';
 const ACTIVITY_KEY = 'aida.mobile.activity.v1';
 
@@ -39,6 +40,19 @@ export async function saveGatewaySessionToken(token: string): Promise<void> {
 
 export async function clearGatewaySessionToken(): Promise<void> {
   await SecureStore.deleteItemAsync(GATEWAY_SESSION_TOKEN_KEY);
+}
+
+export async function loadGatewayUrl(): Promise<string> {
+  return (await Storage.getItem(GATEWAY_URL_KEY))?.trim() ?? '';
+}
+
+export async function saveGatewayUrl(url: string): Promise<void> {
+  const clean = url.trim().replace(/\/$/, '');
+  if (!clean) {
+    await Storage.removeItem(GATEWAY_URL_KEY);
+    return;
+  }
+  await Storage.setItem(GATEWAY_URL_KEY, clean);
 }
 
 export async function loadRuntimeState(): Promise<StoredRuntimeState> {
