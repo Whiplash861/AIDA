@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from aida.audio.text import clean_for_tts
@@ -8,6 +11,7 @@ from aida.audio.voice import synthesize_text
 from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
 from aida.frontend.command_router import CommandRouter
+from aida.interaction.transcription import OpenAITranscriptionProvider
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,11 @@ class ReasoningResult:
 class SpeechResult:
     audio: bytes
     content_type: str = "audio/mpeg"
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    text: str
 
 
 @dataclass(frozen=True)
@@ -40,12 +49,25 @@ class AidaServicesGateway:
     The gateway does not define a second AIDA personality or voice. Reasoning
     goes through AIDABrain and its canonical AIDA_SYSTEM_PROMPT. Speech goes
     through the same ElevenLabs synthesis implementation used by desktop AIDA.
+    Voice transcription uses AIDA's existing disposable transcription provider.
     Intent resolution reuses AIDA's native CommandRouter but never executes the
     returned command on the gateway host.
     """
 
+    _MAX_TRANSCRIPTION_BYTES = 12 * 1024 * 1024
+    _ALLOWED_AUDIO_SUFFIXES = {
+        ".m4a",
+        ".wav",
+        ".mp3",
+        ".mp4",
+        ".mpeg",
+        ".mpga",
+        ".webm",
+    }
+
     def __init__(self) -> None:
         self._brain: AIDABrain | None = None
+        self._transcriber: OpenAITranscriptionProvider | None = None
         self._config = get_config()
         self._routers: dict[str, CommandRouter] = {}
 
@@ -54,6 +76,7 @@ class AidaServicesGateway:
             "service": "AIDA Services Gateway",
             "reasoning_configured": self._reasoning_configured(),
             "speech_configured": self._speech_configured(),
+            "transcription_configured": self._transcription_configured(),
             "intent_resolution_configured": True,
         }
 
@@ -119,14 +142,50 @@ class AidaServicesGateway:
             )
         return SpeechResult(audio=audio)
 
+    def transcribe(
+        self,
+        audio: bytes,
+        *,
+        file_extension: str = ".m4a",
+    ) -> TranscriptionResult:
+        if not audio:
+            raise ValueError("Voice recording cannot be empty.")
+        if len(audio) > self._MAX_TRANSCRIPTION_BYTES:
+            raise ValueError("Voice recording exceeds the gateway size limit.")
+        if not self._transcription_configured():
+            raise RuntimeError("AIDA voice transcription is not configured.")
+
+        suffix = _normalize_audio_suffix(file_extension)
+        if suffix not in self._ALLOWED_AUDIO_SUFFIXES:
+            raise ValueError(f"Unsupported voice recording format: {suffix}")
+
+        descriptor, temp_name = tempfile.mkstemp(
+            prefix="aida_mobile_voice_",
+            suffix=suffix,
+        )
+        os.close(descriptor)
+        path = Path(temp_name)
+        try:
+            path.write_bytes(audio)
+            text = self._get_transcriber().transcribe(path)
+            return TranscriptionResult(text=text)
+        finally:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _get_brain(self) -> AIDABrain:
         if self._brain is None:
             self._brain = AIDABrain()
         return self._brain
 
-    def _reasoning_configured(self) -> bool:
-        import os
+    def _get_transcriber(self) -> OpenAITranscriptionProvider:
+        if self._transcriber is None:
+            self._transcriber = OpenAITranscriptionProvider()
+        return self._transcriber
 
+    def _reasoning_configured(self) -> bool:
         return bool(
             (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip()
             and (os.getenv("AZURE_OPENAI_API_KEY") or "").strip()
@@ -139,6 +198,18 @@ class AidaServicesGateway:
             and self._config.elevenlabs_voice_id
             and self._config.voice_enabled
         )
+
+    def _transcription_configured(self) -> bool:
+        return bool((os.getenv("OPENAI_API_KEY") or "").strip())
+
+
+def _normalize_audio_suffix(value: str) -> str:
+    clean = (value or "").strip().lower()
+    if not clean:
+        return ".m4a"
+    if not clean.startswith("."):
+        clean = f".{clean}"
+    return clean
 
 
 def _context_lines(context: dict[str, Any]) -> list[str]:
