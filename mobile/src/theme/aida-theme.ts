@@ -3,10 +3,13 @@ import { Platform } from 'react-native';
 export type AidaRuntimeStatus =
   | 'CONNECTING'
   | 'STANDBY'
+  | 'LISTENING'
   | 'ANALYZING'
+  | 'SPEAKING'
   | 'WARNING'
   | 'OFFLINE'
-  | 'ERROR';
+  | 'ERROR'
+  | 'SHUTDOWN';
 
 export const AIDA_COLORS = {
   canvas: '#05090f',
@@ -80,10 +83,20 @@ export const AIDA_STATUS_TONES: Record<
     background: 'rgba(9, 42, 34, 0.90)',
     border: 'rgba(77, 236, 171, 0.42)',
   },
+  LISTENING: {
+    foreground: AIDA_COLORS.purple,
+    background: 'rgba(42, 24, 62, 0.92)',
+    border: 'rgba(197, 138, 255, 0.50)',
+  },
   ANALYZING: {
     foreground: AIDA_COLORS.cyanGlow,
     background: 'rgba(8, 39, 59, 0.92)',
     border: 'rgba(88, 207, 255, 0.55)',
+  },
+  SPEAKING: {
+    foreground: AIDA_COLORS.cyanStrong,
+    background: 'rgba(9, 44, 60, 0.92)',
+    border: 'rgba(102, 217, 255, 0.62)',
   },
   WARNING: {
     foreground: AIDA_COLORS.warning,
@@ -99,5 +112,10 @@ export const AIDA_STATUS_TONES: Record<
     foreground: AIDA_COLORS.error,
     background: 'rgba(49, 18, 25, 0.92)',
     border: 'rgba(255, 105, 126, 0.49)',
+  },
+  SHUTDOWN: {
+    foreground: AIDA_COLORS.textDim,
+    background: 'rgba(20, 25, 31, 0.94)',
+    border: 'rgba(118, 140, 156, 0.30)',
   },
 };
