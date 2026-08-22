@@ -351,26 +351,26 @@ function deriveOrbPresentation(status: LocalRuntimeStatus): {
   state: AidaOrbVisualState;
   label: string;
 } {
-  if (status === 'ERROR') {
-    return { state: 'RED', label: 'SYSTEM FAULT' };
+  // Keep the mobile renderer on native AIDA's live-state resolver semantics.
+  if (status === 'ERROR' || status === 'SHUTDOWN') {
+    return {
+      state: 'RED',
+      label: status === 'SHUTDOWN' ? 'SHUTDOWN' : 'SYSTEM FAULT',
+    };
   }
-  if (status === 'STARTING') {
-    return { state: 'GREEN', label: 'STARTING' };
-  }
-  if (status === 'LISTENING') {
-    return { state: 'VIOLET', label: 'LISTENING' };
-  }
-  if (status === 'ANALYZING') {
-    return { state: 'GREEN', label: 'ANALYZING' };
-  }
-  if (status === 'SPEAKING') {
-    return { state: 'BLUE', label: 'SPEAKING' };
+  if (
+    status === 'STARTING' ||
+    status === 'LISTENING' ||
+    status === 'ANALYZING' ||
+    status === 'SPEAKING'
+  ) {
+    return {
+      state: 'GREEN',
+      label: status === 'STARTING' ? 'STARTING' : status,
+    };
   }
   if (status === 'WARNING') {
     return { state: 'BLUE', label: 'ATTENTION' };
-  }
-  if (status === 'SHUTDOWN') {
-    return { state: 'BLUE', label: 'SHUTDOWN' };
   }
   return { state: 'BLUE', label: 'STANDBY' };
 }
