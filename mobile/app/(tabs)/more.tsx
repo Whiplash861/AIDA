@@ -1,7 +1,14 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { GlassPanel } from '@/src/components/glass-panel';
 import { PageShell } from '@/src/components/page-shell';
+import {
+  getRuntimeSnapshot,
+  MobileRuntimeSnapshot,
+  setSpeechEnabled,
+  subscribeRuntime,
+} from '@/src/core/runtime/aida-runtime';
 import {
   AIDA_COLORS,
   AIDA_FONTS,
@@ -50,8 +57,14 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
         tone: 'ready',
       },
       {
-        title: 'Voice & Speech',
-        detail: 'Microphone capture, transcription, and AIDA spoken responses.',
+        title: 'Reasoning Gateway',
+        detail: 'Authenticated independent reasoning without embedding Azure credentials.',
+        badge: 'STAGED',
+        tone: 'staged',
+      },
+      {
+        title: 'Voice Input',
+        detail: 'Microphone capture and transcription through a secure mobile path.',
         badge: 'STAGED',
         tone: 'staged',
       },
@@ -112,6 +125,21 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
 ];
 
 export default function MoreScreen() {
+  const [runtime, setRuntime] = useState<MobileRuntimeSnapshot>(() => getRuntimeSnapshot());
+  const [speechUpdating, setSpeechUpdating] = useState(false);
+
+  useEffect(() => subscribeRuntime(setRuntime), []);
+
+  async function toggleSpeech() {
+    if (speechUpdating) return;
+    setSpeechUpdating(true);
+    try {
+      await setSpeechEnabled(!runtime.speech_enabled);
+    } finally {
+      setSpeechUpdating(false);
+    }
+  }
+
   return (
     <PageShell
       title="Control"
@@ -124,6 +152,37 @@ export default function MoreScreen() {
           AIDA is not required for normal startup, status, activity, or local
           directive intake.
         </Text>
+      </GlassPanel>
+
+      <GlassPanel variant="deep" style={styles.groupCard}>
+        <Text style={styles.groupTitle}>INTERACTION</Text>
+        <View style={styles.rows}>
+          <View style={styles.row}>
+            <View style={styles.rowText}>
+              <Text style={styles.rowTitle}>Speech Output</Text>
+              <Text style={styles.rowDetail}>
+                Allow AIDA to speak her responses through this device.
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: runtime.speech_enabled }}
+              onPress={() => void toggleSpeech()}
+              style={({ pressed }) => [
+                styles.switchTrack,
+                runtime.speech_enabled && styles.switchTrackEnabled,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View
+                style={[
+                  styles.switchThumb,
+                  runtime.speech_enabled && styles.switchThumbEnabled,
+                ]}
+              />
+            </Pressable>
+          </View>
+        </View>
       </GlassPanel>
 
       {GROUPS.map((group) => (
@@ -142,7 +201,6 @@ export default function MoreScreen() {
                   <Text style={styles.rowTitle}>{item.title}</Text>
                   <Text style={styles.rowDetail}>{item.detail}</Text>
                 </View>
-
                 <View style={[styles.badge, badgeStyle(item.tone)]}>
                   <Text style={[styles.badgeText, badgeTextStyle(item.tone)]}>
                     {item.badge}
@@ -158,29 +216,19 @@ export default function MoreScreen() {
 }
 
 function badgeStyle(tone: OperationRow['tone']) {
-  if (tone === 'ready') {
-    return styles.readyBadge;
-  }
-  if (tone === 'protected') {
-    return styles.protectedBadge;
-  }
+  if (tone === 'ready') return styles.readyBadge;
+  if (tone === 'protected') return styles.protectedBadge;
   return styles.stagedBadge;
 }
 
 function badgeTextStyle(tone: OperationRow['tone']) {
-  if (tone === 'ready') {
-    return styles.readyText;
-  }
-  if (tone === 'protected') {
-    return styles.protectedText;
-  }
+  if (tone === 'ready') return styles.readyText;
+  if (tone === 'protected') return styles.protectedText;
   return styles.stagedText;
 }
 
 const styles = StyleSheet.create({
-  noticeCard: {
-    padding: AIDA_SPACING.md,
-  },
+  noticeCard: { padding: AIDA_SPACING.md },
   noticeTitle: {
     color: AIDA_COLORS.cyanStrong,
     fontFamily: AIDA_FONTS.display,
@@ -194,9 +242,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
-  groupCard: {
-    padding: AIDA_SPACING.md,
-  },
+  groupCard: { padding: AIDA_SPACING.md },
   groupTitle: {
     color: AIDA_COLORS.cyanStrong,
     fontFamily: AIDA_FONTS.display,
@@ -204,9 +250,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1.6,
   },
-  rows: {
-    marginTop: AIDA_SPACING.sm,
-  },
+  rows: { marginTop: AIDA_SPACING.sm },
   row: {
     minHeight: 68,
     flexDirection: 'row',
@@ -217,10 +261,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: AIDA_COLORS.borderSoft,
   },
-  rowText: {
-    flex: 1,
-    minWidth: 0,
-  },
+  rowText: { flex: 1, minWidth: 0 },
   rowTitle: {
     color: AIDA_COLORS.textBright,
     fontFamily: AIDA_FONTS.display,
@@ -261,13 +302,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.8,
   },
-  readyText: {
-    color: AIDA_COLORS.mint,
+  readyText: { color: AIDA_COLORS.mint },
+  stagedText: { color: AIDA_COLORS.textMuted },
+  protectedText: { color: AIDA_COLORS.warning },
+  switchTrack: {
+    width: 50,
+    height: 28,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(136, 166, 187, 0.35)',
+    borderRadius: AIDA_RADIUS.pill,
+    backgroundColor: 'rgba(25, 35, 43, 0.92)',
+    paddingHorizontal: 3,
   },
-  stagedText: {
-    color: AIDA_COLORS.textMuted,
+  switchTrackEnabled: {
+    borderColor: 'rgba(77, 236, 171, 0.55)',
+    backgroundColor: 'rgba(9, 72, 52, 0.92)',
   },
-  protectedText: {
-    color: AIDA_COLORS.warning,
+  switchThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: AIDA_COLORS.textMuted,
   },
+  switchThumbEnabled: {
+    alignSelf: 'flex-end',
+    backgroundColor: AIDA_COLORS.mint,
+  },
+  pressed: { opacity: 0.72 },
 });
