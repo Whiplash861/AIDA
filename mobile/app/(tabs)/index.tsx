@@ -1,4 +1,11 @@
 import Constants from 'expo-constants';
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -24,6 +31,14 @@ import {
   MobileMessage,
 } from '@/src/components/message-card';
 import {
+  discardAidaRecording,
+  transcribeAidaRecording,
+} from '@/src/core/interaction/transcription-client';
+import {
+  beginVoiceListening,
+  beginVoiceProcessing,
+  completeVoiceInput,
+  failVoiceInput,
   getRuntimeSnapshot,
   LocalRuntimeStatus,
   MobileRuntimeSnapshot,
@@ -38,6 +53,8 @@ import {
   AIDA_STATUS_TONES,
   AidaRuntimeStatus,
 } from '@/src/theme/aida-theme';
+
+const VOICE_RECORDING_LIMIT_MS = 120_000;
 
 const NATIVE_STARTUP_MESSAGES: MobileMessage[] = [
   {
@@ -59,16 +76,26 @@ export default function HomeScreen() {
   const [draft, setDraft] = useState('');
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
   const [messages, setMessages] = useState<MobileMessage[]>(() => [
     ...NATIVE_STARTUP_MESSAGES,
   ]);
   const scrollRef = useRef<ScrollView>(null);
+  const voiceRecordingRef = useRef(false);
+  const voiceLimitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder, 200);
 
   const status = mapRuntimeStatus(runtime.status);
   const tone = AIDA_STATUS_TONES[status];
   const orb = deriveOrbPresentation(runtime.status);
   const appVersion = Constants.expoConfig?.version ?? '0.1.0';
-  const inputReady = runtime.status === 'STANDBY';
+  const inputReady =
+    runtime.status === 'STANDBY' && !voiceRecording && !voiceProcessing;
+  const voiceAvailable =
+    runtime.capabilities.find((item) => item.id === 'voice.input')?.state ===
+    'supported';
 
   const platformLine = useMemo(
     () =>
@@ -107,12 +134,28 @@ export default function HomeScreen() {
     }
   }, [keyboardVisible, scrollMessagesToEnd]);
 
+  useEffect(
+    () => () => {
+      if (voiceLimitTimerRef.current) {
+        clearTimeout(voiceLimitTimerRef.current);
+      }
+      if (voiceRecordingRef.current) {
+        void audioRecorder.stop().catch(() => undefined);
+      }
+    },
+    [audioRecorder],
+  );
+
   async function submitMessage() {
     const clean = draft.trim();
     if (!clean || !inputReady) {
       return;
     }
+    setDraft('');
+    await submitDirectiveText(clean);
+  }
 
+  async function submitDirectiveText(clean: string) {
     // Native AIDA captures the previous eligible conversation before adding
     // the current User message, then passes that recent context to AIDABrain.
     const conversationContext = buildConversationContext(messages);
@@ -123,7 +166,6 @@ export default function HomeScreen() {
     };
 
     setMessages((current) => [...current, userMessage]);
-    setDraft('');
     setShowQuickActions(false);
 
     try {
@@ -159,6 +201,117 @@ export default function HomeScreen() {
     }
   }
 
+  async function toggleVoiceCapture() {
+    if (voiceProcessing) return;
+    if (voiceRecordingRef.current) {
+      await stopVoiceCapture(false);
+      return;
+    }
+    await startVoiceCapture();
+  }
+
+  async function startVoiceCapture() {
+    if (runtime.status !== 'STANDBY' || voiceProcessing) return;
+    if (!voiceAvailable) {
+      appendSystemMessage(
+        'Voice transcription is unavailable. No microphone recording was started.',
+      );
+      return;
+    }
+
+    try {
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        throw new Error('Microphone access was denied by the operating system.');
+      }
+
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
+      });
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+      voiceRecordingRef.current = true;
+      setVoiceRecording(true);
+      setShowQuickActions(true);
+      await beginVoiceListening();
+
+      voiceLimitTimerRef.current = setTimeout(() => {
+        void stopVoiceCapture(true);
+      }, VOICE_RECORDING_LIMIT_MS);
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Microphone capture could not start.';
+      voiceRecordingRef.current = false;
+      setVoiceRecording(false);
+      await failVoiceInput(detail);
+      appendSystemMessage(detail);
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+      }).catch(() => undefined);
+    }
+  }
+
+  async function stopVoiceCapture(limitReached: boolean) {
+    if (!voiceRecordingRef.current) return;
+
+    voiceRecordingRef.current = false;
+    setVoiceRecording(false);
+    if (voiceLimitTimerRef.current) {
+      clearTimeout(voiceLimitTimerRef.current);
+      voiceLimitTimerRef.current = null;
+    }
+
+    let recordingUri: string | null = null;
+    try {
+      await audioRecorder.stop();
+      recordingUri = audioRecorder.uri;
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+      });
+
+      if (limitReached) {
+        throw new Error('Recording exceeded the 120-second limit.');
+      }
+      if (!recordingUri) {
+        throw new Error('No microphone audio was captured.');
+      }
+
+      setVoiceProcessing(true);
+      await beginVoiceProcessing();
+      const transcript = await transcribeAidaRecording(recordingUri);
+      await completeVoiceInput();
+      setVoiceProcessing(false);
+      await submitDirectiveText(transcript);
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Voice transcription failed.';
+      setVoiceProcessing(false);
+      await failVoiceInput(detail);
+      appendSystemMessage(detail);
+    } finally {
+      await discardAidaRecording(recordingUri);
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+      }).catch(() => undefined);
+    }
+  }
+
+  function appendSystemMessage(text: string) {
+    setMessages((current) => [
+      ...current,
+      {
+        id: `system-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        sender: 'system',
+        text,
+        includeInContext: false,
+      },
+    ]);
+  }
+
   function stageAction(label: string) {
     setMessages((current) => [
       ...current,
@@ -173,6 +326,12 @@ export default function HomeScreen() {
     ]);
     setShowQuickActions(false);
   }
+
+  const voiceLabel = voiceProcessing
+    ? 'PROCESSING'
+    : voiceRecording
+      ? `STOP MIC ${Math.floor(recorderState.durationMillis / 1000)}s`
+      : 'MIC';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -256,13 +415,37 @@ export default function HomeScreen() {
 
           {showQuickActions && !keyboardVisible ? (
             <GlassPanel variant="panel" style={styles.quickActions}>
-              {['MIC', 'IMAGE', 'PASTE'].map((label) => (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={voiceRecording ? 'Stop AIDA microphone recording' : 'Start AIDA microphone recording'}
+                disabled={voiceProcessing || (!voiceRecording && runtime.status !== 'STANDBY')}
+                onPress={() => void toggleVoiceCapture()}
+                style={({ pressed }) => [
+                  styles.quickActionButton,
+                  voiceRecording && styles.quickActionButtonActive,
+                  voiceProcessing && styles.quickActionButtonDisabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.quickActionText,
+                    voiceRecording && styles.quickActionTextActive,
+                  ]}
+                >
+                  {voiceLabel}
+                </Text>
+              </Pressable>
+
+              {['IMAGE', 'PASTE'].map((label) => (
                 <Pressable
                   key={label}
                   accessibilityRole="button"
+                  disabled={!inputReady}
                   onPress={() => stageAction(label)}
                   style={({ pressed }) => [
                     styles.quickActionButton,
+                    !inputReady && styles.quickActionButtonDisabled,
                     pressed && styles.pressed,
                   ]}
                 >
@@ -275,16 +458,24 @@ export default function HomeScreen() {
           <GlassPanel variant="panel" style={styles.composerPanel}>
             <View style={styles.composerHeader}>
               <Text style={styles.sectionTitle}>COMMAND INTERFACE</Text>
-              <Text style={styles.composerHint}>ENTER TO SEND</Text>
+              <Text style={styles.composerHint}>
+                {voiceProcessing
+                  ? 'VOICE PROCESSING'
+                  : voiceRecording
+                    ? 'LISTENING'
+                    : 'ENTER TO SEND'}
+              </Text>
             </View>
 
             <View style={styles.composerRow}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Show AIDA input options"
+                disabled={voiceProcessing}
                 onPress={() => setShowQuickActions((current) => !current)}
                 style={({ pressed }) => [
                   styles.addButton,
+                  voiceProcessing && styles.quickActionButtonDisabled,
                   pressed && styles.pressed,
                 ]}
               >
@@ -562,12 +753,22 @@ const styles = StyleSheet.create({
     borderRadius: AIDA_RADIUS.small,
     backgroundColor: AIDA_COLORS.glassInput,
   },
+  quickActionButtonActive: {
+    borderColor: 'rgba(89, 240, 179, 0.72)',
+    backgroundColor: 'rgba(9, 72, 52, 0.90)',
+  },
+  quickActionButtonDisabled: {
+    opacity: 0.45,
+  },
   quickActionText: {
     color: AIDA_COLORS.textPrimary,
     fontFamily: AIDA_FONTS.mono,
     fontSize: 9,
     fontWeight: '700',
     letterSpacing: 1,
+  },
+  quickActionTextActive: {
+    color: AIDA_COLORS.mint,
   },
   composerPanel: {
     padding: AIDA_SPACING.sm,
