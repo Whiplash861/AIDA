@@ -109,10 +109,26 @@ export async function configureServicesGateway(baseUrl: string, token: string): 
   snapshot = {
     ...snapshot,
     updated_at: new Date().toISOString(),
-    statuses: snapshot.statuses.map((item) =>
-      item.id === 'brain' ? { ...item, value: 'IDLE', tone: 'ready' as const } : item,
+    statuses: snapshot.statuses.map((item) => {
+      if (item.id === 'brain') {
+        return { ...item, value: 'IDLE', tone: 'ready' as const };
+      }
+      if (item.id === 'microphone') {
+        return {
+          ...item,
+          value: gateway.transcriptionConfigured ? 'READY' : 'STAGED',
+          tone: gateway.transcriptionConfigured ? ('ready' as const) : ('idle' as const),
+        };
+      }
+      return item;
+    }),
+    capabilities: buildCapabilities(
+      snapshot.platform,
+      true,
+      gateway.speechConfigured,
+      gateway.transcriptionConfigured,
+      gateway.source,
     ),
-    capabilities: buildCapabilities(snapshot.platform, true, gateway.speechConfigured, gateway.source),
   };
   notifyRuntime();
   await addActivity(
@@ -175,6 +191,56 @@ export async function setSpeechEnabled(enabled: boolean): Promise<void> {
     transport === 'silent' ? 'warning' : 'info',
     'mobile.speech',
   );
+}
+
+export async function beginVoiceListening(): Promise<void> {
+  await initializeAidaRuntime();
+  setRuntimeStatus('LISTENING', 'active');
+  setSubsystemStatus('microphone', 'LISTENING', 'active');
+  await addActivity(
+    'VOICE',
+    'Microphone capture started.',
+    'info',
+    'mobile.voice',
+  );
+}
+
+export async function beginVoiceProcessing(): Promise<void> {
+  await initializeAidaRuntime();
+  setRuntimeStatus('ANALYZING', 'active');
+  setSubsystemStatus('microphone', 'PROCESSING', 'active');
+  await addActivity(
+    'VOICE',
+    'Disposable microphone recording submitted for transcription.',
+    'info',
+    'mobile.voice',
+  );
+}
+
+export async function completeVoiceInput(): Promise<void> {
+  await initializeAidaRuntime();
+  setSubsystemStatus('microphone', 'READY', 'ready');
+  setRuntimeStatus('STANDBY', 'ready');
+  await addActivity(
+    'VOICE',
+    'Voice transcription completed. Temporary recording discarded.',
+    'info',
+    'mobile.voice',
+  );
+}
+
+export async function failVoiceInput(message: string): Promise<void> {
+  await initializeAidaRuntime();
+  const clean = message.trim() || 'Voice input failed.';
+  setSubsystemStatus('microphone', 'ERROR', 'warning');
+  await addActivity('VOICE', clean, 'error', 'mobile.voice');
+  const gateway = MOBILE_REASONING.gatewayRuntimeState();
+  setSubsystemStatus(
+    'microphone',
+    gateway.transcriptionConfigured ? 'READY' : 'STAGED',
+    gateway.transcriptionConfigured ? 'ready' : 'idle',
+  );
+  setRuntimeStatus('STANDBY', 'ready');
 }
 
 export async function submitLocalDirective(
@@ -302,7 +368,12 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
         status('artificer', 'ARTIFICER', 'STAGED', 'idle'),
         status('technomancer', 'TECHNOMANCER', 'STAGED', 'idle'),
         status('perception', 'PERCEPTION', 'STAGED', 'idle'),
-        status('microphone', 'MICROPHONE', 'STAGED', 'idle'),
+        status(
+          'microphone',
+          'MICROPHONE',
+          gateway.transcriptionConfigured ? 'READY' : 'STAGED',
+          gateway.transcriptionConfigured ? 'ready' : 'idle',
+        ),
         status('tasks', 'TASKS', '0 ACTIVE', 'idle'),
         status('platform', 'PLATFORM', platform.toUpperCase(), 'ready'),
       ],
@@ -310,6 +381,7 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
         platform,
         gatewayReady,
         gateway.speechConfigured,
+        gateway.transcriptionConfigured,
         gateway.source,
       ),
     };
@@ -419,6 +491,7 @@ function buildCapabilities(
   platform: string,
   gatewayReady: boolean,
   speechConfigured: boolean,
+  transcriptionConfigured: boolean,
   gatewaySource: 'development' | 'enrolled' | 'none',
 ): RuntimeCapability[] {
   return [
@@ -491,8 +564,10 @@ function buildCapabilities(
     {
       id: 'voice.input',
       label: 'Voice input and transcription',
-      state: 'staged',
-      detail: 'Android microphone capture will mirror native LISTENING and PROCESSING states in the next provider pass.',
+      state: transcriptionConfigured ? 'supported' : 'staged',
+      detail: transcriptionConfigured
+        ? 'Push-to-talk microphone capture uses native LISTENING/PROCESSING states, disposable audio, and AIDA transcription.'
+        : 'Microphone capture is present, but secure AIDA transcription requires an authenticated transcription provider.',
     },
   ];
 }
