@@ -78,16 +78,7 @@ class MobileAegisRuntime {
     threatConfirmed?: boolean;
   } = {}): void {
     this.lastObservationAt = new Date().toISOString();
-    this.degradedReasons = [...(options.degradedReasons ?? [])];
-    if (options.threatConfirmed) {
-      this.state = 'threat_confirmed';
-    } else if (this.degradedReasons.length > 0) {
-      this.state = 'degraded';
-    } else if (options.elevated) {
-      this.state = 'elevated';
-    } else {
-      this.state = 'observing';
-    }
+    this.applyAssessmentState(options);
   }
 
   completeIntelligentScan(options: {
@@ -104,11 +95,24 @@ class MobileAegisRuntime {
     if (typeof options.openCaseCount === 'number') {
       this.openCaseCount = Math.max(0, Math.trunc(options.openCaseCount));
     }
-    this.completeObservation({
-      degradedReasons: options.degradedReasons,
-      elevated: options.elevated,
-      threatConfirmed: options.threatConfirmed,
-    });
+    this.applyAssessmentState(options);
+  }
+
+  private applyAssessmentState(options: {
+    degradedReasons?: string[];
+    elevated?: boolean;
+    threatConfirmed?: boolean;
+  }): void {
+    this.degradedReasons = [...(options.degradedReasons ?? [])];
+    if (options.threatConfirmed) {
+      this.state = 'threat_confirmed';
+    } else if (this.degradedReasons.length > 0) {
+      this.state = 'degraded';
+    } else if (options.elevated) {
+      this.state = 'elevated';
+    } else {
+      this.state = 'observing';
+    }
   }
 }
 
