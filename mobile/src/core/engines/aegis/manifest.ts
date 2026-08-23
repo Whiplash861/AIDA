@@ -1,0 +1,297 @@
+import {
+  EngineCommandExecutionContext,
+  EngineCommandResult,
+  MobileEngineDefinition,
+} from '@/src/core/engines/types';
+import { RoutedDirective } from '@/src/core/reasoning/types';
+
+const AEGIS_COMMAND_TYPES = [
+  'SECURITY_STATUS',
+  'SECURITY_SURFACE_SCAN',
+  'SECURITY_DEEP_SCAN',
+  'SECURITY_FULL_SWEEP',
+  'SECURITY_CANCEL_REQUEST',
+  'SECURITY_CANCEL_CONFIRM',
+  'STAND_DOWN_REQUEST',
+  'STAND_DOWN_CONFIRM',
+  'STAND_DOWN_REVOKE_REQUEST',
+  'STAND_DOWN_REVOKE_CONFIRM',
+  'STAND_DOWN_LIST',
+  'THREAT_ANALYZE',
+  'THREAT_RESPONSE_PLAN',
+  'THREAT_REMEDIATE_REQUEST',
+  'THREAT_REMEDIATE_CONFIRM',
+  'THREAT_DELETE_BLOCKED',
+  'THREAT_CENTER_SHOW',
+  'EVIDENCE_LOCATE',
+  'EVIDENCE_OPEN_FOLDER',
+  'EVIDENCE_SELECT',
+] as const;
+
+const COMMAND_SUBPROCESS: Record<string, string> = {
+  SECURITY_STATUS: 'provider.health',
+  SECURITY_SURFACE_SCAN: 'scan.surface',
+  SECURITY_DEEP_SCAN: 'scan.deep',
+  SECURITY_FULL_SWEEP: 'scan.full',
+  SECURITY_CANCEL_REQUEST: 'scan.control',
+  SECURITY_CANCEL_CONFIRM: 'scan.control',
+  STAND_DOWN_REQUEST: 'response.stand-down',
+  STAND_DOWN_CONFIRM: 'response.stand-down',
+  STAND_DOWN_REVOKE_REQUEST: 'response.stand-down',
+  STAND_DOWN_REVOKE_CONFIRM: 'response.stand-down',
+  STAND_DOWN_LIST: 'response.stand-down',
+  THREAT_ANALYZE: 'analysis.targeted-threat',
+  THREAT_RESPONSE_PLAN: 'response.recommendation',
+  THREAT_REMEDIATE_REQUEST: 'response.remediation-gate',
+  THREAT_REMEDIATE_CONFIRM: 'response.remediation-gate',
+  THREAT_DELETE_BLOCKED: 'response.remediation-gate',
+  THREAT_CENTER_SHOW: 'cases.store',
+  EVIDENCE_LOCATE: 'evidence.graph',
+  EVIDENCE_OPEN_FOLDER: 'evidence.graph',
+  EVIDENCE_SELECT: 'evidence.graph',
+};
+
+async function executeAegisDirective(
+  directive: RoutedDirective,
+  context: EngineCommandExecutionContext,
+): Promise<EngineCommandResult> {
+  const subprocessId = COMMAND_SUBPROCESS[directive.commandType] ?? 'engine.dispatch';
+  const subprocess = AEGIS_ENGINE.subprocesses.find((item) => item.id === subprocessId);
+  const label = subprocess?.label ?? subprocessId;
+  const intent = directive.intentId || directive.commandType.toLowerCase();
+
+  return {
+    transcriptText:
+      `Registered AIDA intent resolved: ${intent}.\n\n` +
+      `Engine: Aegis\n` +
+      `Subprocess: ${label}\n` +
+      `${context.platform} provider status: ${subprocess?.state ?? 'staged'}.\n` +
+      'No operation was executed.',
+    speechText:
+      `Aegis recognized the directive. ${label} is not yet available through the ` +
+      `${context.platform} provider. No operation was executed.`,
+    includeInContext: !directive.localOnly,
+    executed: false,
+  };
+}
+
+export const AEGIS_ENGINE: MobileEngineDefinition = {
+  id: 'aegis',
+  name: 'Aegis',
+  domain: 'Security and defensive intelligence',
+  state: 'staged',
+  detail:
+    'Android Aegis mirrors the native Engine contract: observe, correlate, investigate, assess, learn within policy, and recommend escalation without silently gaining remediation authority.',
+  commandTypes: AEGIS_COMMAND_TYPES,
+  subprocesses: [
+    {
+      id: 'observer.background',
+      label: 'Background Observation',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'android.background-observer',
+      detail: 'Low-cost read-only security observation with bounded cadence.',
+    },
+    {
+      id: 'provider.health',
+      label: 'Security Provider Health',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'android.security-provider',
+      detail: 'Reads available Android security-provider and protection-health signals.',
+    },
+    {
+      id: 'sensor.process-activity',
+      label: 'Process and App Activity Sensor',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'android.activity-sensor',
+      detail: 'Collects only Android-visible process/application identity and activity evidence.',
+    },
+    {
+      id: 'sensor.persistence',
+      label: 'Persistence Sensor',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'android.persistence-sensor',
+      detail: 'Collects Android-visible startup, package, service, and persistence-relevant evidence.',
+    },
+    {
+      id: 'sensor.network',
+      label: 'Network Exposure Sensor',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'android.network-sensor',
+      detail: 'Collects permission-available connectivity and exposure evidence without packet interception.',
+    },
+    {
+      id: 'baseline.delta',
+      label: 'Security Baseline and Drift',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.algorithm',
+      detail: 'Stores a trusted local baseline and compares later observations for meaningful drift.',
+    },
+    {
+      id: 'detections.provider',
+      label: 'Provider Detection Intake',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'android.security-provider',
+      detail: 'Normalizes provider-visible detections into Aegis evidence without replacing platform security.',
+    },
+    {
+      id: 'scan.adaptive',
+      label: 'Adaptive Security Scan',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'aegis.orchestrator',
+      detail: 'Chooses the least-invasive useful evidence path and escalates only when justified.',
+    },
+    {
+      id: 'scan.surface',
+      label: 'Surface Security Scan',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'android.security-scan',
+      detail: 'Fast security assessment using Android-visible provider and system evidence.',
+    },
+    {
+      id: 'scan.deep',
+      label: 'Deep Security Scan',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'android.security-scan',
+      detail: 'Targeted deeper analysis constrained to evidence Android can lawfully and reliably expose.',
+    },
+    {
+      id: 'scan.full',
+      label: 'Full-System Sweep',
+      state: 'staged',
+      authority: 'recommend',
+      provider: 'android.security-scan',
+      detail: 'Highest-cost scan strategy; policy and platform support remain explicit prerequisites.',
+    },
+    {
+      id: 'scan.control',
+      label: 'Security Scan Control',
+      state: 'staged',
+      authority: 'execute',
+      provider: 'android.security-scan',
+      detail: 'Cancellation/control boundary for provider-owned scans when the Android provider supports it.',
+    },
+    {
+      id: 'analysis.candidate-selection',
+      label: 'Adaptive Candidate Selection',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.algorithm',
+      detail: 'Selects evidence requiring deeper inspection from detections, drift, and runtime observations.',
+    },
+    {
+      id: 'analysis.targeted-threat',
+      label: 'Targeted Threat Analysis',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'android.threat-analysis',
+      detail: 'Builds bounded local analyses for a specific Android-visible package, artifact, or detection.',
+    },
+    {
+      id: 'risk.multi-axis',
+      label: 'Multi-Axis Risk Assessment',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.algorithm',
+      detail: 'Scores likelihood, impact, activity, persistence, exposure, and urgency independently.',
+    },
+    {
+      id: 'coverage.multi-axis',
+      label: 'Evidence Coverage Assessment',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.algorithm',
+      detail: 'Tracks how much of the relevant security surface Aegis could actually observe.',
+    },
+    {
+      id: 'hypotheses.competing',
+      label: 'Competing Hypotheses',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.algorithm',
+      detail: 'Maintains evidence for, evidence against, and unresolved questions for competing explanations.',
+    },
+    {
+      id: 'evidence.graph',
+      label: 'Evidence Graph',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.graph',
+      detail: 'Correlates packages, processes, persistence, network evidence, detections, and analyses.',
+    },
+    {
+      id: 'cases.store',
+      label: 'Security Case Store',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'local.sqlite',
+      detail: 'Persists Aegis case state, summaries, risk, coverage, evidence, hypotheses, and uncertainty locally.',
+    },
+    {
+      id: 'response.recommendation',
+      label: 'Response Recommendation',
+      state: 'staged',
+      authority: 'recommend',
+      provider: 'aegis.policy',
+      detail: 'Recommends escalation or user action without silently claiming remediation authority.',
+    },
+    {
+      id: 'response.remediation-gate',
+      label: 'Remediation Authority Gate',
+      state: 'staged',
+      authority: 'execute',
+      provider: 'aida.authorization',
+      detail: 'Keeps destructive or consequential security action behind AIDA policy and explicit authorization.',
+    },
+    {
+      id: 'response.stand-down',
+      label: 'Threat Stand-Down Policy',
+      state: 'staged',
+      authority: 'execute',
+      provider: 'aida.authorization',
+      detail: 'Maintains scoped user-approved threat exceptions without disabling Aegis observation globally.',
+    },
+    {
+      id: 'learning.features',
+      label: 'Privacy-Safe Feature Learning',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.learning',
+      detail: 'Learns from bounded feature vectors without retaining raw paths, endpoints, command lines, or conversations.',
+    },
+    {
+      id: 'learning.online-model',
+      label: 'Versioned Online Model',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.learning',
+      detail: 'Supports versioned model lifecycle, shadow evaluation, and rollback-ready inference.',
+    },
+    {
+      id: 'learning.training-gate',
+      label: 'Poisoning-Resistant Training Gate',
+      state: 'staged',
+      authority: 'analyze',
+      provider: 'local.learning',
+      detail: 'Prevents untrusted observations from automatically becoming authoritative training truth.',
+    },
+    {
+      id: 'artificer.bridge',
+      label: 'Artificer Engineering Bridge',
+      state: 'staged',
+      authority: 'observe',
+      provider: 'aida.artificer',
+      detail: 'Publishes privacy-safe Aegis engineering/runtime metadata for cross-Engine compatibility review.',
+    },
+  ],
+  execute: executeAegisDirective,
+};
