@@ -34,6 +34,30 @@ def test_gateway_resolves_current_technomancer_hardware_trigger() -> None:
     assert result.local_only is True
 
 
+def test_identity_prompt_is_not_hijacked_by_generic_identify_action() -> None:
+    gateway = AidaServicesGateway()
+
+    result = gateway.resolve(
+        "Identify yourself",
+        {"instanceId": "test-mobile-aida"},
+    )
+
+    assert result.matched is False
+
+
+def test_explicit_identify_hardware_still_routes_to_technomancer() -> None:
+    gateway = AidaServicesGateway()
+
+    result = gateway.resolve(
+        "identify my hardware",
+        {"instanceId": "test-mobile-aida"},
+    )
+
+    assert result.matched is True
+    assert result.command_type == "TECHNOMANCER_HARDWARE"
+    assert result.intent_id == "technomancer.hardware"
+
+
 def test_reasoning_receives_native_recent_context_shape() -> None:
     gateway = AidaServicesGateway()
     captured: dict[str, Any] = {}
