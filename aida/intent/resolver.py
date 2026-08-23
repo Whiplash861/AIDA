@@ -78,6 +78,15 @@ class IntentResolver:
         margin = best.score - runner_up
 
         if best.score < best.definition.clarification_threshold:
+            # A generic action verb by itself is not enough evidence to seize a
+            # conversational directive. For example, Technomancer Hardware
+            # registers the action "identify"; without this guard, the ordinary
+            # prompt "Identify yourself" becomes a false hardware clarification.
+            # Require an alias, object, modifier, or another explicit semantic
+            # anchor before AIDA asks an intent clarification. Otherwise the
+            # directive remains unresolved and can continue to AIDABrain.
+            if not _has_clarification_anchor(best):
+                return IntentResolution(resolved=None)
             return IntentResolution(
                 resolved=None,
                 candidates=tuple(candidates[:3]),
@@ -248,6 +257,27 @@ class IntentResolver:
 def _has_exact_phrase_match(candidate: IntentCandidate) -> bool:
     return any(
         reason.startswith("exact phrase match:")
+        for reason in candidate.reasons
+    )
+
+
+def _has_clarification_anchor(candidate: IntentCandidate) -> bool:
+    """Return True when a weak candidate has enough semantic grounding.
+
+    Action verbs such as ``show``, ``check``, or ``identify`` occur frequently
+    in normal conversation. They should contribute to an otherwise grounded
+    intent, but must not independently trigger an AIDA clarification.
+    """
+
+    anchor_prefixes = (
+        "exact phrase match:",
+        "direct phrase match:",
+        "object concept:",
+        "modifier concept:",
+        "explicit malware, antivirus, or security scan defaults",
+    )
+    return any(
+        reason.startswith(anchor_prefixes)
         for reason in candidate.reasons
     )
 
