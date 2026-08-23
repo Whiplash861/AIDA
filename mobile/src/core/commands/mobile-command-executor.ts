@@ -1,3 +1,4 @@
+import { executeAndroidCoreDiagnostic } from '@/src/core/diagnostics/android-core-diagnostics';
 import { executeEngineDirective } from '@/src/core/engines/registry';
 import {
   EngineCommandExecutionContext,
@@ -11,11 +12,9 @@ export type MobileCommandExecutionContext = EngineCommandExecutionContext;
 /**
  * Android command execution boundary.
  *
- * Native AIDA's CommandRouter recognizes intent before platform execution. The
- * mobile runtime now dispatches Engine-owned commands through the Engine
- * registry first, keeping Aegis/Technomancer/etc. responsible for their own
- * subprocesses and provider boundaries. Non-Engine core commands remain here
- * until their Android core providers are ported.
+ * Native AIDA's CommandRouter recognizes intent before platform execution.
+ * Engine-owned commands dispatch through the Engine registry first. Core
+ * diagnostics remain AIDA Core capabilities and use their own Android provider.
  */
 export async function executeMobileRoutedDirective(
   directive: RoutedDirective,
@@ -38,10 +37,14 @@ export async function executeMobileRoutedDirective(
     return engineResult;
   }
 
-  // Core/platform-provider implementations such as Quickscan and Performance
-  // Scan remain outside any named Engine. They will be ported into dedicated
-  // Android core-provider modules instead of being incorrectly assigned to an
-  // Engine merely to make them executable.
+  const coreDiagnostic = await executeAndroidCoreDiagnostic(
+    directive.commandType,
+    !directive.localOnly,
+  );
+  if (coreDiagnostic) {
+    return coreDiagnostic;
+  }
+
   const intent = directive.intentId || directive.commandType.toLowerCase();
   const transcriptText =
     `Registered AIDA intent resolved: ${intent}.\n\n` +
