@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import aida.audio.voice as voice_module
 import aida.services_gateway.service as gateway_module
 from aida.services_gateway.service import AidaServicesGateway
 
@@ -117,6 +118,12 @@ def test_speech_uses_canonical_cleanup_before_shared_synthesis(monkeypatch) -> N
     assert result.content_type == "audio/mpeg"
     assert captured["text"] == "Status. tool executable . ready"
     assert captured["config"] is gateway._config
+
+
+def test_elevenlabs_receives_canonical_aida_name_pronunciation() -> None:
+    assert voice_module._normalize_text("AIDA online. aida ready.") == (
+        "Ada online. Ada ready."
+    )
 
 
 def test_mobile_transcription_is_disposable_and_reuses_native_provider(monkeypatch) -> None:
