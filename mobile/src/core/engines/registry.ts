@@ -1,3 +1,4 @@
+import { executeAndroidAegisCommand } from '@/src/core/engines/aegis/android-provider';
 import { AEGIS_ENGINE } from '@/src/core/engines/aegis/manifest';
 import { ARTIFICER_ENGINE } from '@/src/core/engines/artificer/manifest';
 import { PERCEPTION_ENGINE } from '@/src/core/engines/perception/manifest';
@@ -36,6 +37,14 @@ export async function executeEngineDirective(
 ): Promise<EngineCommandResult | null> {
   const engine = engineForCommand(directive.commandType);
   if (!engine) return null;
+
+  // Platform providers are attempted before the Engine's staged fallback.
+  // This keeps the Engine contract stable while allowing Android capability
+  // slices to graduate independently as genuine providers become available.
+  if (engine.id === 'aegis') {
+    const androidAegisResult = await executeAndroidAegisCommand(directive, context);
+    if (androidAegisResult) return androidAegisResult;
+  }
 
   if (!engine.execute) {
     const intent = directive.intentId || directive.commandType.toLowerCase();
