@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 import threading
 import time
@@ -18,6 +19,11 @@ from aida.logging_utils import get_logger
 log = get_logger(__name__)
 
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+
+# ElevenLabs may interpret the all-caps project name as an acronym and produce
+# a hard "I" sound. Keep the visible product name as AIDA, but send a stable
+# speech-only pronunciation spelling to the voice provider.
+_AIDA_SPOKEN_NAME = "Ada"
 
 # Serialize ALL voice output so lines never overlap
 _speak_lock = threading.Lock()
@@ -79,7 +85,10 @@ def _normalize_text(text: str) -> str:
     # Conservative normalization: remove leading/trailing whitespace and collapse runs
     t = (text or "").strip()
     t = " ".join(t.split())
-    return t
+    # Speech-only pronunciation override. Displayed/transcript text remains
+    # "AIDA"; only provider-bound text is respelled so the name is spoken as
+    # "AY-duh" / "Ayee-duh" rather than with a sharp "I" sound.
+    return re.sub(r"\bAIDA\b", _AIDA_SPOKEN_NAME, t, flags=re.IGNORECASE)
 
 
 def _get_tts_bytes_cached(
