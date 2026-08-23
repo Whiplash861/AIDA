@@ -10,8 +10,20 @@ import {
 } from '@/src/core/engines/types';
 import { RoutedDirective } from '@/src/core/reasoning/types';
 
+const AEGIS_ANDROID_ENGINE: MobileEngineDefinition = {
+  ...AEGIS_ENGINE,
+  state: 'limited',
+  subprocesses: AEGIS_ENGINE.subprocesses.map((item) => {
+    if (item.id === 'sensor.network') return { ...item, state: 'supported' as const };
+    if (item.id === 'provider.health' || item.id === 'scan.surface') {
+      return { ...item, state: 'limited' as const };
+    }
+    return item;
+  }),
+};
+
 export const MOBILE_ENGINE_CATALOG: readonly MobileEngineDefinition[] = [
-  AEGIS_ENGINE,
+  AEGIS_ANDROID_ENGINE,
   ARTIFICER_ENGINE,
   TECHNOMANCER_ENGINE,
   PERCEPTION_ENGINE,
