@@ -4,6 +4,10 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { GlassPanel } from '@/src/components/glass-panel';
 import { PageShell } from '@/src/components/page-shell';
 import {
+  engineSubprocessTotals,
+  MOBILE_ENGINE_CATALOG,
+} from '@/src/core/engines/registry';
+import {
   configureServicesGateway,
   getRuntimeSnapshot,
   MobileRuntimeSnapshot,
@@ -28,6 +32,18 @@ type OperationRow = {
   tone: 'ready' | 'staged' | 'protected';
 };
 
+const ENGINE_ROWS: OperationRow[] = MOBILE_ENGINE_CATALOG.map((engine) => {
+  const totals = engineSubprocessTotals(engine);
+  return {
+    title: engine.name,
+    detail:
+      `${engine.detail} ${totals.supported}/${totals.total} subprocesses supported ` +
+      `(${totals.limited} limited, ${totals.staged} staged).`,
+    badge: engine.state.toUpperCase(),
+    tone: engine.state === 'active' ? 'ready' : 'staged',
+  };
+});
+
 const GROUPS: { title: string; items: OperationRow[] }[] = [
   {
     title: 'SYSTEM',
@@ -41,17 +57,13 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
     title: 'AIDA',
     items: [
       { title: 'Memory', detail: 'Persistent storage foundation is active; semantic memory parity remains staged.', badge: 'FOUNDATION', tone: 'ready' },
-      { title: 'Threats', detail: 'Device-local findings, evidence, and response plans.', badge: 'STAGED', tone: 'staged' },
+      { title: 'Threats', detail: 'Device-local findings, evidence, and response plans are owned by Aegis where applicable.', badge: 'STAGED', tone: 'staged' },
       { title: 'Tasks', detail: 'Durable background assistance and progress.', badge: 'STAGED', tone: 'staged' },
     ],
   },
   {
     title: 'ENGINES',
-    items: [
-      { title: 'Artificer', detail: 'Mobile compatibility reviews, proposals, and governance.', badge: 'STAGED', tone: 'staged' },
-      { title: 'Technomancer', detail: 'Permission-aware Android application and device assistance.', badge: 'STAGED', tone: 'staged' },
-      { title: 'Perception', detail: 'Camera, screenshot, and image evidence intake.', badge: 'STAGED', tone: 'staged' },
-    ],
+    items: ENGINE_ROWS,
   },
   {
     title: 'CONTROL & SUPPORT',
