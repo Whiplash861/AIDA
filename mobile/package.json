@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "sync-aida-assets": "node ./scripts/sync-aida-assets.js",
+    "eas-build-post-install": "npm run sync-aida-assets",
     "prestart": "npm run sync-aida-assets",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
