@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { GlassPanel } from '@/src/components/glass-panel';
 import { PageShell } from '@/src/components/page-shell';
@@ -31,6 +31,9 @@ type OperationRow = {
   badge: string;
   tone: 'ready' | 'staged' | 'protected';
 };
+
+const PRIVACY_POLICY_URL = 'https://whiplash861.github.io/AIDA/privacy-policy/';
+const PRIVACY_CONTACT = 'AIDAdeveloper@outlook.com';
 
 const ENGINE_ROWS: OperationRow[] = MOBILE_ENGINE_CATALOG.map((engine) => {
   const totals = engineSubprocessTotals(engine);
@@ -247,6 +250,43 @@ export default function MoreScreen() {
               </Text>
             </View>
           </View>
+        </View>
+      </GlassPanel>
+
+      <GlassPanel variant="deep" style={styles.groupCard}>
+        <Text style={styles.groupTitle}>AIDA LABS</Text>
+        <View style={styles.rows}>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Open AIDA Privacy Policy"
+            onPress={() => void Linking.openURL(PRIVACY_POLICY_URL)}
+            style={({ pressed }) => [styles.row, styles.rowBorder, pressed && styles.pressed]}
+          >
+            <View style={styles.rowText}>
+              <Text style={styles.rowTitle}>Privacy Policy</Text>
+              <Text style={styles.rowDetail}>
+                Review how AIDA handles device-local information, remote provider processing, voice data, retention, and privacy controls.
+              </Text>
+            </View>
+            <View style={[styles.badge, styles.readyBadge]}>
+              <Text style={[styles.badgeText, styles.readyText]}>OPEN</Text>
+            </View>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Contact AIDA Labs"
+            onPress={() => void Linking.openURL(`mailto:${PRIVACY_CONTACT}`)}
+            style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+          >
+            <View style={styles.rowText}>
+              <Text style={styles.rowTitle}>AIDA Labs Contact</Text>
+              <Text style={styles.rowDetail}>{PRIVACY_CONTACT}</Text>
+            </View>
+            <View style={[styles.badge, styles.stagedBadge]}>
+              <Text style={[styles.badgeText, styles.stagedText]}>EMAIL</Text>
+            </View>
+          </Pressable>
         </View>
       </GlassPanel>
 
