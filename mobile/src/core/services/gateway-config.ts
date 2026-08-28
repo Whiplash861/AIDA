@@ -41,5 +41,21 @@ export async function loadGatewayConfiguration(): Promise<GatewayConfiguration> 
     };
   }
 
+  // The production gateway URL is public configuration and may safely ship in
+  // an application build. Credentials are deliberately excluded. Returning the
+  // URL here only pre-fills Control; AIDA remains unenrolled until a revocable
+  // session/enrollment credential is stored in SecureStore.
+  const productionUrl = (
+    process.env.EXPO_PUBLIC_AIDA_GATEWAY_URL ?? ''
+  ).trim().replace(/\/$/, '');
+
+  if (productionUrl) {
+    return {
+      baseUrl: productionUrl,
+      token: '',
+      source: 'none',
+    };
+  }
+
   return { baseUrl: '', token: '', source: 'none' };
 }
