@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import requests
-from playsound import playsound  # type: ignore
 
 from aida.config import AidaConfig
 from aida.logging_utils import get_logger
@@ -235,6 +234,11 @@ def _request_tts(
 
 def _play_mp3_bytes_blocking(audio_bytes: bytes) -> None:
     """Write generated audio to the deterministic temp cache and play it."""
+    # Desktop playback is the only operation that needs playsound. Keeping the
+    # import here allows the shared synthesis module to run in a headless
+    # Services Gateway container without installing desktop audio dependencies.
+    from playsound import playsound  # type: ignore
+
     tmp_dir = os.path.join(tempfile.gettempdir(), "AIDA_TTS_CACHE")
     os.makedirs(tmp_dir, exist_ok=True)
 
