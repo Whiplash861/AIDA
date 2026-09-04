@@ -33,8 +33,10 @@ def ensure_aegis_engine(
         if _ACTIVE is not None and _ACTIVE_KEY == key:
             if not _ACTIVE.running:
                 _ACTIVE.start()
+            _start_remote_monitor(_ACTIVE)
             return _ACTIVE
         if _ACTIVE is not None:
+            _stop_remote_monitor(_ACTIVE)
             _ACTIVE.stop()
         _ACTIVE = build_aegis_engine(
             config,
@@ -44,6 +46,7 @@ def ensure_aegis_engine(
         )
         _ACTIVE_KEY = key
         _ACTIVE.start()
+        _start_remote_monitor(_ACTIVE)
         if not _ATEXIT_REGISTERED:
             atexit.register(stop_active_aegis)
             _ATEXIT_REGISTERED = True
@@ -62,4 +65,19 @@ def stop_active_aegis() -> None:
         _ACTIVE = None
         _ACTIVE_KEY = None
     if engine is not None:
+        _stop_remote_monitor(engine)
         engine.stop()
+
+
+def _start_remote_monitor(engine: AegisEngine) -> None:
+    monitor = getattr(engine, "remote_monitor", None)
+    start = getattr(monitor, "start", None)
+    if callable(start):
+        start()
+
+
+def _stop_remote_monitor(engine: AegisEngine) -> None:
+    monitor = getattr(engine, "remote_monitor", None)
+    stop = getattr(monitor, "stop", None)
+    if callable(stop):
+        stop()
