@@ -21,10 +21,9 @@ class AegisSystemSensor:
     """Bounded read-only machine security snapshot used by Aegis.
 
     Normal background observation deliberately excludes process command-line
-    contents. Aegis only needs process identity, parentage, executable paths,
-    and endpoint relationships for its current Early Alpha correlation model.
-    More invasive evidence is collected only by existing targeted analysis
-    paths when directly relevant to an investigation.
+    contents. Aegis only needs process identity, parentage, creation identity,
+    executable paths, and endpoint relationships for its current correlation
+    model. More invasive evidence is collected only by targeted analysis paths.
     """
 
     def __init__(
@@ -72,7 +71,9 @@ class AegisSystemSensor:
             errors.append("network_snapshot_unavailable")
 
         try:
-            iterator = psutil.process_iter(["pid", "ppid", "name", "exe"])
+            iterator = psutil.process_iter(
+                ["pid", "ppid", "name", "exe", "create_time"]
+            )
             for index, process in enumerate(iterator):
                 if index >= self.max_processes:
                     errors.append("process_snapshot_limit_reached")
@@ -81,6 +82,7 @@ class AegisSystemSensor:
                     info = process.info
                     pid = int(info.get("pid") or process.pid)
                     executable = str(info.get("exe") or "")
+                    create_time = info.get("create_time")
                     network = connection_map.get(
                         pid, {"remote": set(), "listen": set()}
                     )
@@ -95,6 +97,11 @@ class AegisSystemSensor:
                             name=str(info.get("name") or ""),
                             executable=executable,
                             command_line="",
+                            create_time=(
+                                None
+                                if create_time is None
+                                else float(create_time)
+                            ),
                             remote_endpoints=tuple(sorted(network["remote"])),
                             listening_endpoints=tuple(sorted(network["listen"])),
                         )
