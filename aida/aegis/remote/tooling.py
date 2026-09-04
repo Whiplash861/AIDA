@@ -98,7 +98,6 @@ _SECURITY_SENSITIVE_CHILDREN = frozenset(
 
 
 def identify_remote_tools(snapshot: SecuritySnapshot) -> tuple[RemoteToolEvidence, ...]:
-    by_pid = {process.pid: process for process in snapshot.processes}
     children: dict[int, list[ProcessEntity]] = {}
     for process in snapshot.processes:
         if process.parent_pid is not None:
@@ -146,6 +145,14 @@ def match_remote_tool(process: ProcessEntity) -> RemoteToolProfile | None:
         if any(hint in candidates for hint in profile.process_hints):
             return profile
     return None
+
+
+def remote_tool_name_hint(name: str) -> bool:
+    normalized = Path(name).name.strip().lower()
+    return any(
+        normalized in profile.process_hints
+        for profile in _REMOTE_TOOL_PROFILES
+    )
 
 
 def known_remote_tool_keys() -> tuple[str, ...]:
