@@ -165,6 +165,11 @@ def _snapshot_from_record(record: dict[str, Any]) -> SecuritySnapshot:
                 name=str(item.get("name") or ""),
                 executable=str(item.get("executable") or ""),
                 command_line=str(item.get("command_line") or ""),
+                create_time=(
+                    None
+                    if item.get("create_time") is None
+                    else float(item.get("create_time"))
+                ),
                 remote_endpoints=tuple(item.get("remote_endpoints") or ()),
                 listening_endpoints=tuple(item.get("listening_endpoints") or ()),
             )
