@@ -245,16 +245,36 @@ class AegisRemoteIntrusionService:
             learning_confidence=learned.confidence,
         )
 
-        remote_activity = bool(active_sessions or successful_remote_logons or tools)
-        if user_confirmed_attacker:
+        # A successful historical logon is useful evidence, but it is not a
+        # current containment target. Active RDP sessions and recognized
+        # remote-control process instances are the current Phase 1 targets.
+        active_containment_target = bool(active_sessions or tools)
+        remote_activity = bool(active_containment_target or successful_remote_logons)
+        effective_user_confirmation = bool(
+            user_confirmed_attacker and active_containment_target
+        )
+
+        if effective_user_confirmation:
             classification = RemoteAccessClassification.CONFIRMED_INTRUSION
             score = 1.0
             confidence = 1.0
             urgency = 1.0
             evidence.append(
-                "The local user explicitly confirmed that the active remote access is unauthorized."
+                "The local user explicitly confirmed that the currently observable remote access is unauthorized."
             )
             recommended = "prepare_sentry_attack_protocol"
+        elif user_confirmed_attacker and not active_containment_target:
+            classification = (
+                RemoteAccessClassification.UNAUTHORIZED_SUSPECTED
+                if remote_activity
+                else RemoteAccessClassification.NO_REMOTE_ACTIVITY
+            )
+            score = max(score, 0.45 if remote_activity else 0.20)
+            urgency = max(urgency, 0.65)
+            evidence.append(
+                "The local user reported an attacker, but Aegis could not resolve a currently active RDP session or recognized remote-control process target."
+            )
+            recommended = "preserve_evidence_and_run_aegis_scan"
         elif support_match is not None and remote_activity and strong_malicious_context:
             classification = RemoteAccessClassification.SUPPORT_SESSION_ANOMALOUS
             score = max(score, 0.62)
@@ -308,7 +328,7 @@ class AegisRemoteIntrusionService:
             counter_evidence=tuple(counters),
             degraded_reasons=degraded,
             recommended_action=recommended,
-            user_confirmed_attacker=user_confirmed_attacker,
+            user_confirmed_attacker=effective_user_confirmation,
         )
         self.store.store_assessment(assessment)
         return assessment
