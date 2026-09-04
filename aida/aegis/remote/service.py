@@ -14,7 +14,11 @@ from aida.aegis.remote.models import (
 )
 from aida.aegis.remote.store import RemoteSecurityStore
 from aida.aegis.remote.support import RemoteSupportService
-from aida.aegis.remote.tooling import identify_remote_tools, remote_tool_name_hint
+from aida.aegis.remote.tooling import (
+    identify_remote_tools,
+    is_security_sensitive_child_name,
+    remote_tool_name_hint,
+)
 from aida.aegis.remote.windows_sessions import (
     enumerate_remote_desktop_sessions,
     read_recent_remote_logons,
@@ -56,22 +60,33 @@ class AegisRemoteIntrusionService:
     def activity_hint(self) -> bool:
         """Cheap background trigger before running the full remote assessment.
 
-        Active RDP sessions are a strong hint. Known support-tool process
-        presence is only a hint because many legitimate products keep a service
-        resident even when no technician is connected.
+        Active RDP is a direct trigger. Resident remote-support services alone
+        are not: many legitimate tools remain connected to a relay continuously.
+        Third-party tooling triggers the heavier assessment when it spawns a
+        security-sensitive child such as PowerShell, cmd, schtasks, or reg.exe.
         """
 
         sessions, _errors = enumerate_remote_desktop_sessions()
         if any(session.is_active for session in sessions):
             return True
         try:
-            for process in psutil.process_iter(["name"]):
-                name = str(process.info.get("name") or "")
-                if remote_tool_name_hint(name):
-                    return True
+            rows = list(psutil.process_iter(["pid", "ppid", "name"]))
         except (psutil.Error, OSError):
             return False
-        return False
+        remote_pids = {
+            int(process.info.get("pid") or process.pid)
+            for process in rows
+            if remote_tool_name_hint(str(process.info.get("name") or ""))
+        }
+        if not remote_pids:
+            return False
+        return any(
+            process.info.get("ppid") in remote_pids
+            and is_security_sensitive_child_name(
+                str(process.info.get("name") or "")
+            )
+            for process in rows
+        )
 
     def inspect(
         self,
