@@ -5,6 +5,7 @@ import os
 
 from aida.aegis.learning.models import AegisFeatureVector
 from aida.aegis.models import BaselineDelta, SecuritySnapshot
+from aida.aegis.remote.tooling import identify_remote_tools
 from aida.security.models import ProviderDetection
 from aida.security.threat_analysis import ThreatAnalysisRecord, ThreatAssessmentLevel
 
@@ -32,12 +33,18 @@ def extract_feature_vector(
     parent_child_count = sum(
         1 for process in snapshot.processes if process.parent_pid is not None
     )
+    remote_tools = identify_remote_tools(snapshot)
+    sensitive_remote_children = sum(
+        len(tool.security_sensitive_children) for tool in remote_tools
+    )
     numeric = {
         "process_count": float(len(snapshot.processes)),
         "persistence_count": float(len(snapshot.persistence)),
         "listener_count": float(len(snapshot.listeners)),
         "remote_endpoint_count": float(remote_endpoint_count),
         "parent_child_relationship_count": float(parent_child_count),
+        "remote_control_process_count": float(len(remote_tools)),
+        "remote_control_sensitive_child_count": float(sensitive_remote_children),
         "new_process_count": float(len(delta.new_process_paths)),
         "new_persistence_count": float(len(delta.new_persistence)),
         "new_listener_count": float(len(delta.new_listeners)),
@@ -87,6 +94,15 @@ def extract_feature_vector(
         )
     for listener in snapshot.listeners:
         identity_tokens.append(_token("listener", listener))
+    for tool in remote_tools:
+        identity_tokens.append(_token("remote_tool", tool.tool_key))
+        for child in tool.security_sensitive_children:
+            identity_tokens.append(
+                _token(
+                    "remote_tool_sensitive_child",
+                    f"{tool.tool_key}|{child}",
+                )
+            )
 
     return AegisFeatureVector(
         numeric=numeric,
