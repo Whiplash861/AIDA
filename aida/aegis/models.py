@@ -37,6 +37,7 @@ class ProcessEntity:
     name: str
     executable: str
     command_line: str = ""
+    create_time: float | None = None
     remote_endpoints: tuple[str, ...] = ()
     listening_endpoints: tuple[str, ...] = ()
 
