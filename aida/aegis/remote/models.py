@@ -94,12 +94,7 @@ class RemoteSupportAuthorization:
         return self.revoked_at is None and self.starts_at <= now < self.expires_at
 
     def to_record(self) -> dict[str, Any]:
-        data = asdict(self)
-        for key in ("starts_at", "expires_at", "created_at", "revoked_at"):
-            value = data.get(key)
-            if isinstance(value, datetime):
-                data[key] = value.astimezone(timezone.utc).isoformat()
-        return data
+        return _json_safe(asdict(self))
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +143,17 @@ class RemoteIntrusionAssessment:
 
     def to_record(self) -> dict[str, Any]:
         data = asdict(self)
-        data["created_at"] = self.created_at.astimezone(timezone.utc).isoformat()
         data["classification"] = self.classification.value
-        return data
+        return _json_safe(data)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
