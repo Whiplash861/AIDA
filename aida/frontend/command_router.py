@@ -22,6 +22,12 @@ class CommandType(Enum):
     SECURITY_FULL_SWEEP = auto()
     SECURITY_CANCEL_REQUEST = auto()
     SECURITY_CANCEL_CONFIRM = auto()
+    SECURITY_REMOTE_INTRUSION_CHECK = auto()
+    SECURITY_REMOTE_SUPPORT_AUTHORIZE = auto()
+    SECURITY_REMOTE_SUPPORT_LIST = auto()
+    SECURITY_REMOTE_SUPPORT_REVOKE = auto()
+    SECURITY_REMOTE_ATTACKER_CONFIRM = auto()
+    SENTRY_ATTACK_CONFIRM = auto()
     AUTONOMY_ENABLE = auto()
     AUTONOMY_DISABLE = auto()
     AUTONOMY_STATUS = auto()
@@ -80,6 +86,9 @@ class CommandRouter:
         {
             CommandType.SECURITY_CANCEL_REQUEST,
             CommandType.SECURITY_CANCEL_CONFIRM,
+            CommandType.SECURITY_REMOTE_INTRUSION_CHECK,
+            CommandType.SECURITY_REMOTE_ATTACKER_CONFIRM,
+            CommandType.SENTRY_ATTACK_CONFIRM,
             CommandType.THREAT_REMEDIATE_CONFIRM,
             CommandType.AUTONOMY_DISABLE,
             CommandType.AUTONOMY_STATUS,
