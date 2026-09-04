@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
+import psutil
+
 from aida.aegis.baseline import compare_snapshots
 from aida.aegis.learning.features import extract_feature_vector
 from aida.aegis.learning.service import AegisLearningService
@@ -12,7 +14,7 @@ from aida.aegis.remote.models import (
 )
 from aida.aegis.remote.store import RemoteSecurityStore
 from aida.aegis.remote.support import RemoteSupportService
-from aida.aegis.remote.tooling import identify_remote_tools
+from aida.aegis.remote.tooling import identify_remote_tools, remote_tool_name_hint
 from aida.aegis.remote.windows_sessions import (
     enumerate_remote_desktop_sessions,
     read_recent_remote_logons,
@@ -50,6 +52,26 @@ class AegisRemoteIntrusionService:
         self.snapshot_reader = snapshot_reader
         self.detection_reader = detection_reader
         self.learning = learning
+
+    def activity_hint(self) -> bool:
+        """Cheap background trigger before running the full remote assessment.
+
+        Active RDP sessions are a strong hint. Known support-tool process
+        presence is only a hint because many legitimate products keep a service
+        resident even when no technician is connected.
+        """
+
+        sessions, _errors = enumerate_remote_desktop_sessions()
+        if any(session.is_active for session in sessions):
+            return True
+        try:
+            for process in psutil.process_iter(["name"]):
+                name = str(process.info.get("name") or "")
+                if remote_tool_name_hint(name):
+                    return True
+        except (psutil.Error, OSError):
+            return False
+        return False
 
     def inspect(
         self,
