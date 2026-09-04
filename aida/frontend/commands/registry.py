@@ -33,6 +33,10 @@ from aida.frontend.commands.base import CommandExecutor
 from aida.frontend.commands.memory import MemoryCommandExecutor, MemoryOperation
 from aida.frontend.commands.performance import PerformanceScanExecutor
 from aida.frontend.commands.quickscan import QuickscanExecutor
+from aida.frontend.commands.remote_security import (
+    AegisRemoteSecurityExecutor,
+    RemoteSecurityOperation,
+)
 from aida.frontend.commands.security import SecurityScanExecutor
 from aida.frontend.commands.security_control import (
     SecurityControlExecutor,
@@ -157,6 +161,24 @@ class CommandRegistry:
             ),
             CommandType.SECURITY_CANCEL_CONFIRM: lambda command: self._security_control(
                 SecurityControlOperation.CANCEL_CONFIRM, command
+            ),
+            CommandType.SECURITY_REMOTE_INTRUSION_CHECK: lambda command: self._remote_security(
+                RemoteSecurityOperation.INSPECT, command
+            ),
+            CommandType.SECURITY_REMOTE_SUPPORT_AUTHORIZE: lambda command: self._remote_security(
+                RemoteSecurityOperation.AUTHORIZE_SUPPORT, command
+            ),
+            CommandType.SECURITY_REMOTE_SUPPORT_LIST: lambda command: self._remote_security(
+                RemoteSecurityOperation.LIST_SUPPORT, command
+            ),
+            CommandType.SECURITY_REMOTE_SUPPORT_REVOKE: lambda command: self._remote_security(
+                RemoteSecurityOperation.REVOKE_SUPPORT, command
+            ),
+            CommandType.SECURITY_REMOTE_ATTACKER_CONFIRM: lambda command: self._remote_security(
+                RemoteSecurityOperation.CONFIRM_ATTACKER, command
+            ),
+            CommandType.SENTRY_ATTACK_CONFIRM: lambda command: self._remote_security(
+                RemoteSecurityOperation.CONFIRM_SENTRY, command
             ),
             CommandType.STAND_DOWN_REQUEST: lambda command: self._security_control(
                 SecurityControlOperation.STAND_DOWN_REQUEST, command
@@ -305,6 +327,19 @@ class CommandRegistry:
             self.aegis,
             strategy,
             lambda: self._security_scan(strategy.provider_mode, command),
+        )
+
+    def _remote_security(
+        self,
+        operation: RemoteSecurityOperation,
+        command: RoutedCommand,
+    ) -> AegisRemoteSecurityExecutor:
+        return AegisRemoteSecurityExecutor(
+            self.aegis,
+            operation,
+            confirmations=self.confirmations,
+            slots=command.slots,
+            original_text=command.original_text,
         )
 
     def _security_scan(
