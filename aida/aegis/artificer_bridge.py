@@ -13,7 +13,7 @@ class AegisArtificerBridge:
     automatically included in Codewright reviews. This bridge adds runtime
     reliability, performance, and engineering-pattern evidence without exposing
     file paths, hashes, network endpoints, command lines, model feature tokens,
-    or Security Case contents.
+    support-vendor labels, or Security Case contents.
     """
 
     def publish(
@@ -67,6 +67,17 @@ def _safe_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "engineering_manifest_version",
         "shadow_supported",
         "rollback_supported",
+        "remote_classification",
+        "remote_likelihood_band",
+        "remote_confidence_band",
+        "remote_urgency_band",
+        "remote_active_session_count",
+        "remote_tool_count",
+        "support_context_present",
+        "remote_monitor_degraded",
+        "sentry_plan_state",
+        "sentry_session_target_count",
+        "sentry_process_target_count",
     }
     output: dict[str, Any] = {}
     for key, value in metadata.items():
