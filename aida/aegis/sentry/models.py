@@ -34,6 +34,7 @@ class SentrySessionTarget:
 @dataclass(frozen=True, slots=True)
 class SentryProcessTarget:
     pid: int
+    parent_pid: int | None
     name: str
     executable: str
     create_time: float | None
