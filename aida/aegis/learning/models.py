@@ -5,7 +5,10 @@ from enum import StrEnum
 from typing import Any
 
 
-AEGIS_FEATURE_SCHEMA_VERSION = 1
+# Schema 2 adds remote-control process and sensitive-child relationship features.
+# Incompatible persisted models are rejected by the model store and rebuilt rather
+# than silently reinterpreting statistics trained under a different feature set.
+AEGIS_FEATURE_SCHEMA_VERSION = 2
 
 
 class LearningModelStage(StrEnum):
