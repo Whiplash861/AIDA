@@ -8,7 +8,12 @@ from aida.aegis.engine import AegisEngine
 from aida.aegis.learning.service import AegisLearningService
 from aida.aegis.learning.store import AegisLearningStore
 from aida.aegis.models import ProviderHealth
+from aida.aegis.remote.monitor import RemoteIntrusionMonitor
+from aida.aegis.remote.service import AegisRemoteIntrusionService
+from aida.aegis.remote.store import RemoteSecurityStore
+from aida.aegis.remote.support import RemoteSupportService
 from aida.aegis.sensors import AegisSystemSensor
+from aida.aegis.sentry.protocol import SentryAttackService
 from aida.aegis.store import AegisStore
 from aida.config import AidaConfig
 from aida.memory.service import MemoryService
@@ -44,14 +49,47 @@ def build_aegis_engine(
             minimum=3,
         ),
     )
-    return AegisEngine(
-        store=AegisStore(data_root / "aegis.db"),
+    aegis_store = AegisStore(data_root / "aegis.db")
+    bridge = AegisArtificerBridge()
+    remote_store = RemoteSecurityStore(data_root / "remote-security.db")
+    support = RemoteSupportService(remote_store)
+    remote_intrusion = AegisRemoteIntrusionService(
+        store=remote_store,
+        aegis_store=aegis_store,
+        support=support,
+        snapshot_reader=sensor.capture,
+        detection_reader=unresolved_reader,
+        learning=learning,
+    )
+    sentry = SentryAttackService(
+        store=remote_store,
+        snapshot_reader=sensor.capture,
+    )
+    remote_monitor = RemoteIntrusionMonitor(
+        service=remote_intrusion,
+        memory=memory,
+        bridge=bridge,
+        interval_seconds=_env_int(
+            "AIDA_AEGIS_REMOTE_MONITOR_INTERVAL_SECONDS",
+            30,
+            minimum=10,
+        ),
+        initial_delay_seconds=_env_float(
+            "AIDA_AEGIS_REMOTE_MONITOR_INITIAL_DELAY_SECONDS",
+            8.0,
+            minimum=0.0,
+        ),
+        enabled=_env_bool("AIDA_AEGIS_REMOTE_MONITOR_ENABLED", True),
+    )
+
+    engine = AegisEngine(
+        store=aegis_store,
         memory=memory,
         threat_analysis=threat_analysis,
         detection_reader=unresolved_reader,
         sensor=sensor,
         learning=learning,
-        bridge=AegisArtificerBridge(),
+        bridge=bridge,
         observation_interval_seconds=_env_int(
             "AIDA_AEGIS_OBSERVATION_INTERVAL_SECONDS",
             900,
@@ -64,6 +102,13 @@ def build_aegis_engine(
         ),
         enabled=_env_bool("AIDA_AEGIS_ENABLED", True),
     )
+    # Aegis owns these security capabilities. They are attached to the engine
+    # runtime without adding a frontend surface or changing Artificer internals.
+    engine.remote_support = support
+    engine.remote_intrusion = remote_intrusion
+    engine.sentry = sentry
+    engine.remote_monitor = remote_monitor
+    return engine
 
 
 def _aegis_data_root(config: AidaConfig, memory: MemoryService) -> Path:
