@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ from aida.autonomy.controller import AutonomyController
 from aida.autonomy.models import AutonomyLevel
 from aida.brain.llm_client import AIDABrain
 from aida.config import get_config
+from aida.logging_utils import setup_logging
 from aida.frontend.artificer_bridge import ArtificerQtBridge
 from aida.frontend.artificer_dialog import ArtificerCenterDialog
 from aida.frontend.bug_report_dialog import BugReportDialog
@@ -36,6 +38,9 @@ from aida.frontend.threat_center_dialog import ThreatCenterDialog
 from aida.frontend.window import AIDAWindow
 from aida.memory.database import MemoryDatabase
 from aida.memory.models import ProcessOutcome
+from aida.memory.models import MemorySensitivity
+from aida.memory.privacy import sanitize_text
+from aida.engines.observation_runtime import ObservationRuntime
 from aida.memory.service import MemoryService
 from aida.navigation.service import EvidenceNavigationService
 from aida.security.continuity import SecurityTaskLedger
@@ -83,6 +88,7 @@ def main() -> int:
     apply_theme(app)
 
     config = get_config()
+    setup_logging(config)
     artificer_engine = build_artificer_engine(config)
     set_active_artificer(artificer_engine)
     operational_bridge = ArtificerOperationalBridge(artificer_engine)
@@ -115,7 +121,7 @@ def main() -> int:
         discovery = WindowsAntivirusDiscovery().discover()
         getter = getattr(discovery.provider, "get_detection_snapshot", None)
         if not callable(getter):
-            return ()
+            raise RuntimeError("The active provider does not expose detection evidence")
         return tuple(getter() or ())
 
     remediation_service = DefenderRemediationService(
@@ -168,6 +174,7 @@ def main() -> int:
     task_center_dialog = TaskCenterDialog(
         assistance_task_store,
         parent=window,
+        confirmations=confirmation_service,
     )
     artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window)
     artificer_qt_bridge = ArtificerQtBridge(artificer_engine, parent=app)
@@ -229,7 +236,8 @@ def main() -> int:
         sync_overlay_task_count()
 
     def handle_overlay_task_finished(task_name: str) -> None:
-        overlay.report_task_finished(task_name)
+        if not task_manager.failed(task_name):
+            overlay.report_task_finished(task_name)
         sync_overlay_task_count()
 
     def handle_overlay_task_failed(task_name: str, error_message: str) -> None:
@@ -241,7 +249,6 @@ def main() -> int:
     task_manager.task_finished.connect(handle_overlay_task_finished)
     task_manager.task_failed.connect(handle_overlay_task_failed)
 
-    artificer_engine.start(run_startup_review=False)
     artificer_qt_bridge.emit_current()
 
     def activate_main_window() -> None:
@@ -296,11 +303,18 @@ def main() -> int:
     window.task_center_requested.connect(show_task_center)
     window.artificer_requested.connect(show_artificer_center)
 
-    session_store = SessionStore()
+    session_store = SessionStore(Path(config.log_dir) / "sessions")
     history = ChatHistory(message_saver=session_store.save_message)
     command_router = CommandRouter()
     status_manager = StatusManager(initial_status=AIDAStatus.STARTUP)
-    brain = AIDABrain()
+    def cloud_memory(query: str) -> list[str]:
+        if os.getenv("AIDA_CLOUD_MEMORY_ENABLED", "").strip().lower() != "true":
+            return []
+        return [sanitize_text(f"Historical memory {item.memory_id}: {item.summary}")
+                for item in memory_service.retrieve_context(query, limit=8)
+                if item.sensitivity in {MemorySensitivity.SHAREABLE, MemorySensitivity.REDACTED}][:5]
+
+    brain = AIDABrain(memory_retriever=cloud_memory)
 
     command_registry = CommandRegistry(
         config=config,
@@ -324,6 +338,12 @@ def main() -> int:
         status_manager=status_manager,
         memory_service=memory_service,
     )
+    observation_runtime = ObservationRuntime(lambda: command_registry.aegis)
+    autonomy_controller.subscribe(observation_runtime.apply)
+    engine_lifecycle_timer = QTimer(app)
+    engine_lifecycle_timer.setInterval(1000)
+    engine_lifecycle_timer.timeout.connect(observation_runtime.reconcile)
+    engine_lifecycle_timer.start()
 
     def frontend_speaker(text: str) -> None:
         aida_say_text(text, config)
@@ -362,22 +382,33 @@ def main() -> int:
 
     window.message_displayed.connect(handle_message_displayed)
 
+    pending_recovery = [False]
+    recovery_closed = [False]
+
     def resume_provider_owned_scan() -> None:
+        if recovery_closed[0]:
+            return
         reconciler = SecurityStartupReconciler(
             task_ledger,
             cancellation_service,
         )
-        try:
-            candidate = reconciler.reconcile()
-        except (OSError, RuntimeError) as exc:
-            history.add_system(
-                "Security continuity check could not read the current "
-                f"Defender scan state: {exc}",
+        task_manager.run_task(
+            "SECURITY_RECOVERY_CHECK", reconciler.reconcile,
+            on_result=attach_recovered_scan,
+            on_error=lambda _error: history.add_system(
+                "Security continuity is temporarily unavailable. Existing provider operations were not restarted.",
                 include_in_context=False,
-            )
-            return
+            ),
+        )
+
+    def attach_recovered_scan(candidate) -> None:
         if candidate is None:
             return
+        if command_manager.is_running:
+            pending_recovery[0] = True
+            history.add_system("An existing provider scan was found. Monitoring can resume when the current task finishes.", include_in_context=False)
+            return
+        pending_recovery[0] = False
 
         command_type = (
             CommandType.SECURITY_FULL_SWEEP
@@ -441,6 +472,15 @@ def main() -> int:
             )
         )
 
+    def retry_recovery_when_idle(_task_name: str) -> None:
+        def retry() -> None:
+            if pending_recovery[0] and not command_manager.is_running and not recovery_closed[0]:
+                pending_recovery[0] = False
+                resume_provider_owned_scan()
+        QTimer.singleShot(0, retry)
+
+    command_manager.command_finished.connect(retry_recovery_when_idle)
+
     observation_timer = QTimer(app)
     observation_timer.setInterval(_OBSERVATION_INTERVAL_MS)
 
@@ -488,8 +528,16 @@ def main() -> int:
         QTimer.singleShot(2500, run_observation_if_idle)
 
     try:
+        artificer_engine.start(run_startup_review=False)
+        task_manager.run_task("engine_initialization", lambda: observation_runtime.apply(autonomy_controller.settings))
         return app.exec()
     finally:
+        recovery_closed[0] = True
+        command_manager.command_finished.disconnect(retry_recovery_when_idle)
+        engine_lifecycle_timer.stop()
+        engine_lifecycle_timer.timeout.disconnect(observation_runtime.reconcile)
+        autonomy_controller.unsubscribe(observation_runtime.apply)
+        observation_runtime.close()
         observation_timer.stop()
         observation_timer.timeout.disconnect(run_observation_if_idle)
         window.autonomy_toggled.disconnect(handle_autonomy_observation_schedule)
@@ -534,6 +582,11 @@ def main() -> int:
         memory_dialog.close()
         overlay.close()
         controller.shutdown()
+        brain.close()
+        confirmation_service.invalidate_all()
+        if command_registry._aegis is not None:
+            command_registry._aegis.stop()
+            command_registry._aegis.remote_monitor.stop()
         artificer_qt_bridge.close()
         artificer_engine.stop()
         set_active_artificer(None)

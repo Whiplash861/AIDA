@@ -41,6 +41,13 @@ class ApplicationRepairPlanner:
         lowered = name.lower()
         action = requested_action or _default_action(assessment)
 
+        if action is RepairAction.OBSERVE:
+            return RepairPlan(application_name=name, action=action,
+                summary="Gather another read-only health observation and compare with symptoms.",
+                impact="No application change is performed.", requires_confirmation=False,
+                requires_elevation=False, destructive=False, supported=True,
+                steps=("Repeat application health inspection after the reported symptom.",))
+
         if action is RepairAction.GRACEFUL_RESTART:
             return RepairPlan(
                 application_name=name,
@@ -49,8 +56,9 @@ class ApplicationRepairPlanner:
                 impact="Unsaved work may be lost if the application cannot save before closing.",
                 requires_confirmation=True,
                 requires_elevation=False,
-                destructive=False,
-                supported=True,
+                destructive=True,
+                supported=False,
+                reason_unavailable="A reviewed application-specific executor is not registered; these are manual guidance steps.",
                 steps=(
                     "Ask the application to close normally.",
                     "Wait for its processes to exit.",
@@ -99,8 +107,9 @@ class ApplicationRepairPlanner:
                 ),
                 requires_confirmation=True,
                 requires_elevation=True,
-                destructive=False,
-                supported=True,
+                destructive=True,
+                supported=False,
+                reason_unavailable="A reviewed application-specific executor is not registered; these are manual guidance steps.",
                 steps=(
                     "Close Microsoft 365 applications.",
                     "Open the registered Microsoft 365 maintenance workflow.",

@@ -79,6 +79,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
         self.tasks = tasks
         self.memory = memory
         self.confirmations = confirmations
+        self.tasks.bind_confirmations(confirmations)
         self.remediation = remediation
         self.stand_down = stand_down
         self.detection_reader = detection_reader
@@ -294,15 +295,10 @@ class ThreatAssistanceExecutor(CommandExecutor):
 
     def _response_plan(self) -> CommandResult:
         target = self._required_target()
-        analysis = self.analysis.latest_for_path(target)
-        if analysis is None:
-            detection = _detection_for_path(self.detection_reader(), target)
-            analysis = self.analysis.analyze(
-                target,
-                detection=detection,
-                source="response_plan",
-            )
-        stand_down = self.stand_down.find_active(target)
+        detection = _detection_for_path(self.detection_reader(), target)
+        analysis = self.analysis.analyze(target, detection=detection, source="response_plan")
+        evaluation = self.stand_down.evaluate(target)
+        stand_down = evaluation.record if evaluation.suppress_aida_recommendation else None
         plan = self.planner.build(analysis, stand_down=stand_down)
         task = self.tasks.create(
             kind=AssistanceTaskKind.RESPONSE_PLAN,
@@ -434,6 +430,9 @@ class ThreatAssistanceExecutor(CommandExecutor):
             active_threat_count=int(scope["active_threat_count"]),
         )
         task_id = str(scope["task_id"])
+        task = self.tasks.get(task_id)
+        if task is None or task.state is not AssistanceTaskState.AWAITING_AUTHORIZATION:
+            raise RuntimeError("The prepared remediation task is no longer awaiting authorization. Prepare a new request.")
         self.memory.record_authorization(
             action_id=_REMEDIATION_ACTION,
             scope=scope,
@@ -446,12 +445,14 @@ class ThreatAssistanceExecutor(CommandExecutor):
             AssistanceTaskState.RUNNING,
             progress_detail="Revalidating the sole-active-threat guard and requesting Windows elevation.",
         )
-        result = self.remediation.execute(candidate)
-        self.tasks.transition(
-            task_id,
-            AssistanceTaskState.VERIFYING,
-            progress_detail="Verifying the Defender provider state after remediation.",
-        )
+        try:
+            result = self.remediation.execute(candidate,
+                cancel_check=lambda: self.tasks.cancellation_requested(task_id))
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.tasks.transition(task_id,
+                AssistanceTaskState.CANCELLED if self.tasks.cancellation_requested(task_id) else AssistanceTaskState.FAILED,
+                error_detail=str(exc))
+            raise
         final_state = (
             AssistanceTaskState.COMPLETED
             if result.provider_verified

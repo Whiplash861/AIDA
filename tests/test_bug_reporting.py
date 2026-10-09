@@ -165,3 +165,20 @@ def test_eml_handoff_is_unconfigured_for_invalid_destination(tmp_path: Path) -> 
     )
 
     assert transport.configured is False
+
+
+def test_outbox_concurrent_failures_do_not_lose_attempt_counts(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from aida.support.models import BugReport
+    report = BugReport(title="Example", category=BugCategory.FRONTEND,
+                       severity=BugSeverity.MEDIUM, description="Report evidence",
+                       expected_behavior="", reproduction_steps="", reporter_contact="")
+    left = BugReportOutbox(tmp_path / "outbox")
+    right = BugReportOutbox(tmp_path / "outbox")
+    target = left.queue(report)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda outbox: outbox.mark_failed(report, "Test failure"), [left, right] * 3))
+    assert json.loads(target.read_text())["attempt_count"] == 6
+    ready = left.mark_draft_ready(report, tmp_path / "draft.eml")
+    assert right.mark_failed(report, "Late failure") == ready
+    assert not target.exists()

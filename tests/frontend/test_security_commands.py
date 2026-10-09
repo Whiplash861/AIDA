@@ -127,6 +127,7 @@ def test_surface_scan_polls_until_provider_completion() -> None:
         authorization_reason="Run a surface-level security scan",
         discovery_function=lambda: discovery(provider),
         sleep_function=lambda seconds: None,
+        user_authorized=True,
     ).execute()
 
     assert "complete" in result.transcript_text.lower()
@@ -142,6 +143,7 @@ def test_deep_scan_requires_explicit_path() -> None:
         authorization_reason="Deep scan",
         target_path=None,
         discovery_function=lambda: discovery(provider),
+        user_authorized=True,
     ).execute()
 
     assert "not started" in result.transcript_text.lower()
@@ -158,6 +160,7 @@ def test_deep_scan_passes_accessible_target_to_provider() -> None:
         discovery_function=lambda: discovery(provider),
         path_exists=lambda path: True,
         sleep_function=lambda seconds: None,
+        user_authorized=True,
     ).execute()
 
     assert "complete" in result.transcript_text.lower()
@@ -183,6 +186,7 @@ def test_detection_details_are_rendered_for_local_transcript() -> None:
         authorization_reason="Surface scan",
         discovery_function=lambda: discovery(provider),
         sleep_function=lambda seconds: None,
+        user_authorized=True,
     ).execute()
 
     assert (
@@ -200,6 +204,7 @@ def test_inactive_provider_does_not_start_scan() -> None:
         mode=SecurityScanMode.SURFACE,
         authorization_reason="Surface scan",
         discovery_function=lambda: discovery(provider),
+        user_authorized=True,
     ).execute()
 
     assert "not started" in result.transcript_text.lower()

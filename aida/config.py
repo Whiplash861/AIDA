@@ -45,7 +45,7 @@ class AidaConfig:
     artificer_auto_maintenance_enabled: bool = False
 
 
-def get_config() -> AidaConfig:
+def get_config(*, create_directories: bool = True) -> AidaConfig:
     """Build and return AIDA's configuration."""
 
     base_dir = os.path.abspath(
@@ -53,16 +53,14 @@ def get_config() -> AidaConfig:
     )
     assets_dir = os.path.join(base_dir, "assets")
     sounds_dir = os.path.join(assets_dir, "sounds")
-    log_dir = os.path.join(base_dir, "logs")
-    os.makedirs(log_dir, exist_ok=True)
-
     user_data_root = _user_data_root()
+    log_dir = str(user_data_root / "logs")
     memory_dir = user_data_root / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
     support_dir = user_data_root / "support"
-    support_dir.mkdir(parents=True, exist_ok=True)
     artificer_dir = user_data_root / "artificer"
-    artificer_dir.mkdir(parents=True, exist_ok=True)
+    if create_directories:
+        for directory in (Path(log_dir), memory_dir, support_dir, artificer_dir):
+            directory.mkdir(parents=True, exist_ok=True)
 
     elevenlabs_api_key = os.getenv(
         "ELEVENLABS_API_KEY"
@@ -155,6 +153,9 @@ def _env_int(name: str, default: int, *, minimum: int) -> int:
 
 
 def _user_data_root() -> Path:
+    configured = os.getenv("AIDA_DATA_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
     local_app_data = os.getenv("LOCALAPPDATA")
     if local_app_data:
         return Path(local_app_data) / "AIDA"

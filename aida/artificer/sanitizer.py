@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from aida.memory.privacy import sanitize_payload, sanitize_text
 
 _SECRET_KEYS = {
     "password",
@@ -20,7 +21,7 @@ _SECRET_KEYS = {
     "credential",
 }
 
-_PATH_PATTERN = re.compile(r"(?i)(?:[a-z]:\\|/home/|/users/)[^\s\"']+")
+_PATH_PATTERN = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\|/home/|/users/|/Users/)[^\s\"']+")
 _EMAIL_PATTERN = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _IPV4_PATTERN = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
@@ -35,7 +36,7 @@ class PayloadSanitizer:
         self.include_ip_addresses = include_ip_addresses
 
     def sanitize(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        sanitized = self._sanitize_value(dict(payload), key_path=())
+        sanitized = self._sanitize_value(sanitize_payload(dict(payload)), key_path=())
         if not isinstance(sanitized, dict):
             raise SanitizationError("Sanitized payload did not remain an object")
         self.assert_safe(sanitized)
@@ -64,7 +65,7 @@ class PayloadSanitizer:
         return self._sanitize_text(str(value))
 
     def _sanitize_text(self, text: str) -> str:
-        output = _BEARER_PATTERN.sub("Bearer <REDACTED_TOKEN>", text)
+        output = _BEARER_PATTERN.sub("Bearer <REDACTED_TOKEN>", sanitize_text(text))
         output = _EMAIL_PATTERN.sub("<REDACTED_EMAIL>", output)
         output = _PATH_PATTERN.sub(self._path_replacement, output)
         if not self.include_ip_addresses:
@@ -85,7 +86,7 @@ class PayloadSanitizer:
         def inspect(value: Any) -> None:
             if isinstance(value, Mapping):
                 for key, child in value.items():
-                    if str(key).lower() in _SECRET_KEYS and child != "<REDACTED_SECRET>":
+                    if str(key).lower() in _SECRET_KEYS and child not in ("<REDACTED_SECRET>", "[REDACTED]"):
                         raise SanitizationError(f"Protected field remained: {key}")
                     inspect(child)
             elif isinstance(value, list):

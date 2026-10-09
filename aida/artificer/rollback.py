@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import tempfile
+import os
 from pathlib import Path
 
 
@@ -22,6 +24,11 @@ class RollbackManager:
     def restore(self, backup: str | Path, target: str | Path) -> None:
         backup_path = Path(backup)
         target_path = Path(target)
-        temporary = target_path.with_suffix(target_path.suffix + ".rollback.tmp")
-        shutil.copy2(backup_path, temporary)
-        temporary.replace(target_path)
+        descriptor, name = tempfile.mkstemp(prefix=target_path.name + ".rollback.", dir=target_path.parent)
+        os.close(descriptor)
+        temporary = Path(name)
+        try:
+            shutil.copy2(backup_path, temporary)
+            temporary.replace(target_path)
+        finally:
+            temporary.unlink(missing_ok=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from aida.intent.models import (
     IntentCandidate,
@@ -39,7 +40,11 @@ class IntentResolver:
         context: IntentContext | None = None,
     ) -> IntentResolution:
         source_text = text.strip()
-        normalized = normalize_input(source_text)
+        # Attached content and quoted values are evidence/arguments, never a
+        # source of command verbs. Keep the original text for slot extraction.
+        source_text = source_text.split("\n\nAttached perception evidence:", 1)[0]
+        directive = _instruction_text(source_text)
+        normalized = normalize_input(directive)
         if not normalized:
             return IntentResolution(resolved=None)
 
@@ -52,6 +57,7 @@ class IntentResolver:
         candidates.sort(
             key=lambda item: (
                 item.score,
+                _matched_alias_length(item, normalized),
                 item.definition.priority,
                 -len(item.missing_slots),
             ),
@@ -59,6 +65,18 @@ class IntentResolver:
         )
         if not candidates:
             return IntentResolution(resolved=None)
+
+        if _non_executing_language(directive):
+            return IntentResolution(
+                resolved=None,
+                candidates=tuple(candidates[:3]),
+                clarification="No operation was started. State a direct request when you want AIDA to act.",
+            )
+        if re.search(r"(?:\band(?:\s+then)?\b|\bthen\b|;)\s+(?:run|start|enable|disable|delete|remove|terminate|scan|cancel)\b", directive, re.I):
+            return IntentResolution(
+                resolved=None, candidates=tuple(candidates[:3]),
+                clarification="Please give one operation at a time so its target and permission are clear.",
+            )
 
         best = candidates[0]
         if (
@@ -97,6 +115,7 @@ class IntentResolver:
             not _has_exact_phrase_match(best)
             and margin < self.ambiguity_margin
             and runner_up >= best.definition.clarification_threshold
+            and _matched_alias_length(best, normalized) <= _matched_alias_length(candidates[1], normalized)
         ):
             return IntentResolution(
                 resolved=None,
@@ -206,10 +225,10 @@ class IntentResolver:
                 score -= 0.10
 
         if (
-            definition.intent_id == "security.scan.surface"
-            and _is_unqualified_security_scan(normalized)
+            definition.intent_id == ("security.scan.intelligent" if self.registry.get("security.scan.intelligent") else "security.scan.surface")
+            and (_is_unqualified_security_request(normalized) if self.registry.get("security.scan.intelligent") else _is_unqualified_security_scan(normalized))
         ):
-            score = max(score, 0.92)
+            score = max(score, 0.94)
             reasons.append(
                 "explicit malware, antivirus, or security scan defaults "
                 "to Surface Security Scan"
@@ -223,6 +242,10 @@ class IntentResolver:
         if negatives:
             score -= min(0.55, 0.22 * len(negatives))
             reasons.append(f"conflicting concept: {negatives[0]}")
+
+        if definition.intent_id == "security.scan.intelligent" and re.search(r"\b(?:deep|surface|full|exhaustive)\b", normalized):
+            score -= 0.45
+            reasons.append("an explicit scan depth takes precedence over the adaptive default")
 
         domain = definition.intent_id.split(".", 1)[0]
         if context.current_domain == domain:
@@ -259,6 +282,27 @@ def _has_exact_phrase_match(candidate: IntentCandidate) -> bool:
         reason.startswith("exact phrase match:")
         for reason in candidate.reasons
     )
+
+
+def _instruction_text(text: str) -> str:
+    # Memory payloads cannot outvote the user's request to store a note.
+    match = re.match(r"\s*((?:please\s+)?(?:remember(?:\s+that)?|add memory|save memory|revise memory|search memor(?:y|ies) for))\b", text, re.I)
+    if match:
+        return match.group(1)
+    text = re.sub(r'''(?<!\w)(["'])(.*?)\1''', " ", text)
+    return re.sub(r"[a-zA-Z]:\\[^\r\n]*", " ", text)
+
+
+def _non_executing_language(text: str) -> bool:
+    normalized = text.strip().lower().replace("â€™", "'")
+    if re.match(r"(?:please\s+)?(?:remember\b|add memory\b|save memory\b|revise memory\b)", normalized):
+        return False
+    return bool(re.search(
+        r"\b(?:do not|don't|never|must not|should not|shouldn't|without|avoid)\b"
+        r"|^(?:please\s+)?(?:explain|describe|what happens|what would|what if|how (?:do|does|can|would|to)|why|should i|is it safe)\b"
+        r"|^(?:can|could|would) you (?:explain|describe|tell me)\b",
+        normalized,
+    ))
 
 
 def _has_clarification_anchor(candidate: IntentCandidate) -> bool:
@@ -346,3 +390,56 @@ def _needs_scan_type_clarification(normalized: str) -> bool:
         "terminate",
     )
     return not any(contains_phrase(normalized, term) for term in explicit)
+
+
+def _is_unqualified_security_request(normalized: str) -> bool:
+    security_phrases = (
+        "malware scan",
+        "virus scan",
+        "antivirus scan",
+        "anti virus scan",
+        "security scan",
+        "defender scan",
+        "check for malware",
+        "check for viruses",
+        "check for threats",
+        "computer for malware",
+        "pc for malware",
+        "computer for viruses",
+        "pc for viruses",
+    )
+    if not any(
+        contains_phrase(normalized, phrase)
+        for phrase in security_phrases
+    ):
+        return False
+
+    explicit_modes = (
+        "surface",
+        "low level",
+        "light security",
+        "basic malware",
+        "quick malware",
+        "quick security",
+        "deep",
+        "deeply",
+        "targeted",
+        "specific file",
+        "specific folder",
+        "specific path",
+        "full",
+        "full system",
+        "comprehensive",
+        "complete system",
+        "entire computer",
+        "whole machine",
+        "all drives",
+    )
+    return not any(
+        contains_phrase(normalized, term) for term in explicit_modes
+    )
+
+
+def _matched_alias_length(candidate: IntentCandidate, normalized: str) -> int:
+    return max((len(normalize_input(alias)) for alias in candidate.definition.aliases
+                if contains_phrase(normalized, alias)), default=0)

@@ -13,6 +13,9 @@ def main() -> None:
         host=host,
         port=port,
         reload=False,
+        limit_concurrency=32,
+        timeout_keep_alive=5,
+        timeout_graceful_shutdown=35,
     )
 
 

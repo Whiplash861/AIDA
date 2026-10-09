@@ -122,8 +122,15 @@ class SecurityObservationExecutor(CommandExecutor):
 
         snapshot = self._reconciler.snapshot(detections)
         reconciliation = self._reconciler.reconcile(snapshot, snapshot)
+        suppressed = []
+        for assessment in reconciliation.assessments:
+            path = assessment.detection.file_path
+            if path is not None:
+                evaluation = self.stand_down.evaluate_detection(assessment.detection)
+                if evaluation.suppress_aida_recommendation:
+                    suppressed.append(assessment.detection.detection_id)
         analysis_summaries, analysis_notes = self._analyze_unresolved(
-            reconciliation.assessments
+            tuple(item for item in reconciliation.assessments if item.detection.detection_id not in suppressed)
         )
         active_scan_description = (
             f"{active_scan.mode.value} scan {active_scan.scan_id}"
@@ -140,6 +147,8 @@ class SecurityObservationExecutor(CommandExecutor):
             detections=reconciliation.assessments,
             active_stand_down_count=len(stand_down_records),
             threat_analysis_summaries=analysis_summaries,
+            suppressed_detection_ids=tuple(suppressed),
+            detections_available=not bool(detection_note),
         )
         outcome = self.observation_service.evaluate(observation)
         report_text = "\n\n".join(
@@ -256,6 +265,7 @@ class SecurityObservationExecutor(CommandExecutor):
                     path,
                     detection=detection,
                     source="observation",
+                    cancel_check=(lambda: self.assistance_tasks.cancellation_requested(task.task_id)) if task is not None else None,
                 )
                 stand_down = self.stand_down.find_active(path)
                 plan = (
@@ -288,7 +298,7 @@ class SecurityObservationExecutor(CommandExecutor):
                 if task is not None:
                     self.assistance_tasks.transition(
                         task.task_id,
-                        AssistanceTaskState.FAILED,
+                        AssistanceTaskState.CANCELLED if self.assistance_tasks.cancellation_requested(task.task_id) else AssistanceTaskState.FAILED,
                         error_detail=f"{type(exc).__name__}: {exc}",
                     )
         return tuple(summaries), tuple(notes)

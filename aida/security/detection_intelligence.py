@@ -265,6 +265,15 @@ def _parse_time(value: object) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
+    # Windows PowerShell 5 serializes DateTime using the legacy JSON date form.
+    if text.startswith("/Date(") and text.endswith(")/"):
+        import re
+        match = re.fullmatch(r"/Date\((-?\d+)(?:[+-]\d{4})?\)/", text)
+        if match:
+            try:
+                return datetime.fromtimestamp(int(match.group(1)) / 1000, tz=timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                return None
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:

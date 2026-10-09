@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -327,7 +329,7 @@ def _classify(
         (("adware", "pua", "potentially unwanted"), "Unwanted software or browser manipulation", ("Advertisements or redirects may appear", "Browser settings may change", "System performance or privacy may be reduced"), 0.74),
     )
     for keywords, purpose, impacts, confidence in patterns:
-        if any(keyword in lowered for keyword in keywords):
+        if any((re.search(r"\brat\b", lowered) is not None) if keyword == "rat" else keyword in lowered for keyword in keywords):
             return purpose, impacts, confidence
     family = metadata.get("malware_family")
     if family:

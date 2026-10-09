@@ -80,7 +80,8 @@ class ArtificerEngine:
         )
         self.sanitizer = PayloadSanitizer()
         self.watchtower = Watchtower(self.ledger, self.sanitizer)
-        self.event_bus.subscribe(self.watchtower.observe)
+        if self.enabled:
+            self.event_bus.subscribe(self.watchtower.observe)
 
         self.platform_adapter = platform_adapter or detect_platform_adapter()
         self.liaison = Liaison(self.platform_adapter)
@@ -105,7 +106,7 @@ class ArtificerEngine:
             getattr(config, "artificer_consent_path", data_dir / "consent.json")
         )
         configured_level = getattr(config, "artificer_telemetry_level", None)
-        if configured_level:
+        if configured_level and not self.consent.path.exists():
             try:
                 desired_level = TelemetryLevel(str(configured_level))
                 if self.consent.state.telemetry_level != desired_level:
@@ -165,6 +166,7 @@ class ArtificerEngine:
             self._set_status(ArtificerStatus.DISABLED)
             return
 
+        self.event_bus.subscribe(self.watchtower.observe)
         self._platform_profile = self.liaison.capture_profile()
         self.ledger.store_platform_profile(self._platform_profile)
         self.ledger.append_capability_results(
@@ -206,6 +208,7 @@ class ArtificerEngine:
                 ),
             )
         )
+        self.event_bus.unsubscribe(self.watchtower.observe)
         self._set_status(
             ArtificerStatus.READY
             if self.enabled
@@ -257,6 +260,10 @@ class ArtificerEngine:
                 findings = list(source_findings)
                 findings.extend(self._compatibility_findings(profile))
                 findings.extend(self.appraiser.review())
+                self.ledger.resolve_absent_findings(
+                    active_fingerprints=(finding.fingerprint for finding in findings),
+                    fingerprint_prefixes=("capability:", "failures:", "latency:", "routing:"),
+                )
                 stored = [
                     self.ledger.upsert_finding(finding)
                     for finding in findings
@@ -307,11 +314,7 @@ class ArtificerEngine:
             return self.snapshot()
 
     def create_proposal(self, finding_id: str) -> UpgradeProposal:
-        findings = {
-            finding.finding_id: finding
-            for finding in self.ledger.list_findings(status=None)
-        }
-        finding = findings.get(finding_id)
+        finding = self.ledger.get_finding(finding_id)
         if finding is None:
             raise KeyError(finding_id)
         proposal = self.architect.propose(
@@ -358,9 +361,9 @@ class ArtificerEngine:
         self,
         level: TelemetryLevel,
         *,
-        allow_crash_reports: bool = False,
-        allow_compatibility_reports: bool = False,
-        allow_raw_diagnostic_bundles: bool = False,
+        allow_crash_reports: bool | None = None,
+        allow_compatibility_reports: bool | None = None,
+        allow_raw_diagnostic_bundles: bool | None = None,
     ) -> None:
         self.consent.set_level(
             level,
@@ -517,8 +520,8 @@ class ArtificerEngine:
                     category="platform_compatibility",
                     title=f"Capability {status}: {capability}",
                     severity=severity,
-                    confidence=0.99,
-                    evidence_quality=0.95,
+                    confidence=0.6 if status == "unverified" else 0.9,
+                    evidence_quality=0.5 if status == "unverified" else 0.8,
                     affected_components=(
                         capability,
                         self.platform_adapter.name,
@@ -532,7 +535,7 @@ class ArtificerEngine:
                     ),
                     evidence_summary=(
                         f"The {self.platform_adapter.name} adapter reported "
-                        f"{status} during a live capability probe."
+                        f"{status}; this does not establish execution success."
                     ),
                     reasoning_summary=(
                         "AIDA cannot assume a capability works when the active "

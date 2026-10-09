@@ -53,8 +53,10 @@ class AntivirusProvider(ABC):
 
 
 class UnsupportedAntivirusProvider(AntivirusProvider):
-    def __init__(self, display_name: str = "Unsupported antivirus provider") -> None:
+    def __init__(self, display_name: str = "Unsupported antivirus provider", *, active: bool | None = None, signatures_current: bool | None = None) -> None:
         self._display_name = display_name
+        self._active = active
+        self._signatures_current = signatures_current
 
     @property
     def provider_id(self) -> str:
@@ -72,8 +74,9 @@ class UnsupportedAntivirusProvider(AntivirusProvider):
         return ProviderStatus(
             provider_id=self.provider_id,
             display_name=self.display_name,
-            healthy=False,
-            active=False,
+            healthy=None,
+            active=self._active,
+            signatures_current=self._signatures_current,
             detail="No supported antivirus control interface is available.",
         )
 
@@ -91,4 +94,4 @@ class UnsupportedAntivirusProvider(AntivirusProvider):
 
     def get_detections(self, handle: SecurityScanHandle) -> list[ProviderDetection]:
         del handle
-        return []
+        raise NotImplementedError("This antivirus provider does not expose findings")

@@ -3,6 +3,8 @@ name: AIDA Mobile Native Parity
 on:
   push:
     branches:
+      - main
+      - 'codex/**'
       - feature/aida-mobile-standalone-alpha
   pull_request:
     paths:
@@ -29,10 +31,10 @@ jobs:
       - name: Install parity-test Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest openai python-dotenv requests fastapi 'playsound==1.2.2'
+          python -m pip install pytest -r requirements-gateway.txt
 
       - name: Run gateway parity tests
-        run: python -m pytest -q tests/test_services_gateway_parity.py
+        run: python -m pytest -q tests/test_services_gateway_parity.py tests/test_gateway_security.py
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -41,11 +43,19 @@ jobs:
 
       - name: Install mobile dependencies
         working-directory: mobile
-        run: npm install
+        run: npm ci
 
       - name: Sync canonical AIDA audio assets
         working-directory: mobile
         run: npm run sync-aida-assets
+
+      - name: Test mobile behavior without native devices or providers
+        working-directory: mobile
+        run: npm test
+
+      - name: Validate release credential boundary
+        working-directory: mobile
+        run: node scripts/validate-release.js
 
       - name: Type-check mobile runtime
         working-directory: mobile

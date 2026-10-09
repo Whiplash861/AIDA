@@ -24,14 +24,16 @@ _READ_ONLY_ACTIONS = {
 @dataclass(frozen=True, slots=True)
 class SecurityObservation:
     provider_name: str
-    provider_active: bool
-    provider_healthy: bool
+    provider_active: bool | None
+    provider_healthy: bool | None
     real_time_protection: bool | None
     signatures_current: bool | None
     active_scan_description: str | None
     detections: tuple[DetectionAssessment, ...]
     active_stand_down_count: int
     threat_analysis_summaries: tuple[str, ...] = ()
+    suppressed_detection_ids: tuple[str, ...] = ()
+    detections_available: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +107,7 @@ class AutonomyObservationService:
         ]
         unresolved = tuple(
             item for item in observation.detections if item.unresolved
+            and item.detection.detection_id not in observation.suppressed_detection_ids
         )
         if unresolved:
             highest = max(
@@ -162,8 +165,8 @@ class AutonomyObservationService:
 def _evidence_lines(observation: SecurityObservation) -> tuple[str, ...]:
     lines = [
         f"Provider: {observation.provider_name}",
-        f"Provider active: {'yes' if observation.provider_active else 'no'}",
-        f"Provider healthy: {'yes' if observation.provider_healthy else 'no'}",
+        f"Provider active: {_bool_text(observation.provider_active)}",
+        f"Provider healthy: {_bool_text(observation.provider_healthy)}",
         "Real-time protection: " + _bool_text(observation.real_time_protection),
         "Signatures current: " + _bool_text(observation.signatures_current),
         (
@@ -189,7 +192,9 @@ def _summary(
     requires_user: bool,
 ) -> str:
     unresolved = sum(1 for item in observation.detections if item.unresolved)
-    if unresolved:
+    if not observation.detections_available:
+        base = "Observation could not read provider findings. The threat state remains unknown."
+    elif unresolved:
         base = f"Observation found {unresolved} unresolved provider detection(s)."
     elif not observation.provider_healthy:
         base = "Observation found degraded antivirus-provider health."
@@ -201,6 +206,8 @@ def _summary(
 
 
 def _remaining_risk(observation: SecurityObservation) -> str:
+    if not observation.detections_available:
+        return "Provider findings were unavailable; a clean threat assessment cannot be established."
     unresolved = sum(1 for item in observation.detections if item.unresolved)
     if unresolved:
         return f"{unresolved} unresolved provider detection(s) remain."

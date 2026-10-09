@@ -25,7 +25,7 @@ class _CallableWorker(QRunnable):
         try:
             result = self._function()
         except Exception as exc:  # UI boundary: provider failures become signals.
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit("Voice processing is temporarily unavailable.")
         else:
             self.signals.result.emit(result)
         finally:
@@ -52,6 +52,7 @@ class VoiceInteractionCoordinator(QObject):
         self._worker: _CallableWorker | None = None
         self._audio_path: Path | None = None
         self._cancelled = False
+        self._closing = False
 
     @property
     def is_recording(self) -> bool:
@@ -67,6 +68,8 @@ class VoiceInteractionCoordinator(QObject):
 
     @Slot()
     def toggle_recording(self) -> None:
+        if self._closing:
+            return
         if self.is_processing:
             self.error_reported.emit(
                 "Voice transcription is still processing. Cancel it or wait for completion."
@@ -80,7 +83,7 @@ class VoiceInteractionCoordinator(QObject):
             self._capture.start()
         except Exception as exc:
             self.state_changed.emit("ERROR")
-            self.error_reported.emit(str(exc))
+            self.error_reported.emit("Microphone capture is unavailable. Check device permissions and retry.")
             return
         self.state_changed.emit("LISTENING")
         self.recording_changed.emit(True)
@@ -108,16 +111,24 @@ class VoiceInteractionCoordinator(QObject):
         except Exception as exc:
             self.state_changed.emit("ERROR")
             self.recording_changed.emit(False)
-            self.error_reported.emit(str(exc))
+            self.error_reported.emit("Microphone capture is unavailable. Check device permissions and retry.")
             return
         self.recording_changed.emit(False)
         self.processing_changed.emit(True)
         self.state_changed.emit("PROCESSING")
         self._audio_path = Path(result.path)
 
-        worker = _CallableWorker(
-            lambda: self._transcriber.transcribe(self._audio_path)
-        )
+        owned_path = self._audio_path
+        transcriber = self._transcriber
+        capture = self._capture
+
+        def transcribe_owned_audio():
+            try:
+                return transcriber.transcribe(owned_path)
+            finally:
+                capture.discard(owned_path)
+
+        worker = _CallableWorker(transcribe_owned_audio)
         self._worker = worker
         worker.signals.result.connect(self._handle_result)
         worker.signals.error.connect(self._handle_error)
@@ -126,7 +137,7 @@ class VoiceInteractionCoordinator(QObject):
 
     @Slot(object)
     def _handle_result(self, result: object) -> None:
-        if self._cancelled:
+        if self._closing or self._cancelled:
             return
         text = str(result).strip()
         if text:
@@ -136,7 +147,7 @@ class VoiceInteractionCoordinator(QObject):
 
     @Slot(str)
     def _handle_error(self, message: str) -> None:
-        if self._cancelled:
+        if self._closing or self._cancelled:
             return
         self.state_changed.emit("ERROR")
         self.error_reported.emit(message)
@@ -146,13 +157,31 @@ class VoiceInteractionCoordinator(QObject):
         self._capture.discard(self._audio_path)
         self._audio_path = None
         self._worker = None
-        self.processing_changed.emit(False)
-        self.state_changed.emit("READY")
+        if not self._closing:
+            self.processing_changed.emit(False)
+            self.state_changed.emit("READY")
 
     def shutdown(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
         self._cancelled = True
-        self._capture.cancel()
-        self._capture.discard(self._audio_path)
+        try:
+            self._capture.cancel()
+        except Exception:
+            pass
+        if self._worker is not None:
+            # The worker owns the path and performs deletion even if Qt's event
+            # loop has stopped. Disconnect callbacks before the UI is destroyed.
+            for signal, callback in (
+                (self._worker.signals.result, self._handle_result),
+                (self._worker.signals.error, self._handle_error),
+                (self._worker.signals.finished, self._handle_finished),
+            ):
+                try:
+                    signal.disconnect(callback)
+                except (RuntimeError, TypeError):
+                    pass
+        else:
+            self._capture.discard(self._audio_path)
         self._audio_path = None
-        self.recording_changed.emit(False)
-        self.processing_changed.emit(False)

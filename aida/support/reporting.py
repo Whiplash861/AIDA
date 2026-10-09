@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
+from functools import wraps
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email import policy
@@ -13,6 +16,7 @@ from email.utils import format_datetime, make_msgid, parseaddr
 from pathlib import Path
 from typing import Callable, Protocol
 
+from aida.artificer.state_file import locked_state
 from aida.memory.models import ProcessOutcome
 from aida.memory.privacy import sanitize_text
 from aida.memory.service import MemoryService
@@ -123,6 +127,16 @@ class EmlBugReportTransport:
         return target
 
 
+def _locked_report(method):
+    @wraps(method)
+    def guarded(self, report, *args, **kwargs):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", report.report_id):
+            raise ValueError("Invalid bug report identity")
+        with locked_state(self.pending_dir / f"{report.report_id}.json"):
+            return method(self, report, *args, **kwargs)
+    return guarded
+
+
 class BugReportOutbox:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
@@ -131,8 +145,14 @@ class BugReportOutbox:
         self.pending_dir.mkdir(parents=True, exist_ok=True)
         self.drafts_dir.mkdir(parents=True, exist_ok=True)
 
+    @_locked_report
     def queue(self, report: BugReport) -> Path:
         target = self.pending_dir / f"{report.report_id}.json"
+        ready = self.drafts_dir / f"{report.report_id}.json"
+        if ready.exists():
+            return ready
+        if target.exists():
+            return target
         _atomic_json_write(
             target,
             {
@@ -144,8 +164,12 @@ class BugReportOutbox:
         )
         return target
 
+    @_locked_report
     def mark_failed(self, report: BugReport, error_message: str) -> Path:
         target = self.pending_dir / f"{report.report_id}.json"
+        ready = self.drafts_dir / f"{report.report_id}.json"
+        if ready.exists():
+            return ready
         existing = _read_json(target)
         attempts = int(existing.get("attempt_count", 0)) + 1
         _atomic_json_write(
@@ -160,6 +184,7 @@ class BugReportOutbox:
         )
         return target
 
+    @_locked_report
     def mark_draft_ready(
         self,
         report: BugReport,
@@ -167,6 +192,8 @@ class BugReportOutbox:
     ) -> Path:
         pending = self.pending_dir / f"{report.report_id}.json"
         ready = self.drafts_dir / f"{report.report_id}.json"
+        if ready.exists():
+            return ready
         existing = _read_json(pending)
         _atomic_json_write(
             ready,
@@ -353,7 +380,10 @@ def collect_recent_logs(
     remaining = max_total_characters
     for path in files:
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                stream.seek(max(0, stream.tell() - max_total_characters * 4))
+                lines = stream.read(max_total_characters * 4).decode("utf-8", errors="replace").splitlines()
         except OSError:
             continue
         excerpt = "\n".join(
@@ -424,19 +454,21 @@ def _validate_email(value: str, label: str) -> None:
 
 def _atomic_json_write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    _atomic_bytes_write(path, json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
 
 
 def _atomic_bytes_write(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_bytes(payload)
-    temporary.replace(path)
+    descriptor, filename = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    temporary = Path(filename)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _read_json(path: Path) -> dict:

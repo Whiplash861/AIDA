@@ -33,7 +33,7 @@ The mobile runtime currently provides:
 - explicit capability registry and staged-provider reporting
 - Precision Glass mobile frontend and AIDA orb
 
-Android-specific deterministic diagnostic executors, full semantic MemoryService parity, camera/perception, notifications, and additional Engine providers remain staged or limited until their real platform implementations are added.
+Android Quickscan, performance, security-status and surface scans run locally, including offline; structured observations and coverage gaps are retained on-device. Full semantic MemoryService parity, camera/perception, notifications, background observation and additional Engine providers remain staged or limited. See `docs/architecture/mobile-gateway-reliability-validation.md` for the current execution, enrollment and verification contract.
 
 ## One-command development workflow
 
@@ -51,13 +51,13 @@ The launcher:
 2. detects the active LAN IPv4 address
 3. generates an ephemeral development gateway credential
 4. starts the AIDA Services Gateway on port 8787
-5. writes an ignored `mobile/.env.local` containing the temporary development URL/token
+5. supplies temporary development settings only to this process and its children
 6. verifies intent, reasoning, speech, and transcription provider readiness
-7. reconciles mobile dependencies
+7. installs locked mobile dependencies with `npm ci` only if dependencies are absent
 8. synchronizes the canonical root AIDA sound assets into the Expo bundle
 9. runs TypeScript validation
 10. starts Expo/Metro
-11. removes the temporary environment file and stops the gateway when the session ends
+11. restores previous process settings and stops the gateway when the session ends; existing dotenv files stay intact
 
 To force a clean Metro cache:
 

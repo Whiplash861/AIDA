@@ -22,12 +22,15 @@ _SENSITIVE_KEYS = {
     "credentials",
     "authorization",
     "authorization_header",
+    "cookie",
+    "set_cookie",
+    "subscription_key",
 }
 
 _INLINE_SECRET = re.compile(
     r"(?i)\b(password|passwd|passphrase|api[_ -]?key|access[_ -]?key|"
-    r"access[_ -]?token|refresh[_ -]?token|id[_ -]?token|client[_ -]?secret|secret)"
-    r"\s*[:=]\s*([^\s,;]+)"
+    r"access[_ -]?token|refresh[_ -]?token|id[_ -]?token|client[_ -]?secret|secret|token|credential)"
+    r"\s*[:=]\s*(\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 _BEARER_SECRET = re.compile(
     r"(?i)\b(authorization\s*:\s*bearer|bearer)\s+([A-Za-z0-9._~+/=-]+)"

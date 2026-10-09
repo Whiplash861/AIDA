@@ -264,21 +264,8 @@ class Codewright:
         return raw if isinstance(raw, dict) else {}
 
     def _python_files(self) -> list[Path]:
-        ignored = {
-            ".git",
-            ".venv",
-            "venv",
-            "__pycache__",
-            ".pytest_cache",
-            "logs",
-            "memory",
-        }
-        paths: list[Path] = []
-        for path in self.source_root.rglob("*.py"):
-            if ignored.intersection(part.lower() for part in path.parts):
-                continue
-            paths.append(path)
-        return sorted(paths)
+        from aida.artificer.source_inventory import iter_source_files
+        return sorted(path for path in iter_source_files(self.source_root) if path.suffix == ".py")
 
     def _relative(self, path: Path) -> str:
         return str(path.relative_to(self.source_root)).replace("\\", "/")

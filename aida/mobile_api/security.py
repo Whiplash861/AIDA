@@ -27,7 +27,7 @@ def verify_mobile_access(
         )
 
     supplied = _bearer_token(authorization)
-    if not supplied or not secrets.compare_digest(supplied, configured):
+    if not supplied or len(supplied) > 512 or not supplied.isascii() or not configured.isascii() or not secrets.compare_digest(supplied, configured):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing AIDA mobile pairing token.",

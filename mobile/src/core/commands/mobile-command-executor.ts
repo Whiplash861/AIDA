@@ -4,6 +4,7 @@ import {
   EngineCommandExecutionContext,
   EngineCommandResult,
 } from '@/src/core/engines/types';
+import { loadEvidence } from '@/src/core/storage/mobile-storage';
 import { RoutedDirective } from '@/src/core/reasoning/types';
 
 export type MobileCommandResult = EngineCommandResult;
@@ -20,6 +21,15 @@ export async function executeMobileRoutedDirective(
   directive: RoutedDirective,
   context: MobileCommandExecutionContext,
 ): Promise<MobileCommandResult> {
+  if (directive.requiresConfirmation) {
+    const text = 'This directive requires confirmation and has no registered mobile confirmation workflow. No operation was executed.';
+    return {transcriptText: text, speechText: text, includeInContext: false, executed: false};
+  }
+  if (directive.commandType === 'DIAGNOSTIC_LAST') {
+    const evidence = (await loadEvidence())[0];
+    const text = evidence ? 'Saved diagnostic from ' + evidence.capturedAt + '\n\n' + evidence.transcript : 'No saved local diagnostic is available.';
+    return {transcriptText: text, speechText: evidence ? 'The latest saved diagnostic is displayed.' : text, includeInContext: false, executed: true};
+  }
   if (directive.commandType === 'INTENT_CLARIFICATION') {
     const clarification =
       directive.clarificationText ||
@@ -37,10 +47,10 @@ export async function executeMobileRoutedDirective(
     return engineResult;
   }
 
-  const coreDiagnostic = await executeAndroidCoreDiagnostic(
+  const coreDiagnostic = context.platform.toLowerCase() === 'android' ? await executeAndroidCoreDiagnostic(
     directive.commandType,
     !directive.localOnly,
-  );
+  ) : null;
   if (coreDiagnostic) {
     return coreDiagnostic;
   }

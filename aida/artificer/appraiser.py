@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import uuid
+import math
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 
 from aida.artificer.ledger import ArtificerLedger
 from aida.artificer.models import ArtificerFinding, AuthorityLevel, utc_now
@@ -14,10 +16,12 @@ class Appraiser:
         self.ledger = ledger
 
     def review(self) -> list[ArtificerFinding]:
-        events = self.ledger.recent_events(limit=1000)
+        cutoff = utc_now() - timedelta(days=7)
+        events = [event for event in self.ledger.recent_events(limit=1000)
+                  if datetime.fromisoformat(event["timestamp_utc"]) >= cutoff]
         findings: list[ArtificerFinding] = []
         failures = [event for event in events if event["status"].lower() in {"failed", "error"}]
-        by_source: Counter[str] = Counter(event["source"] for event in failures)
+        by_source: Counter[str] = Counter(_operation_group(event) for event in failures)
 
         for source, count in by_source.items():
             if count < 3:
@@ -30,7 +34,7 @@ class Appraiser:
                     affected=(source,),
                     finding=f"{source} produced {count} recent failure events.",
                     evidence=f"{count} failed or error events exist in the latest 1,000 operational events.",
-                    reasoning="Repeated failures indicate a persistent problem rather than an isolated transient event.",
+                    reasoning="Repeated failures support investigation; these observations do not establish a root cause.",
                     recommendation="Inspect the failing operation paths, provider availability, and retry behavior.",
                     fingerprint=f"failures:{source}",
                     count=count,
@@ -41,7 +45,9 @@ class Appraiser:
         durations: dict[str, list[float]] = defaultdict(list)
         for event in events:
             if event.get("duration_ms") is not None:
-                durations[event["source"]].append(float(event["duration_ms"]))
+                value = float(event["duration_ms"])
+                if math.isfinite(value) and value >= 0:
+                    durations[_operation_group(event)].append(value)
         for source, samples in durations.items():
             if len(samples) < 5:
                 continue
@@ -112,8 +118,8 @@ class Appraiser:
             category=category,
             title=title,
             severity=severity,
-            confidence=0.94,
-            evidence_quality=0.92,
+            confidence=min(0.9, 0.5 + count / (count + 20) * 0.4),
+            evidence_quality=min(0.9, 0.5 + count / (count + 10) * 0.4),
             affected_components=affected,
             first_seen_utc=now,
             last_seen_utc=now,
@@ -128,3 +134,7 @@ class Appraiser:
             authority_required=AuthorityLevel.RECOMMEND.value,
             fingerprint=fingerprint,
         )
+
+
+def _operation_group(event):
+    return ":".join(str(event.get(key) or "unspecified") for key in ("source", "task_name", "event_type", "error_category"))

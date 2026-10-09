@@ -34,11 +34,11 @@ def run_full_diagnostics(config) -> list[Finding]:
 
         # Add interpretation
         if memory_percent >= 85:
-            detail += " | Critical load condition"
+            detail += " | High utilization in this snapshot; workload context is needed"
         elif memory_percent >= 70:
             detail += " | Moderate memory pressure"
         else:
-            detail += " | Operating within normal parameters"
+            detail += " | Below the configured utilization threshold"
 
         findings.append(Finding(
             id="perf.ram_usage",
@@ -86,36 +86,7 @@ def run_full_diagnostics(config) -> list[Finding]:
         # DEFENDER STATUS (Windows)
         # ----------------------------
         if os_name == "Windows":
-            try:
-                import subprocess
-
-                result = subprocess.run(
-                    ["powershell", "-Command", "Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-
-                output = result.stdout.lower()
-
-                if "true" in output:
-                    findings.append(Finding(
-                        id="sec.defender",
-                        title="Defender real-time protection",
-                        severity="info",
-                        detail="Enabled",
-                    ))
-                else:
-                    findings.append(Finding(
-                        id="sec.defender",
-                        title="Defender real-time protection",
-                        severity="high",
-                        detail="Disabled",
-                        recommended_next="Enable real-time protection in Windows Security.",
-                    ))
-
-            except Exception as exc:
-                log.warning("Defender check failed: %s", exc)
+            findings.append(_defender_status_finding())
 
         # ----------------------------
         # PROCESS SCAN (light heuristic)
@@ -134,10 +105,10 @@ def run_full_diagnostics(config) -> list[Finding]:
 
                     findings.append(Finding(
                         id="proc.suspicious_location",
-                        title="Process running from suspicious location",
-                        severity="medium",
-                        detail=f"{name} ({exe_path})",
-                        recommended_next="Verify legitimacy of this process.",
+                        title="Process running from a user-writable location",
+                        severity="info",
+                        detail=f"{name} ({exe_path}); location alone is not evidence of malicious behavior.",
+                        recommended_next="Correlate signer, behavior and provider evidence if investigation is warranted.",
                     ))
 
                     if suspicious_count >= 5:
@@ -180,120 +151,32 @@ def run_full_diagnostics(config) -> list[Finding]:
             )
         )
 
-    Finding(
-        id="...",
-        title="...",
-        severity="info | medium | high",
-        detail="...",
-        recommended_next="..."  # optional but preferred
-    )
     return findings
 
-def run_file_scan(config) -> list:
-    findings = []
-
-    try:
-        import subprocess
-        import time
-        import os
-
-        startupinfo = None
-        creationflags = 0
-
-        if os.name == "nt":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            creationflags = subprocess.CREATE_NO_WINDOW
-
-        # Start Defender quick scan without waiting for full completion
-        subprocess.Popen(
-            [
-                "powershell",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "$ProgressPreference='SilentlyContinue'; Start-MpScan -ScanType QuickScan | Out-Null"
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            startupinfo=startupinfo,
-            creationflags=creationflags,
-        )
-
-        # Give Defender a moment to initialize
-        time.sleep(5)
-
-        # Check for detections
-        result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "$ProgressPreference='SilentlyContinue'; Get-MpThreatDetection | Out-String"
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            startupinfo=startupinfo,
-            creationflags=creationflags,
-        )
-
-        output = (result.stdout or "").strip()
-
-        if not output:
-            findings.append(Finding(
-                id="sec.no_threats",
-                title="Threat scan result",
-                severity="info",
-                detail="No active threats detected",
-            ))
-        else:
-            # Extract threat names (basic parsing)
-            threats = []
-
-            for line in output.splitlines():
-                line = line.strip()
-                if line and "ThreatName" not in line:
-                    threats.append(line)
-
-            if threats:
-                for threat in threats[:3]:  # limit output
-                    findings.append(Finding(
-                        id="sec.threat_detail",
-                        title="Threat detected",
-                        severity="high",
-                        detail=threat,
-                        recommended_next="Review and quarantine in Windows Security.",
-                    ))
-            else:
-                findings.append(Finding(
-                    id="sec.threat_detected",
-                    title="Threats detected",
-                    severity="high",
-                    detail="Threats detected but could not parse details",
-                ))
-
-    except Exception as exc:
-        findings.append(Finding(
-            id="sec.scan_error",
-            title="Antivirus scan failed",
-            severity="high",
-            detail=str(exc),
-        ))
-
-    Finding(
-        id="...",
-        title="...",
-        severity="info | medium | high",
-        detail="...",
-        recommended_next="..."  # optional but preferred
+def run_file_scan(config, *, user_authorized: bool = False, target_path: str | None = None,
+                  executor_factory=None) -> list[Finding]:
+    """Compatibility entry point using the canonical scan lifecycle executor."""
+    if not user_authorized:
+        return [Finding(id="sec.authorization_required", title="Security scan authorization required",
+                        severity="info", detail="No scan started. Confirm the scan mode and target first.")]
+    from aida.frontend.commands.security import SecurityScanExecutor
+    from aida.security.models import SecurityScanMode
+    from aida.memory.service import MemoryService
+    from aida.security.continuity import SecurityTaskLedger
+    from aida.security.stand_down import StandDownService
+    memory = MemoryService(config.memory_db_path)
+    executor = (executor_factory or SecurityScanExecutor)(
+        mode=SecurityScanMode.DEEP if target_path else SecurityScanMode.SURFACE,
+        authorization_reason="Explicit CLI confirmation of targeted scan" if target_path else "Explicit CLI confirmation of provider Surface Scan",
+        target_path=target_path, user_authorized=True, memory_service=memory,
+        task_ledger=SecurityTaskLedger(memory.database, user_id=memory.user_id, device_id=memory.device_id),
+        stand_down_service=StandDownService(memory.database, memory),
+        max_monitor_seconds=300,
     )
-    return findings
+    result = executor.execute()
+    return [Finding(id="sec.provider_result", title="Provider security scan status", severity="info",
+                    detail=result.transcript_text)]
+
 
 def run_quickscan(config) -> list[Finding]:
     findings: list[Finding] = []
@@ -329,29 +212,7 @@ def run_quickscan(config) -> list[Finding]:
         ))
 
         if os_name == "Windows":
-            import subprocess
-
-            result = subprocess.run(
-                ["powershell", "-Command", "Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            if "true" in result.stdout.lower():
-                findings.append(Finding(
-                    id="sec.defender",
-                    title="Defender status",
-                    severity="info",
-                    detail="Real-time protection enabled",
-                ))
-            else:
-                findings.append(Finding(
-                    id="sec.defender",
-                    title="Defender status",
-                    severity="high",
-                    detail="Real-time protection disabled",
-                ))
+            findings.append(_defender_status_finding())
 
         log.info("Quickscan complete.")
 
@@ -364,11 +225,13 @@ def run_quickscan(config) -> list[Finding]:
             detail=str(exc),
         ))
 
-    Finding(
-        id="...",
-        title="...",
-        severity="info | medium | high",
-        detail="...",
-        recommended_next="..."  # optional but preferred
-    )
     return findings
+
+def _defender_status_finding() -> Finding:
+    from aida.platform.windows import WindowsAdapter
+    status = WindowsAdapter().security_provider_status()
+    return Finding(id="sec.defender", title="Defender real-time protection",
+        severity="medium" if status.enabled is False else "info",
+        detail="Enabled" if status.enabled is True else "Disabled or not fully enabled" if status.enabled is False else "Unknown: provider status could not be verified",
+        evidence=status.detail,
+        recommended_next="Review the installed security provider's status." if status.enabled is not True else "")

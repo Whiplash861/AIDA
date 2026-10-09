@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from aida.artificer.state_file import locked_state, write_json
 from aida.artificer.models import utc_now
 
 
@@ -24,21 +25,23 @@ class DeveloperRegistry:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.owner_name = owner_name
-        self._records = self._load()
-        if not self._records:
-            self._records = {
-                "owner": DeveloperRecord(
-                    developer_id="owner",
-                    display_name=owner_name,
-                    role="owner",
-                    authorized_report_categories=("*",),
-                    active=True,
-                    assigned_by="system_bootstrap",
-                )
-            }
-            self._save()
+        with locked_state(self.path):
+            self._records = self._load()
+            if not self.path.exists():
+                self._records = {
+                    "owner": DeveloperRecord(
+                        developer_id="owner",
+                        display_name=owner_name,
+                        role="owner",
+                        authorized_report_categories=("*",),
+                        active=True,
+                        assigned_by="system_bootstrap",
+                    )
+                }
+                self._save()
 
     def list_active(self, report_type: str | None = None) -> tuple[DeveloperRecord, ...]:
+        self._records = self._load()
         records = []
         for record in self._records.values():
             if not record.active:
@@ -50,38 +53,46 @@ class DeveloperRegistry:
         return tuple(records)
 
     def add_or_update(self, record: DeveloperRecord, *, acting_developer_id: str) -> None:
-        actor = self._records.get(acting_developer_id)
-        if actor is None or not actor.active or actor.role != "owner":
-            raise PermissionError("Only an active owner may change developer recipients")
-        self._records[record.developer_id] = record
-        self._save()
+        with locked_state(self.path):
+            self._records = self._load()
+            actor = self._records.get(acting_developer_id)
+            if actor is None or not actor.active or actor.role != "owner":
+                raise PermissionError("Only an active owner may change developer recipients")
+            self._records[record.developer_id] = record
+            self._save()
 
     def deactivate(self, developer_id: str, *, acting_developer_id: str) -> None:
-        actor = self._records.get(acting_developer_id)
-        if actor is None or not actor.active or actor.role != "owner":
-            raise PermissionError("Only an active owner may change developer recipients")
-        if developer_id == "owner":
-            raise PermissionError("The owner record cannot be deactivated by the Artificer")
-        existing = self._records.get(developer_id)
-        if existing is None:
-            raise KeyError(developer_id)
-        self._records[developer_id] = DeveloperRecord(
-            developer_id=existing.developer_id,
-            display_name=existing.display_name,
-            role=existing.role,
-            authorized_report_categories=existing.authorized_report_categories,
-            public_key_pem=existing.public_key_pem,
-            active=False,
-            assigned_by=existing.assigned_by,
-            assigned_at_utc=existing.assigned_at_utc,
-        )
-        self._save()
+        with locked_state(self.path):
+            self._records = self._load()
+            actor = self._records.get(acting_developer_id)
+            if actor is None or not actor.active or actor.role != "owner":
+                raise PermissionError("Only an active owner may change developer recipients")
+            if developer_id == "owner":
+                raise PermissionError("The owner record cannot be deactivated by the Artificer")
+            existing = self._records.get(developer_id)
+            if existing is None:
+                raise KeyError(developer_id)
+            self._records[developer_id] = DeveloperRecord(
+                developer_id=existing.developer_id,
+                display_name=existing.display_name,
+                role=existing.role,
+                authorized_report_categories=existing.authorized_report_categories,
+                public_key_pem=existing.public_key_pem,
+                active=False,
+                assigned_by=existing.assigned_by,
+                assigned_at_utc=existing.assigned_at_utc,
+            )
+            self._save()
 
     def _load(self) -> dict[str, DeveloperRecord]:
         if not self.path.exists():
             return {}
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("developers"), list):
+                return {}
+            if any(not isinstance(item, dict) or not isinstance(item.get("active", True), bool) for item in payload["developers"]):
+                return {}
             return {
                 item["developer_id"]: DeveloperRecord(
                     developer_id=item["developer_id"],
@@ -100,6 +111,4 @@ class DeveloperRegistry:
 
     def _save(self) -> None:
         payload = {"developers": [asdict(record) for record in self._records.values()]}
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        write_json(self.path, payload)

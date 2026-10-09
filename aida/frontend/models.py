@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
 from typing import Callable, List, Optional
+import logging
+
+log = logging.getLogger(__name__)
 
 
 class MessageSender(Enum):
@@ -34,10 +37,12 @@ class ChatHistory:
         message_saver: Optional[
             Callable[[ChatMessage], None]
         ] = None,
+        max_messages: int = 500,
     ) -> None:
         self._messages: List[ChatMessage] = []
         self._listeners: List[MessageListener] = []
         self._message_saver = message_saver
+        self._max_messages = max(12, int(max_messages))
 
     @property
     def messages(self) -> tuple[ChatMessage, ...]:
@@ -62,9 +67,13 @@ class ChatHistory:
         )
 
         self._messages.append(message)
+        del self._messages[:-self._max_messages]
 
         if self._message_saver is not None:
-            self._message_saver(message)
+            try:
+                self._message_saver(message)
+            except (OSError, ValueError):
+                log.warning("Conversation persistence unavailable; message remains in this session")
 
         self._notify_listeners(message)
 
@@ -127,7 +136,10 @@ class ChatHistory:
 
     def _notify_listeners(self, message: ChatMessage) -> None:
         for listener in self._listeners.copy():
-            listener(message)
+            try:
+                listener(message)
+            except Exception:
+                log.warning("A conversation listener failed")
 
     def clear(self) -> None:
         self._messages.clear()

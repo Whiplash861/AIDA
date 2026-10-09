@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 
-WINDOW_PATH = Path("aida/frontend/window.py")
+WINDOW_PATH = Path("aida/frontend/_window_base.py")
 WIDGETS_PATH = Path("aida/frontend/widgets.py")
 APP_PATH = Path("aida/frontend/app.py")
 DIALOG_PATH = Path("aida/frontend/artificer_dialog.py")

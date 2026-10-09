@@ -141,6 +141,7 @@ def test_scan_separates_existing_unresolved_detection_from_new_findings(tmp_path
         memory_service=memory,
         task_ledger=ledger,
         stand_down_service=stand_down,
+        user_authorized=True,
     )
 
     result = executor.execute()
@@ -178,6 +179,7 @@ def test_new_detection_suspends_stand_down_even_for_explicit_deep_scan(tmp_path)
         memory_service=memory,
         task_ledger=ledger,
         stand_down_service=stand_down,
+        user_authorized=True,
     )
 
     result = executor.execute()

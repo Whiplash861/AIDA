@@ -198,13 +198,18 @@ class MemoryBankDialog(QDialog):
             )
             self._selected_memory_id = item.memory_id
         else:
-            item = self.service.revise_memory(
-                self._selected_memory_id,
-                title=title,
-                summary=summary,
-                reason="User revision in the Memory Bank frontend",
-                revised_by=self.service.user_id,
-            )
+            previous = self._items_by_id.get(self._selected_memory_id)
+            try:
+                item = self.service.revise_memory(
+                    self._selected_memory_id, title=title, summary=summary,
+                    category=category,
+                    expected_updated_at=previous.updated_at if previous else None,
+                    reason="User revision in the Memory Bank frontend",
+                    revised_by=self.service.user_id,
+                )
+            except (ValueError, RuntimeError) as exc:
+                QMessageBox.warning(self, "Memory revision needs review", str(exc))
+                return
 
         self.refresh()
         self._select_id(item.memory_id)

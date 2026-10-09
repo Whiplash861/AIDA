@@ -3,16 +3,20 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from aida.security.models import (
     SecurityScanHandle,
     SecurityScanMode,
+    SecurityScanRequest,
     SecurityScanState,
     SecurityScanStatus,
 )
+from aida.security.providers.defender import _ScanRecord, MicrosoftDefenderError
 from aida.security.providers.defender_tracked import (
     CompletionAwareMicrosoftDefenderProvider,
     _terminal_status_from_payload,
+    _terminate_completed_host,
 )
 from aida.security.windows.powershell import PowerShellExecution
 
@@ -59,50 +63,47 @@ class RecoveringMicrosoftDefenderProvider(
             if adopted is not None:
                 return self._poll_adopted_scan(handle, adopted)
 
-            if record.command.poll() is not None:
-                execution = record.command.result()
-                payload = self._find_existing_scan(
-                    record.request.mode,
-                    handle.started_at,
-                )
-                adopted = _adopted_scan_from_payload(
-                    payload,
-                    record.request.mode,
-                )
-                if adopted is not None:
-                    self._adopted_scans[handle.scan_id] = adopted
-                    self._replace_record_start_time(
-                        record,
-                        handle,
-                        adopted.started_at,
-                    )
-
+            if record.request.mode is not SecurityScanMode.DEEP and self._provider_check_due(handle.scan_id):
+                payload = self._find_existing_scan(record.request.mode, handle.started_at)
+                identified = _adopted_scan_from_payload(payload, record.request.mode)
+                # A newly launched request can bind only a unique native start
+                # at or after launch. Older scans require explicit attachment.
+                if (identified is not None and identified.started_at is not None
+                    and identified.started_at >= handle.started_at):
+                    self._adopted_scans[handle.scan_id] = identified
+                    self._replace_record_start_time(record, handle, identified.started_at)
                     terminal = _terminal_status_from_payload(payload)
                     if terminal is not None:
                         record.terminal_status = terminal
-                        self._last_provider_checks.pop(handle.scan_id, None)
+                        _terminate_completed_host(record.command)
                         return terminal
+                    return SecurityScanStatus(SecurityScanState.RUNNING,
+                        detail=f"Microsoft Defender scan is running. Scan ID: {identified.provider_scan_id}.")
 
-                    # A matching RUNNING event means Defender still owns the
-                    # scan even though the local Start-MpScan host exited. This
-                    # occurs both during recovery and briefly during confirmed
-                    # cancellation while event 1002 is being published.
-                    detail = _payload_detail(payload) or (
-                        "AIDA reattached to an existing Microsoft Defender "
-                        f"{_mode_label(adopted.mode)}. Percentage progress "
-                        "is unavailable."
-                    )
-                    return SecurityScanStatus(
-                        state=SecurityScanState.RUNNING,
-                        detail=detail,
-                    )
-
-                # Preserve the older already-in-progress diagnostic as useful
-                # context, but do not adopt without a matching provider event.
-                if _is_scan_already_in_progress(execution):
-                    return super().get_scan_status(handle)
-
+            # Starting a new request never grants ownership of another scan.
+            # Recovery is an explicit, exact-identity read-only operation.
             return super().get_scan_status(handle)
+
+    def attach_scan(self, request: SecurityScanRequest, provider_scan_id: str) -> SecurityScanHandle:
+        if request.mode is SecurityScanMode.DEEP:
+            raise MicrosoftDefenderError("Targeted scan recovery requires provider target identity support")
+        adopted = _AdoptedDefenderScan(provider_scan_id, request.mode, None)
+        payload = self._read_adopted_scan_state(adopted)
+        identified = _adopted_scan_from_payload(payload, request.mode)
+        if identified is None or identified.provider_scan_id != provider_scan_id or identified.started_at is None:
+            raise MicrosoftDefenderError("The exact provider scan could not be verified; no new scan was started")
+        handle = SecurityScanHandle(
+            scan_id=uuid4().hex, provider_id=self.provider_id,
+            request_id=request.request_id, started_at=identified.started_at,
+        )
+        with self._lock:
+            self._records[handle.scan_id] = _ScanRecord(
+                handle=handle, request=request, command=_ObservationOnlyCommand(),
+                terminal_status=_terminal_status_from_payload(payload),
+            )
+            self._adopted_scans[handle.scan_id] = identified
+            self._provider_check_due(handle.scan_id)
+        return handle
 
     def _poll_adopted_scan(
         self,
@@ -113,9 +114,15 @@ class RecoveringMicrosoftDefenderProvider(
 
         if self._provider_check_due(handle.scan_id):
             payload = self._read_adopted_scan_state(adopted)
+            if not isinstance(payload, dict) or payload.get("ScanId") != adopted.provider_scan_id or not _as_bool(payload.get("ModeMatches")):
+                raise MicrosoftDefenderError("Recovered scan evidence is unavailable or its identity changed")
+            if str(payload.get("State") or "").upper() not in {"RUNNING", "COMPLETED", "CANCELLED"}:
+                raise MicrosoftDefenderError("The recovered provider scan is no longer observable")
             terminal = _terminal_status_from_payload(payload)
             if terminal is not None:
                 record.terminal_status = terminal
+                if not isinstance(record.command, _ObservationOnlyCommand):
+                    _terminate_completed_host(record.command)
                 self._last_provider_checks.pop(handle.scan_id, None)
                 return terminal
 
@@ -346,7 +353,7 @@ $events = @(
 $candidates = @()
 $starts = @(
     $events | Where-Object {{
-        $_.Id -eq 1000 -and
+        $_.Id -eq 1000 -and $_.TimeCreated -ge $requested -and
         ([string]$_.Parameters) -match $modePattern
     }}
 )
@@ -377,18 +384,7 @@ foreach ($start in $starts) {{
     }}
 }}
 
-$selected = @(
-    $candidates | Where-Object {{ $_.State -eq 'RUNNING' }}
-) | Select-Object -Last 1
-
-if ($null -eq $selected) {{
-    $selected = @(
-        $candidates | Where-Object {{
-            $null -ne $_.EndTime -and
-            $_.EndTime -ge $requested.AddSeconds(-15)
-        }}
-    ) | Select-Object -Last 1
-}}
+$selected = if ($candidates.Count -eq 1) {{ $candidates[0] }} else {{ $null }}
 
 if ($null -eq $selected) {{
     [PSCustomObject]@{{
@@ -424,6 +420,7 @@ def _adopted_scan_state_script(
         provider_scan_id.encode("utf-8")
     ).decode("ascii")
     label = _mode_label(mode)
+    pattern = _mode_pattern(mode)
 
     return f"""
 $ErrorActionPreference = 'Stop'
@@ -460,7 +457,7 @@ $state = if ($null -ne $terminal -and $terminal.Id -eq 1001) {{
 
 [PSCustomObject]@{{
     State = $state
-    ModeMatches = $true
+    ModeMatches = ($null -ne $start -and ([string]$start.Parameters) -match '{pattern}')
     ScanId = $scanId
     StartTime = if ($null -ne $start) {{ $start.TimeCreated.ToString('o') }} else {{ $null }}
     EndTime = if ($null -ne $terminal) {{ $terminal.TimeCreated.ToString('o') }} else {{ $null }}
@@ -473,3 +470,15 @@ $state = if ($null -ne $terminal -and $terminal.Id -eq 1001) {{
     }}
 }} | ConvertTo-Json -Compress
 """.strip()
+
+
+class _ObservationOnlyCommand:
+    """Marker for provider-owned work; never creates or terminates a process."""
+    def poll(self) -> None:
+        return None
+
+    def result(self) -> PowerShellExecution:
+        raise MicrosoftDefenderError("An observed scan has no local process result")
+
+    def terminate(self) -> None:
+        raise MicrosoftDefenderError("An observed scan cannot be terminated through a local host")

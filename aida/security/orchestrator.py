@@ -24,6 +24,8 @@ class SecurityScanOutcome:
     handle: SecurityScanHandle
     status: SecurityScanStatus
     detections: tuple[ProviderDetection, ...] = ()
+    detections_available: bool = False
+    detections_error: str | None = None
 
 
 class SecurityOrchestrator:
@@ -43,13 +45,31 @@ class SecurityOrchestrator:
     def poll(self, handle: SecurityScanHandle) -> SecurityScanOutcome:
         status = self._provider.get_scan_status(handle)
         detections: tuple[ProviderDetection, ...] = ()
+        available = False
+        error = None
         if status.state is SecurityScanState.COMPLETED:
             if _provider_supports(
                 self._provider,
                 ProviderCapability.READ_DETECTIONS,
             ):
-                detections = tuple(self._provider.get_detections(handle))
-        return SecurityScanOutcome(handle=handle, status=status, detections=detections)
+                try:
+                    detections = tuple(self._provider.get_detections(handle))
+                    available = True
+                except (OSError, RuntimeError, ValueError) as exc:
+                    error = str(exc) or type(exc).__name__
+            else:
+                error = "The provider does not expose scan findings."
+        return SecurityScanOutcome(
+            handle=handle, status=status, detections=detections,
+            detections_available=available, detections_error=error,
+        )
+
+    def attach(self, request: SecurityScanRequest, provider_scan_id: str) -> SecurityScanHandle:
+        """Observe an existing provider identity; this operation must never start a scan."""
+        attach = getattr(self._provider, "attach_scan", None)
+        if not callable(attach) or not provider_scan_id.strip():
+            raise ProviderCapabilityError("The provider cannot attach to this scan identity.")
+        return attach(request, provider_scan_id)
 
     def cancel(self, handle: SecurityScanHandle) -> bool:
         if not _provider_supports(

@@ -19,7 +19,7 @@ class LinuxAdapter(PlatformAdapter):
             "system.settings": "degraded",
             "filesystem.reveal": "compatible",
             "security.provider": "compatible" if provider.available else "unverified",
-            "security.quick_scan": "compatible" if provider.available else "unsupported",
+            "security.quick_scan": "unsupported",
             "background.execution": "native",
             "notifications": "compatible" if shutil.which("notify-send") else "unverified",
         }
@@ -35,40 +35,8 @@ class LinuxAdapter(PlatformAdapter):
         )
 
     def request_security_scan(self, scope: str = "quick") -> SecurityScanResult:
-        if not shutil.which("clamscan"):
-            return SecurityScanResult(
-                "Unknown Linux security provider",
-                "unsupported",
-                "No supported provider adapter detected",
-            )
-        target_path = Path.home() if scope == "full" else Path.home() / "Downloads"
-        if not target_path.exists():
-            target_path = Path.home()
-        try:
-            result = subprocess.run(
-                ["clamscan", "--infected", "--no-summary", "-r", str(target_path)],
-                capture_output=True,
-                text=True,
-                timeout=3600,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return SecurityScanResult("ClamAV", "unknown", "Scan timed out")
-        threats = tuple(line for line in result.stdout.splitlines() if line.strip())
-        if result.returncode == 0:
-            return SecurityScanResult("ClamAV", "completed", "Scan completed with no detections")
-        if result.returncode == 1:
-            return SecurityScanResult(
-                "ClamAV",
-                "completed",
-                "Threat detections were returned",
-                threats,
-            )
-        return SecurityScanResult(
-            "ClamAV",
-            "failed",
-            (result.stderr or "ClamAV scan failed").strip(),
-        )
+        return SecurityScanResult("ClamAV", "unsupported",
+            "AIDA has no governed Linux scan executor registered; invoke scans through a reviewed provider integration.")
 
     def reveal_path(self, target: Path) -> None:
         opener = shutil.which("xdg-open")

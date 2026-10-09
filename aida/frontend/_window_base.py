@@ -53,7 +53,7 @@ class AIDAWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self._submit_handler: Optional[Callable[[str], None]] = None
+        self._submit_handler: Optional[Callable[[str], bool | None]] = None
         self._perception = PerceptionService()
         self._attached_evidence: list[PerceptionEvidence] = []
         self._clipboard_temp_paths: list[Path] = []
@@ -271,7 +271,7 @@ class AIDAWindow(QMainWindow):
         self.threat_center_button.clicked.connect(self.threat_center_requested.emit)
         self.task_center_button.clicked.connect(self.task_center_requested.emit)
         self.artificer_button.clicked.connect(self.artificer_requested.emit)
-        self.microphone_button.clicked.connect(self._voice.toggle_recording)
+        self.microphone_button.clicked.connect(self._handle_microphone_clicked)
         self.attachment_button.clicked.connect(self._choose_image)
         self.clipboard_button.clicked.connect(self._attach_clipboard_image)
         self.clear_evidence_button.clicked.connect(self._clear_evidence)
@@ -408,20 +408,14 @@ class AIDAWindow(QMainWindow):
     @Slot(bool)
     def _handle_processing_changed(self, processing: bool) -> None:
         self.microphone_button.setText("CANCEL" if processing else "MIC")
-        if processing:
-            try:
-                self.microphone_button.clicked.disconnect(self._voice.toggle_recording)
-            except RuntimeError:
-                pass
-            self.microphone_button.clicked.connect(self._voice.cancel)
-            self.composer_hint.setText("TRANSCRIBING")
+        self.composer_hint.setText("TRANSCRIBING" if processing else "ENTER TO SEND")
+
+    @Slot()
+    def _handle_microphone_clicked(self) -> None:
+        if self._voice.is_processing:
+            self._voice.cancel()
         else:
-            try:
-                self.microphone_button.clicked.disconnect(self._voice.cancel)
-            except RuntimeError:
-                pass
-            self.microphone_button.clicked.connect(self._voice.toggle_recording)
-            self.composer_hint.setText("ENTER TO SEND")
+            self._voice.toggle_recording()
 
     @Slot(str)
     def _insert_transcript(self, transcript: str) -> None:
@@ -440,23 +434,23 @@ class AIDAWindow(QMainWindow):
         text = self.input_box.text().strip()
         if not text:
             return
-        if self._attached_evidence:
-            evidence_context = " | ".join(
-                evidence.compact_summary() for evidence in self._attached_evidence
-            )
-            text = f"{text}\n\nAttached perception evidence: {evidence_context}"
+        # Keep evidence separate from instructions and retain owned files while
+        # the receiver examines them. Rejected input remains in the composer.
+        if self._submit_handler is not None:
+            accepted = self._submit_handler(text)
+            if accepted is False:
+                return
+        else:
+            self.message_submitted.emit(text)
         self.input_box.clear()
         self._clear_evidence()
-        self.message_submitted.emit(text)
 
-    def set_submit_handler(self, handler: Callable[[str], None]) -> None:
-        if self._submit_handler is not None:
-            try:
-                self.message_submitted.disconnect(self._submit_handler)
-            except RuntimeError:
-                pass
+    @property
+    def attached_evidence(self) -> tuple[PerceptionEvidence, ...]:
+        return tuple(self._attached_evidence)
+
+    def set_submit_handler(self, handler: Callable[[str], bool | None]) -> None:
         self._submit_handler = handler
-        self.message_submitted.connect(handler)
 
     def display_message(self, message: ChatMessage) -> None:
         self.transcript.add_message(message, animate=True)
@@ -502,6 +496,7 @@ class AIDAWindow(QMainWindow):
         self.dashboard.set_active_task_count(count)
 
     def set_input_enabled(self, enabled: bool) -> None:
+        self._push_to_talk_shortcut.setEnabled(enabled)
         self.input_box.setEnabled(enabled)
         self.send_button.setEnabled(enabled)
         self.microphone_button.setEnabled(enabled)

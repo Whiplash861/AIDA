@@ -32,8 +32,13 @@ class AssistanceTaskStore:
         )
         self.user_id = user_id.strip()
         self.device_id = device_id.strip()
+        self._confirmations = None
         if not self.user_id or not self.device_id:
             raise ValueError("Assistance task scope cannot be empty")
+
+    def bind_confirmations(self, confirmations) -> None:
+        """Bind the shared in-process authority service for cancellation revocation."""
+        self._confirmations = confirmations
 
     def create(
         self,
@@ -93,39 +98,45 @@ class AssistanceTaskStore:
         authorization_id: str | None = None,
         metadata_update: dict[str, Any] | None = None,
     ) -> AssistanceTaskRecord:
-        current = self.get(task_id)
-        if current is None:
-            raise KeyError(f"Unknown assistance task: {task_id}")
-        _validate_transition(current.state, state)
-        now = datetime.now(timezone.utc)
-        metadata = dict(current.metadata)
-        metadata.update(metadata_update or {})
-        updated = replace(
-            current,
-            state=state,
-            progress_detail=(
-                current.progress_detail
-                if progress_detail is None
-                else progress_detail
-            ),
-            result_summary=(
-                current.result_summary
-                if result_summary is None
-                else result_summary
-            ),
-            error_detail=(
-                current.error_detail if error_detail is None else error_detail
-            ),
-            authorization_id=(
-                current.authorization_id
-                if authorization_id is None
-                else authorization_id
-            ),
-            metadata=metadata,
-            updated_at=now,
-            terminal_at=(now if state.terminal else None),
-        )
         with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM assistance_tasks WHERE task_id = ? AND user_id = ? AND device_id = ?",
+                (task_id, self.user_id, self.device_id),
+            ).fetchone()
+            current = None if row is None else _from_row(row)
+            if current is None:
+                raise KeyError(f"Unknown assistance task: {task_id}")
+            if current.state.terminal and state in {current.state, AssistanceTaskState.CANCELLED, AssistanceTaskState.CANCELLATION_REQUESTED}:
+                return current
+            _validate_transition(current.state, state)
+            now = datetime.now(timezone.utc)
+            metadata = dict(current.metadata)
+            metadata.update(metadata_update or {})
+            updated = replace(
+                current,
+                state=state,
+                progress_detail=(
+                    current.progress_detail
+                    if progress_detail is None
+                    else progress_detail
+                ),
+                result_summary=(
+                    current.result_summary
+                    if result_summary is None
+                    else result_summary
+                ),
+                error_detail=(
+                    current.error_detail if error_detail is None else error_detail
+                ),
+                authorization_id=(
+                    current.authorization_id
+                    if authorization_id is None
+                    else authorization_id
+                ),
+                metadata=metadata,
+                updated_at=now,
+                terminal_at=(now if state.terminal else None),
+            )
             connection.execute(
                 """
                 UPDATE assistance_tasks
@@ -151,22 +162,48 @@ class AssistanceTaskStore:
         return updated
 
     def request_cancel(self, task_id: str) -> AssistanceTaskRecord:
-        current = self.get(task_id)
-        if current is None:
-            raise KeyError(f"Unknown assistance task: {task_id}")
-        if current.state.terminal:
-            return current
-        return self.transition(
-            task_id,
-            AssistanceTaskState.CANCELLATION_REQUESTED,
-            progress_detail="The user requested cancellation. The task will stop at the next safe checkpoint.",
-        )
+        # Choose immediate cancellation versus a running-task checkpoint while
+        # holding the same write transaction as the state update. A stale read
+        # must not label an already-issued provider operation as cancelled.
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM assistance_tasks WHERE task_id = ? AND user_id = ? AND device_id = ?",
+                (task_id, self.user_id, self.device_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown assistance task: {task_id}")
+            current = _from_row(row)
+            if current.state.terminal:
+                return current
+            state = (AssistanceTaskState.CANCELLED if current.state in {
+                AssistanceTaskState.PLANNED, AssistanceTaskState.QUEUED,
+                AssistanceTaskState.AWAITING_AUTHORIZATION,
+            } else AssistanceTaskState.CANCELLATION_REQUESTED)
+            now = datetime.now(timezone.utc)
+            updated = replace(
+                current, state=state, updated_at=now,
+                terminal_at=now if state.terminal else None,
+                progress_detail=("Cancelled before execution." if state.terminal else
+                    "The user requested cancellation. The task will stop at the next safe checkpoint."),
+            )
+            connection.execute(
+                "UPDATE assistance_tasks SET state = ?, progress_detail = ?, updated_at = ?, terminal_at = ? "
+                "WHERE task_id = ? AND user_id = ? AND device_id = ?",
+                (state.value, updated.progress_detail, _iso(now), _iso_or_none(updated.terminal_at),
+                 task_id, self.user_id, self.device_id),
+            )
+        if updated.authorization_id and self._confirmations is not None:
+            try:
+                self._confirmations.reject(updated.authorization_id)
+            except RuntimeError:
+                pass
+        return updated
 
     def cancellation_requested(self, task_id: str) -> bool:
         current = self.get(task_id)
         return bool(
             current is not None
-            and current.state is AssistanceTaskState.CANCELLATION_REQUESTED
+            and current.state in {AssistanceTaskState.CANCELLATION_REQUESTED, AssistanceTaskState.CANCELLED}
         )
 
     def get(self, task_id: str) -> AssistanceTaskRecord | None:
@@ -229,6 +266,8 @@ def _validate_transition(
         raise ValueError(
             f"Cannot transition terminal assistance task from {current.value} to {target.value}"
         )
+    if current is AssistanceTaskState.CANCELLATION_REQUESTED and not target.terminal:
+        raise ValueError("Cancellation must be acknowledged before any further task execution")
     if target is AssistanceTaskState.PLANNED:
         raise ValueError("Assistance tasks cannot transition back to planned")
 

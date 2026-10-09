@@ -27,5 +27,5 @@ export type ReasoningResponse = {
 
 export interface ReasoningProvider {
   readonly id: string;
-  respond(input: string, context: ReasoningContext): Promise<ReasoningResponse>;
+  respond(input: string, context: ReasoningContext, signal?: AbortSignal): Promise<ReasoningResponse>;
 }

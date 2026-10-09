@@ -17,20 +17,26 @@ class ApplicationHealthMonitor:
 
     def __init__(self, process_source: Any | None = None) -> None:
         self._process_source = process_source
+        self._last_errors = 0
 
     def inspect(self, application_name: str) -> ApplicationHealthAssessment:
         clean_name = application_name.strip()
         if not clean_name:
             raise ValueError("application_name cannot be empty")
-        observations = tuple(self._observe(clean_name))
+        self._last_errors = 0
+        try:
+            observations = tuple(self._observe(clean_name))
+        except (OSError, RuntimeError):
+            observations = ()
+            self._last_errors += 1
         if not observations:
             return ApplicationHealthAssessment(
                 application_name=clean_name,
                 state=ApplicationHealthState.UNKNOWN,
-                confidence=0.95,
-                summary=f"{clean_name} is not currently running.",
+                confidence=0.2 if self._last_errors else 0.7,
+                summary=f"{clean_name} process visibility is incomplete." if self._last_errors else f"No matching {clean_name} process was observed.",
                 observations=(),
-                evidence=("No matching running process was found.",),
+                evidence=("Process access failed; absence cannot be established." if self._last_errors else "No matching process was found in the available snapshot.",),
                 recommendations=(
                     "Start the application and repeat the health inspection.",
                 ),
@@ -71,15 +77,18 @@ class ApplicationHealthMonitor:
                 "Compare sustained usage with the application's local baseline."
             )
         else:
-            state = ApplicationHealthState.HEALTHY
-            confidence = 0.75
+            state = ApplicationHealthState.HEALTHY if all(item.responding is True for item in observations) else ApplicationHealthState.UNKNOWN
+            confidence = 0.75 if state is ApplicationHealthState.HEALTHY else 0.4
             evidence.append(
-                "No current unresponsive state or extreme resource condition was observed."
+                "No extreme resource condition was observed; process scheduling state alone does not establish application responsiveness."
             )
             recommendations.append(
                 "Continue observing if the user reports intermittent failures."
             )
 
+        if self._last_errors:
+            confidence = min(confidence, 0.5)
+            evidence.append("Some process observations were inaccessible or incomplete.")
         evidence.append(f"Matching process count: {len(observations)}.")
         return ApplicationHealthAssessment(
             application_name=clean_name,
@@ -142,6 +151,7 @@ class ApplicationHealthMonitor:
                     create_time=_timestamp(info.get("create_time")),
                 )
             except Exception:
+                self._last_errors += 1
                 continue
 
 
@@ -196,14 +206,16 @@ def _import_psutil() -> Any:
 
 
 def _responding(process: Any) -> bool | None:
-    method = getattr(process, "status", None)
+    # psutil status describes scheduling/liveness, not GUI message handling.
+    # A provider may supply an actual responsiveness probe; otherwise unknown.
+    method = getattr(process, "is_responding", None)
     if not callable(method):
         return None
     try:
-        status = str(method()).lower()
+        result = method()
+        return result if isinstance(result, bool) else None
     except Exception:
         return None
-    return status not in {"stopped", "zombie", "dead"}
 
 
 def _optional_call(process: Any, name: str) -> int | None:

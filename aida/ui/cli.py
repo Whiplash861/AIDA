@@ -328,9 +328,9 @@ def generate_system_verdict(
     # --- FINAL VERDICT ---
     if issues:
         if trend == "increasing":
-            return f"System performance has degraded due to {' and '.join(issues)}."
+            return f"The latest snapshot shows increasing {' and '.join(issues)}; the cause and user impact remain unverified."
         elif trend == "decreasing":
-            return f"System performance is improving as {' and '.join(issues)} stabilize."
+            return f"The latest snapshot shows decreasing {' and '.join(issues)}; responsiveness should be checked separately."
         else:
             return f"System is experiencing {' and '.join(issues)}."
 
@@ -343,19 +343,12 @@ def recommend_repair(
     cpu_delta: Optional[float],
 ) -> Optional[str]:
 
-    if memory_percent is not None and memory_percent >= 90:
-        return "Severe memory pressure detected. Recommend system file integrity scan."
-
-    if cpu_percent is not None and cpu_percent >= 90:
-        return "Sustained high CPU usage detected. Recommend system file integrity scan."
-
-    if memory_delta is not None and memory_delta > 15:
-        return "Rapid memory usage increase detected. Recommend system file integrity scan."
-
-    if cpu_delta is not None and cpu_delta > 20:
-        return "Rapid CPU usage increase detected. Recommend system file integrity scan."
-
+    # Resource pressure does not establish system-file corruption. Offer
+    # observation/context collection instead of an unrelated repair command.
+    if (memory_percent is not None and memory_percent >= 90) or (cpu_percent is not None and cpu_percent >= 90):
+        return "High utilization was observed. Compare active workload and repeated measurements before selecting a repair."
     return None
+
 
 def _ask_yes_no(prompt: str, config: AidaConfig) -> bool:
     aida_say_text(prompt + " Reply: yes or no.", config)
@@ -386,6 +379,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
         "last_alert_time": None,  # NEW (track when we last alerted about critical memory)
     }
 
+    passive_monitoring_enabled = False
     while True:
         memory_percent = None
         cpu_percent = None
@@ -395,7 +389,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
         if context_state["last_scan_time"] is None:
             context_state["last_scan_time"] = current_time
 
-        elif current_time - context_state["last_scan_time"] > 30:
+        elif passive_monitoring_enabled and current_time - context_state["last_scan_time"] > 30:
             findings = run_quickscan(config)
             context_state["last_findings"] = findings
 
@@ -424,12 +418,21 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
             continue
 
         lower = user_input.lower()
+        if lower in {"enable monitoring", "monitor system"}:
+            passive_monitoring_enabled = True
+            context_state["last_scan_time"] = current_time
+            aida_say_text("Read-only resource checks enabled for this CLI session. Say disable monitoring to stop them.", config)
+            continue
+        if lower in {"disable monitoring", "stop monitoring"}:
+            passive_monitoring_enabled = False
+            aida_say_text("CLI resource checks stopped.", config)
+            continue
         if lower in {"exit", "quit"}:
             aida_say_text("Shutdown acknowledged. Session terminated.", config)
             break
 
         intent = detect_intent(user_input)
-        print(f"[DEBUG] intent={intent}")
+        log.debug("CLI intent: %s", intent.name if intent else "unresolved")
 
         # Predictive context handling
         if not intent and context_state["last_focus"]:
@@ -451,7 +454,9 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
                         "File scan initiated. Security analysis in progress.",
                         config,
                     )
-                    findings = run_file_scan(config)
+                    if not _ask_yes_no("Start the installed provider's Surface Security Scan? This scans provider-defined quick-scan locations and does not authorize repair or a Full-System Sweep.", config):
+                        continue
+                    findings = run_file_scan(config, user_authorized=True)
                 elif intent.name == "run_perf_scan":
                     aida_say_text(
                         "Performance scan initiated. Preliminary system assessment in progress.",
@@ -490,10 +495,10 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
             if not findings:
                 if intent.name == "run_file_scan":
                     aida_say_text(
-                        "No active threats detected in Defender quick scan scope.",
+                        "The provider returned no verifiable scan result; security status remains unknown.",
                         config,
                     )
-                    aida_say_text("Security scan complete. Standing by.", config)
+                    aida_say_text("Security status requires verification. Standing by.", config)
                 else:
                     aida_say_text(
                         "Scan complete. No surface-level anomalies detected.",
@@ -570,7 +575,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
 
             if intent.name == "run_file_scan":
                 aida_say_text(summary_text, config)
-                aida_say_text("Security scan complete. Standing by.", config)
+                aida_say_text("Security status requires verification. Standing by.", config)
 
             elif intent.name == "run_perf_scan":
                 aida_say_text(
@@ -610,11 +615,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
                 )
 
                 if repair_recommendation:
-                    if _ask_yes_no(repair_recommendation + " Proceed?", config):
-                        aida_say_text(
-                            "To execute system file check, run SFC /scannow in an elevated command prompt.",
-                            config,
-                        )
+                    aida_say_text(repair_recommendation, config)
 
 # Speak summarized findings (limited to avoid overload)
                 if summary_lines:
@@ -740,7 +741,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
 
             if context_state["last_scan_type"] == "run_perf_scan":
                 aida_say_text(
-                    f"Last performance scan ran {time_text} and detected moderate system load.",
+                    f"Last performance scan ran {time_text}. " + " ".join(_summarize_findings(context_state["last_findings"])),
                     config,
                 )
             elif context_state["last_scan_type"] == "run_quickscan":
@@ -750,7 +751,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
                 )
             elif context_state["last_scan_type"] == "run_file_scan":
                 aida_say_text(
-                    f"Last security scan ran {time_text} and reported no active threats.",
+                    f"Last security scan was requested {time_text}. " + " ".join(_summarize_findings(context_state["last_findings"])),
                     config,
                 )
             continue

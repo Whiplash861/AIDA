@@ -21,6 +21,10 @@ class MaintenanceRule:
 DEFAULT_PROTECTED_PATHS = (
     "aida/artificer/policy.py",
     "aida/artificer/warden.py",
+    "aida/artificer/forge.py",
+    "aida/artificer/validator.py",
+    "aida/artificer/rollback.py",
+    "aida/artificer/state_file.py",
     "aida/artificer/codewright.py",
     "aida/artificer/developer_registry.py",
     "aida/artificer/consent.py",
@@ -101,12 +105,12 @@ class ArtificerPolicy:
 
     def _normalize(self, path: str | Path) -> str:
         candidate = Path(path)
-        if candidate.is_absolute():
-            try:
-                candidate = candidate.resolve().relative_to(self.source_root)
-            except ValueError:
-                return str(candidate.resolve()).replace("\\", "/").lower()
-        return str(candidate).replace("\\", "/").lstrip("./").lower()
+        resolved = (candidate if candidate.is_absolute() else self.source_root / candidate).resolve()
+        try:
+            relative = resolved.relative_to(self.source_root)
+        except ValueError:
+            return "<outside-source-root>"
+        return relative.as_posix().lower()
 
     def is_protected(self, path: str | Path) -> bool:
         normalized = self._normalize(path)

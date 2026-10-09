@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -37,8 +38,8 @@ class EvidenceNavigationService:
         self.memory = memory
         self.launcher = launcher or _launch
         self.clock = clock
-        self.max_files = max(100, max_files)
-        self.timeout_seconds = max(1.0, timeout_seconds)
+        self.max_files = max(1, max_files)
+        self.timeout_seconds = max(0.01, timeout_seconds)
 
     def open_containing_folder(self, path: str | Path) -> Path:
         target = Path(path).expanduser().resolve()
@@ -48,7 +49,7 @@ class EvidenceNavigationService:
         if os.name == "nt":
             self.launcher(["explorer.exe", str(folder)])
         else:
-            self.launcher(["xdg-open", str(folder)])
+            self.launcher(["open" if sys.platform == "darwin" else "xdg-open", str(folder)])
         self._log(
             "EVIDENCE_FOLDER_OPENED",
             f"Opened the containing folder for {target.name}.",
@@ -82,6 +83,10 @@ class EvidenceNavigationService:
         cancel_check: CancelCheck | None = None,
     ) -> EvidenceLocateResult:
         started = self.clock()
+        def budget_check():
+            _raise_if_cancelled(cancel_check)
+            if self.clock() - started >= self.timeout_seconds:
+                raise _BudgetExceeded()
         requested = Path(requested_path).expanduser()
         try:
             resolved_requested = requested.resolve()
@@ -94,11 +99,16 @@ class EvidenceNavigationService:
         if resolved_requested.is_file():
             current_hash = None
             if expected_sha256:
-                current_hash = _sha256(resolved_requested, cancel_check)
-            exact = (
-                not expected_sha256
-                or current_hash.lower() == expected_sha256.lower()
-            )
+                try:
+                    current_hash = _sha256(resolved_requested, cancel_check, budget_check=budget_check)
+                except _BudgetExceeded:
+                    return self._result(resolved_requested, [], files_examined=1, started=started, truncated=True)
+                except OSError:
+                    current_hash = None
+            stat = resolved_requested.stat()
+            exact = ((not expected_sha256 or current_hash is not None and current_hash.lower() == expected_sha256.lower())
+                     and (expected_size is None or stat.st_size == expected_size)
+                     and (expected_modified_ns is None or stat.st_mtime_ns == expected_modified_ns))
             if exact:
                 matches.append(
                     EvidenceMatch(
@@ -135,71 +145,76 @@ class EvidenceNavigationService:
                 continue
             seen_dirs.add(folder_key)
             try:
-                entries = list(os.scandir(folder))
+                iterator = os.scandir(folder)
             except (OSError, PermissionError):
                 continue
-            for entry in entries:
-                _raise_if_cancelled(cancel_check)
-                if files_examined >= self.max_files:
-                    truncated = True
-                    break
-                if self.clock() - started >= self.timeout_seconds:
-                    truncated = True
-                    break
-                try:
-                    if entry.is_symlink():
-                        continue
-                    if entry.is_dir(follow_symlinks=False):
-                        queue.append(Path(entry.path))
-                        continue
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                    files_examined += 1
-                    candidate = Path(entry.path)
-                    stat = entry.stat(follow_symlinks=False)
-                except (OSError, PermissionError):
-                    continue
-
-                same_name = candidate.name.lower() == filename
-                same_size = expected_size is None or stat.st_size == expected_size
-                same_modified = (
-                    expected_modified_ns is None
-                    or stat.st_mtime_ns == expected_modified_ns
-                )
-                if expected_sha256 and same_size and (same_name or expected_size is not None):
+            with iterator as entries:
+                for entry in entries:
+                    _raise_if_cancelled(cancel_check)
+                    if files_examined >= self.max_files:
+                        truncated = True
+                        break
+                    if self.clock() - started >= self.timeout_seconds:
+                        truncated = True
+                        break
                     try:
-                        candidate_hash = _sha256(candidate, cancel_check)
-                    except OSError:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            queue.append(Path(entry.path))
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        files_examined += 1
+                        candidate = Path(entry.path)
+                        stat = entry.stat(follow_symlinks=False)
+                    except (OSError, PermissionError):
                         continue
-                    if candidate_hash.lower() == expected_sha256.lower():
+
+                    candidate_hash = None
+                    same_name = candidate.name.lower() == filename
+                    same_size = expected_size is None or stat.st_size == expected_size
+                    same_modified = (
+                        expected_modified_ns is None
+                        or stat.st_mtime_ns == expected_modified_ns
+                    )
+                    if expected_sha256 and same_size and (same_name or expected_size is not None):
+                        try:
+                            candidate_hash = _sha256(candidate, cancel_check, budget_check=budget_check)
+                        except _BudgetExceeded:
+                            truncated = True
+                            break
+                        except OSError:
+                            continue
+                        if candidate_hash.lower() == expected_sha256.lower():
+                            matches.append(
+                                EvidenceMatch(
+                                    path=candidate,
+                                    match_type=EvidenceMatchType.EXACT_HASH,
+                                    confidence=1.0,
+                                    reason="The candidate matches the recorded SHA-256 identity.",
+                                    sha256=candidate_hash,
+                                )
+                            )
+                            continue
+                    if not expected_sha256 and expected_size is not None and expected_modified_ns is not None and same_name and same_size and same_modified:
                         matches.append(
                             EvidenceMatch(
                                 path=candidate,
-                                match_type=EvidenceMatchType.EXACT_HASH,
-                                confidence=1.0,
-                                reason="The candidate matches the recorded SHA-256 identity.",
-                                sha256=candidate_hash,
+                                match_type=EvidenceMatchType.EXACT_IDENTITY,
+                                confidence=0.92,
+                                reason="Filename, size, and modification identity match; no full hash was available.",
                             )
                         )
-                        continue
-                if same_name and same_size and same_modified:
-                    matches.append(
-                        EvidenceMatch(
-                            path=candidate,
-                            match_type=EvidenceMatchType.EXACT_IDENTITY,
-                            confidence=0.92,
-                            reason="Filename, size, and modification identity match; no full hash was available.",
+                    elif same_name:
+                        matches.append(
+                            EvidenceMatch(
+                                path=candidate,
+                                match_type=EvidenceMatchType.POSSIBLE_FILENAME,
+                                confidence=0.45,
+                                reason="The filename matches, but the SHA-256 identity differs." if candidate_hash and expected_sha256 else "The filename matches, but a complete matching identity was not established.",
+                            )
                         )
-                    )
-                elif same_name:
-                    matches.append(
-                        EvidenceMatch(
-                            path=candidate,
-                            match_type=EvidenceMatchType.POSSIBLE_FILENAME,
-                            confidence=0.45,
-                            reason="The filename matches, but the complete recorded identity does not.",
-                        )
-                    )
 
         matches = sorted(
             _deduplicate(matches),
@@ -340,12 +355,22 @@ def _search_roots(
     return tuple(output)
 
 
-def _sha256(path: Path, cancel_check: CancelCheck | None) -> str:
+class _BudgetExceeded(Exception):
+    pass
+
+
+def _sha256(path: Path, cancel_check: CancelCheck | None, *, budget_check=None) -> str:
     digest = hashlib.sha256()
+    before = path.stat()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             _raise_if_cancelled(cancel_check)
+            if budget_check is not None:
+                budget_check()
             digest.update(block)
+    after = path.stat()
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise OSError("Evidence file changed while hashing")
     return digest.hexdigest()
 
 

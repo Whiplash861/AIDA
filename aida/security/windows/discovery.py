@@ -45,7 +45,7 @@ class WindowsAntivirusDiscovery:
                 products=products,
                 selected_product=None,
                 provider=UnsupportedAntivirusProvider(
-                    "No active antivirus provider"
+                    "No active antivirus provider", active=False
                 ),
                 detail=(
                     "Windows Security Center did not report an active "
@@ -63,7 +63,8 @@ class WindowsAntivirusDiscovery:
             )
         else:
             provider = UnsupportedAntivirusProvider(
-                selected.display_name
+                selected.display_name, active=selected.active,
+                signatures_current=selected.signatures_current,
             )
             detail = (
                 f"{selected.display_name} is active, but AIDA does not "

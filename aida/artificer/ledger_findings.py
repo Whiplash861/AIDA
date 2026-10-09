@@ -136,6 +136,11 @@ class LedgerFindingsMixin:
                 resolved += 1
         return resolved
 
+    def get_finding(self, finding_id: str) -> ArtificerFinding | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute("SELECT payload_json FROM artificer_findings WHERE finding_id=?", (finding_id,)).fetchone()
+        return finding_from_record(json.loads(row[0])) if row else None
+
     def list_findings(
         self, *, status: str | None = "open", limit: int = 100
     ) -> list[ArtificerFinding]:
@@ -154,6 +159,8 @@ class LedgerFindingsMixin:
         ]
 
     def set_finding_status(self, finding_id: str, status: str) -> None:
+        if status not in {"open", "resolved", "dismissed", "deferred"}:
+            raise ValueError("Unsupported finding status")
         with self._lock, self._connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM artificer_findings WHERE finding_id=?",
@@ -218,6 +225,8 @@ class LedgerFindingsMixin:
         developer_id: str,
         reason: str,
     ) -> None:
+        if decision not in {"approved", "approved_for_staging", "rejected", "deferred"}:
+            raise ValueError("Unsupported proposal decision")
         decided_at = utc_now().isoformat()
         with self._lock, self._connect() as connection:
             row = connection.execute(
@@ -227,13 +236,15 @@ class LedgerFindingsMixin:
             if not row:
                 raise KeyError(proposal_id)
             payload = json.loads(row["payload_json"])
+            if payload["status"] not in {"pending", "deferred"}:
+                raise ValueError("A decided proposal cannot be decided again")
             payload["status"] = decision
             connection.execute(
                 """UPDATE upgrade_proposals
                 SET status=?,payload_json=? WHERE proposal_id=?""",
                 (decision, self._json(payload), proposal_id),
             )
-            connection.execute(
+            cursor = connection.execute(
                 """INSERT INTO proposal_decisions(
                     proposal_id,decision,developer_id,reason,decided_at_utc
                 ) VALUES(?,?,?,?,?)""",
@@ -245,6 +256,7 @@ class LedgerFindingsMixin:
                     decided_at,
                 ),
             )
+            self._chain(connection, "proposal_decision_record", str(cursor.lastrowid), {"proposal_id": proposal_id, "decision": decision})
             self._chain(
                 connection,
                 "proposal_decision",

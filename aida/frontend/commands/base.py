@@ -5,6 +5,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aida.security.orchestrator import SecurityScanOutcome
 
 
 class CommandCategory(Enum):
@@ -15,12 +19,27 @@ class CommandCategory(Enum):
     APPLICATION = auto()
     NAVIGATION = auto()
     GENERAL = auto()
+    TECHNOMANCER = auto()
 
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
     transcript_text: str
     speech_text: str | None = None
+    security_outcome: SecurityScanOutcome | None = None
+    partial: bool = False
+
+    @property
+    def successful(self) -> bool:
+        if self.partial:
+            return False
+        if self.security_outcome is None:
+            return True
+        from aida.security.models import SecurityScanState
+        return (
+            self.security_outcome.status.state is SecurityScanState.COMPLETED
+            and self.security_outcome.detections_available
+        )
 
 
 class CommandExecutor(ABC):
@@ -58,3 +77,6 @@ class CommandExecutor(ABC):
     @abstractmethod
     def execute(self) -> CommandResult:
         raise NotImplementedError
+
+    def shutdown(self) -> None:
+        """Stop local monitoring where supported; never infer provider cancellation."""

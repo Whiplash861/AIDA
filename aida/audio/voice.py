@@ -29,13 +29,13 @@ _AIDA_SPOKEN_NAME = "Ada"
 # every runtime uses one canonical ElevenLabs implementation.
 _voice_lock = threading.RLock()
 
-# Reuse HTTP connections for speed.
-_session = requests.Session()
-
 # Small in-memory LRU cache for repeated lines.
 _CACHE_MAX_ITEMS = 32
 _cache: "OrderedDict[str, bytes]" = OrderedDict()
 _cache_lock = threading.Lock()
+_cache_times: dict[str, float] = {}
+_CACHE_MAX_BYTES = 32 * 1024 * 1024
+_CACHE_TTL_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -73,8 +73,9 @@ def synthesize_text(
         log.warning("ElevenLabs API key or voice ID missing. Skipping TTS synthesis.")
         return None
 
-    with _voice_lock:
-        return _get_tts_bytes_cached(normalized, api_key, voice_id, settings)
+    # Playback is serialized by speak_text; independent gateway devices must
+    # not block behind another device's network request.
+    return _get_tts_bytes_cached(normalized, api_key, voice_id, settings)
 
 
 def speak_text(
@@ -88,7 +89,6 @@ def speak_text(
     - Blocking playback (prevents overlapping lines)
     - Thread-safe serialization
     - Retries on transient failures (429/5xx/network)
-    - Connection pooling via requests.Session
     - Small LRU cache to avoid repeated provider calls
     """
     normalized = _normalize_text(text)
@@ -122,6 +122,9 @@ def _get_tts_bytes_cached(
     key = _cache_key(text, voice_id, settings)
 
     with _cache_lock:
+        for expired in [item for item, seen in _cache_times.items() if time.monotonic() - seen > _CACHE_TTL_SECONDS]:
+            _cache.pop(expired, None)
+            _cache_times.pop(expired, None)
         if key in _cache:
             _cache.move_to_end(key)
             return _cache[key]
@@ -132,9 +135,11 @@ def _get_tts_bytes_cached(
 
     with _cache_lock:
         _cache[key] = audio
+        _cache_times[key] = time.monotonic()
         _cache.move_to_end(key)
-        while len(_cache) > _CACHE_MAX_ITEMS:
-            _cache.popitem(last=False)
+        while len(_cache) > _CACHE_MAX_ITEMS or sum(len(value) for value in _cache.values()) > _CACHE_MAX_BYTES:
+            removed, _ = _cache.popitem(last=False)
+            _cache_times.pop(removed, None)
 
     return audio
 
@@ -153,7 +158,7 @@ def _request_tts_with_retries(
     voice_id: str,
     settings: VoiceSettings,
 ) -> Optional[bytes]:
-    max_attempts = 4
+    max_attempts = 2
     base_sleep = 0.6
     last_err: Optional[str] = None
 
@@ -164,9 +169,9 @@ def _request_tts_with_retries(
                 return audio
             last_err = "No audio returned (non-200, 429, 5xx, or empty body)."
         except (requests.Timeout, requests.ConnectionError) as exc:
-            last_err = f"Network error: {exc}"
+            last_err = "Provider network error."
         except Exception as exc:
-            last_err = f"Unexpected error: {exc}"
+            last_err = "Provider request failed."
 
         if attempt < max_attempts:
             sleep_s = base_sleep * (1.7 ** (attempt - 1))
@@ -205,53 +210,48 @@ def _request_tts(
     }
 
     log.info("Sending TTS request to ElevenLabs. Text length: %d", len(text))
-    resp = _session.post(url, headers=headers, json=payload, timeout=(5, 45))
-
-    if resp.status_code == 429:
-        log.warning("ElevenLabs rate-limited (429).")
-        return None
-    if 500 <= resp.status_code <= 599:
-        log.warning("ElevenLabs server error (%d).", resp.status_code)
-        return None
-
-    if resp.status_code != 200:
-        body = resp.text
-        log.error(
-            "ElevenLabs TTS failed.\nStatus: %d\nResponse:\n%s",
-            resp.status_code,
-            body,
-        )
-        raise RuntimeError(f"ElevenLabs returned {resp.status_code}:\n{body}")
-
-    data = resp.content
+    deadline = time.monotonic() + 15
+    with requests.post(url, headers=headers, json=payload, timeout=(3, 12), stream=True) as resp:
+        if resp.status_code == 429 or 500 <= resp.status_code <= 599:
+            log.warning("ElevenLabs temporarily unavailable (HTTP %d).", resp.status_code)
+            return None
+        if resp.status_code != 200:
+            raise RuntimeError(f"ElevenLabs returned HTTP {resp.status_code}.")
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=16384):
+            if time.monotonic() > deadline:
+                raise requests.Timeout("Voice download exceeded its time budget.")
+            total += len(chunk)
+            if total > 12 * 1024 * 1024:
+                raise RuntimeError("AIDA voice audio exceeds the supported size.")
+            chunks.append(chunk)
+        data = b"".join(chunks)
     if not data:
-        log.error("ElevenLabs returned empty audio.")
+        log.warning("ElevenLabs returned empty audio.")
         return None
-
-    log.info("TTS response OK. Content length: %d bytes", len(data))
     return data
 
 
 def _play_mp3_bytes_blocking(audio_bytes: bytes) -> None:
-    """Write generated audio to the deterministic temp cache and play it."""
+    """Play a uniquely owned temporary file and discard it after playback."""
     # Desktop playback is the only operation that needs playsound. Keeping the
     # import here allows the shared synthesis module to run in a headless
     # Services Gateway container without installing desktop audio dependencies.
     from playsound import playsound  # type: ignore
 
-    tmp_dir = os.path.join(tempfile.gettempdir(), "AIDA_TTS_CACHE")
-    os.makedirs(tmp_dir, exist_ok=True)
-
-    h = hashlib.sha256(audio_bytes).hexdigest()
-    mp3_path = os.path.join(tmp_dir, f"aida_{h}.mp3")
-
+    descriptor, mp3_path = tempfile.mkstemp(prefix="aida_tts_", suffix=".mp3")
     try:
-        if not os.path.exists(mp3_path):
-            with open(mp3_path, "wb") as file_obj:
-                file_obj.write(audio_bytes)
+        with os.fdopen(descriptor, "wb") as audio_file:
+            audio_file.write(audio_bytes)
         playsound(mp3_path, block=True)
-    except Exception as exc:
-        log.exception("Error playing TTS audio: %s", exc)
+    except Exception:
+        log.warning("AIDA audio playback failed.")
+    finally:
+        try:
+            os.unlink(mp3_path)
+        except OSError:
+            log.warning("Temporary AIDA speech audio could not be removed.")
 
 
 def set_quiet_logs() -> None:

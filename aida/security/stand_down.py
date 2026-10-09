@@ -74,6 +74,18 @@ class StandDownService:
         self.memory = memory
         self.identity_inspector = identity_inspector
 
+    def prepare_identity(self, path: str | Path) -> dict[str, Any]:
+        target = Path(path).expanduser().resolve()
+        if not target.is_file():
+            raise FileNotFoundError(f"Stand Down target is not a file: {target}")
+        before = target.stat()
+        digest = _sha256(target)
+        after = target.stat()
+        if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+            raise RuntimeError("Stand Down target changed while its identity was collected")
+        return {"target_path": str(target), "sha256": digest,
+                "file_size": after.st_size, "modified_ns": after.st_mtime_ns}
+
     def create(
         self,
         path: str | Path,
@@ -87,6 +99,7 @@ class StandDownService:
         file_version: str | None = None,
         analysis_snapshot: dict[str, Any] | None = None,
         alarm_count: int = 0,
+        expected_identity: dict[str, Any] | None = None,
     ) -> StandDownRecord:
         target = Path(path).expanduser().resolve()
         if not target.is_file():
@@ -111,7 +124,9 @@ class StandDownService:
             snapshot.setdefault("file_version", file_version)
             snapshot = {key: value for key, value in snapshot.items() if value is not None}
 
-        stat = target.stat()
+        identity = self.prepare_identity(target)
+        if expected_identity is not None and identity != expected_identity:
+            raise RuntimeError("Stand Down was blocked because the reviewed file identity changed. Prepare a new approval.")
         now = datetime.now(timezone.utc)
         expires_at = (
             None
@@ -121,9 +136,9 @@ class StandDownService:
         record = StandDownRecord(
             exception_id=uuid4().hex,
             path=target,
-            sha256=_sha256(target),
-            file_size=stat.st_size,
-            modified_ns=stat.st_mtime_ns,
+            sha256=identity["sha256"],
+            file_size=identity["file_size"],
+            modified_ns=identity["modified_ns"],
             signer=signer,
             publisher=publisher,
             signer_thumbprint=signer_thumbprint,
@@ -209,6 +224,20 @@ class StandDownService:
             promote=True,
         )
         return record
+
+    def evaluate_detection(self, detection: object) -> StandDownEvaluation:
+        from aida.security.detection_intelligence import _parse_time
+
+        path = getattr(detection, "file_path", None)
+        if path is None:
+            return StandDownEvaluation(False, StandDownStatus.REVOKED, "No exact file identity was available.", None)
+        record = self.find_active(path)
+        if record is None:
+            return self.evaluate(path)
+        metadata = getattr(detection, "metadata", {})
+        alarm_time = _parse_time(metadata.get("last_status_change")) or _parse_time(metadata.get("initial_detection_time"))
+        count = record.alarm_count_at_creation + int(alarm_time is not None and alarm_time > record.created_at)
+        return self.evaluate(path, current_alarm_count=count)
 
     def evaluate(
         self,

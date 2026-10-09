@@ -5,6 +5,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+SCHEMA_VERSION = 2
+
+
+class ClosingConnection(sqlite3.Connection):
+    """A connection context commits/rolls back and releases its file handle."""
+
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
 
 _SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -203,10 +215,14 @@ class MemoryDatabase:
             self.path,
             timeout=10.0,
             isolation_level=None,
+            factory=ClosingConnection,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 10000")
+        # Bound growth without silently removing user memories or governance records.
+        page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        connection.execute(f"PRAGMA max_page_count = {256 * 1024 * 1024 // page_size}")
         connection.execute("PRAGMA secure_delete = ON")
         try:
             connection.execute("PRAGMA trusted_schema = OFF")
@@ -233,8 +249,22 @@ class MemoryDatabase:
 
     def _initialize(self) -> None:
         with self.connect() as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeError("Memory database requires a newer AIDA version")
             connection.executescript(_SCHEMA)
-            self._migrate(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._migrate(connection)
+                connection.execute("""CREATE TABLE IF NOT EXISTS memory_event_links (
+                    memory_id TEXT NOT NULL REFERENCES memory_items(memory_id) ON DELETE CASCADE,
+                    event_id TEXT NOT NULL REFERENCES event_journal(event_id) ON DELETE CASCADE,
+                    PRIMARY KEY(memory_id,event_id))""")
+                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     @staticmethod
     def _migrate(connection: sqlite3.Connection) -> None:

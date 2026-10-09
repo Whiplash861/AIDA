@@ -38,13 +38,13 @@ class OpenAITranscriptionProvider:
             )
         try:
             with candidate.open("rb") as audio_file:
-                result = OpenAI().audio.transcriptions.create(
+                result = OpenAI(timeout=25.0, max_retries=0).audio.transcriptions.create(
                     model=self.model,
                     file=audio_file,
                 )
         except Exception as exc:
             raise TranscriptionUnavailableError(
-                f"Voice transcription failed: {exc}"
+                "Voice transcription is temporarily unavailable."
             ) from exc
         text = str(getattr(result, "text", "")).strip()
         if not text:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from starlette.responses import JSONResponse
+from aida.services_gateway.limits import BodyLimitMiddleware, RequestLimits
 
 from aida.config import APP_FULL_NAME, VERSION
 
@@ -20,7 +24,16 @@ from .service import MobileAidaService, MobileBrainUnavailable
 
 
 def create_app(service: MobileAidaService | None = None) -> FastAPI:
-    mobile_service = service or MobileAidaService()
+    mobile_service = service
+    service_lock = threading.Lock()
+    limits = RequestLimits(concurrency=4, per_minute=30)
+
+    def current_service():
+        nonlocal mobile_service
+        with service_lock:
+            if mobile_service is None:
+                mobile_service = MobileAidaService()
+        return mobile_service
 
     application = FastAPI(
         title="AIDA Mobile Bridge",
@@ -29,6 +42,12 @@ def create_app(service: MobileAidaService | None = None) -> FastAPI:
         ),
         version=VERSION,
     )
+
+    application.add_middleware(BodyLimitMiddleware)
+
+    @application.exception_handler(RequestValidationError)
+    async def invalid_request(_request, _error):
+        return JSONResponse({"detail": "Request does not match the mobile bridge contract."}, status_code=422)
 
     application.add_middleware(
         CORSMiddleware,
@@ -40,7 +59,7 @@ def create_app(service: MobileAidaService | None = None) -> FastAPI:
 
     @application.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return mobile_service.health()
+        return current_service().health()
 
     @application.get(
         "/v1/capabilities",
@@ -48,7 +67,7 @@ def create_app(service: MobileAidaService | None = None) -> FastAPI:
         dependencies=[Depends(verify_mobile_access)],
     )
     def capabilities() -> CapabilitiesResponse:
-        return mobile_service.capabilities()
+        return current_service().capabilities()
 
     @application.get(
         "/v1/status",
@@ -56,7 +75,7 @@ def create_app(service: MobileAidaService | None = None) -> FastAPI:
         dependencies=[Depends(verify_mobile_access)],
     )
     def operational_status() -> OperationalStatusResponse:
-        return mobile_service.operational_status()
+        return current_service().operational_status()
 
     @application.get(
         "/v1/activity",
@@ -66,7 +85,7 @@ def create_app(service: MobileAidaService | None = None) -> FastAPI:
     def activity(
         limit: int = Query(default=20, ge=1, le=50),
     ) -> ActivityResponse:
-        return mobile_service.activity(limit)
+        return current_service().activity(limit)
 
     @application.post(
         "/v1/chat",
@@ -75,7 +94,8 @@ def create_app(service: MobileAidaService | None = None) -> FastAPI:
     )
     def chat(request: ChatRequest) -> ChatResponse:
         try:
-            return mobile_service.chat(request)
+            with limits.acquire("paired-desktop-client"):
+                return current_service().chat(request)
         except MobileBrainUnavailable as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

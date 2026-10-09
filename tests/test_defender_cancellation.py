@@ -1,3 +1,5 @@
+import base64
+import re
 from aida.security.windows.defender_cancel import (
     ActiveDefenderScan,
     DefenderCancelableScan,
@@ -55,7 +57,10 @@ def test_active_scan_and_provider_confirmed_cancel():
     )
 
     assert result.requested and result.confirmed
-    assert "-Scan -Cancel" in runner.scripts[1]
+    encoded = re.search(r"'-EncodedCommand','([^']+)'", runner.scripts[1]).group(1)
+    child = base64.b64decode(encoded).decode("utf-16-le")
+    assert "-Scan -Cancel" in child
+    assert "$active.ScanId -ne '{1}'" in child
     assert "-Verb RunAs" in runner.scripts[1]
     assert runner.timeouts[1] == 120.0
     assert "{1}" in runner.scripts[2]

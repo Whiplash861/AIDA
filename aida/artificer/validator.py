@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
-import compileall
+import json
+import csv
+import io
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -58,7 +60,11 @@ class Validator:
                 except SyntaxError as exc:
                     checks.append(ValidationCheck("ast_equivalence", False, str(exc)))
 
-        compiled = compileall.compile_file(str(candidate), quiet=1, force=True)
+        try:
+            compile(source, str(candidate), "exec")
+            compiled = True
+        except (SyntaxError, ValueError):
+            compiled = False
         checks.append(
             ValidationCheck(
                 "compile",
@@ -68,10 +74,34 @@ class Validator:
         )
         return ValidationReport(all(check.passed for check in checks), tuple(checks))
 
+    def validate_data_file(self, path: Path) -> ValidationReport:
+        try:
+            source = path.read_text(encoding="utf-8")
+            if not source.strip():
+                raise ValueError("Empty dataset")
+            if path.suffix.lower() in {".json", ".geojson"}:
+                payload = json.loads(source, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+                if not isinstance(payload, (dict, list)):
+                    raise ValueError("Dataset must be an object or array")
+                if path.suffix.lower() == ".geojson" and (not isinstance(payload, dict) or payload.get("type") not in {"FeatureCollection", "Feature", "GeometryCollection", "Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon"}):
+                    raise ValueError("Unrecognized GeoJSON type")
+            elif path.suffix.lower() == ".jsonl":
+                for line in source.splitlines():
+                    json.loads(line)
+            elif path.suffix.lower() == ".csv":
+                rows = list(csv.reader(io.StringIO(source)))
+                if not rows or any(len(row) != len(rows[0]) for row in rows):
+                    raise ValueError("CSV rows must have consistent columns")
+            else:
+                raise ValueError("No schema validator is registered for this dataset type")
+        except (OSError, ValueError, csv.Error) as exc:
+            return ValidationReport(False, (ValidationCheck("data_schema", False, str(exc)),))
+        return ValidationReport(True, (ValidationCheck("data_schema", True, "Structured data parsed; rule-specific tests remain required"),))
+
     def run_tests(
         self, source_root: str | Path, *, test_paths: tuple[str, ...] = ()
     ) -> ValidationCheck:
-        command = [sys.executable, "-m", "pytest", "-q"]
+        command = [sys.executable, "-B", "-m", "pytest", "-p", "no:cacheprovider", "-q"]
         command.extend(test_paths)
         try:
             result = subprocess.run(

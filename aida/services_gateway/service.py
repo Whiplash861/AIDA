@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +42,7 @@ class DirectiveRouteResult:
     confidence: float | None = None
     requires_confirmation: bool = False
     target_path: str | None = None
-    slots: dict[str, Any] | None = None
+    slots: dict[str, Any] = field(default_factory=dict)
     clarification_text: str = ""
 
 
@@ -68,8 +71,10 @@ class AidaServicesGateway:
     def __init__(self) -> None:
         self._brain: AIDABrain | None = None
         self._transcriber: OpenAITranscriptionProvider | None = None
-        self._config = get_config()
-        self._routers: dict[str, CommandRouter] = {}
+        self._config = get_config(create_directories=False)
+        self._routers: OrderedDict[str, tuple[float, CommandRouter]] = OrderedDict()
+        self._router_lock = threading.RLock()
+        self._provider_lock = threading.Lock()
 
     def health(self) -> dict[str, Any]:
         return {
@@ -90,17 +95,21 @@ class AidaServicesGateway:
             raise ValueError("Directive input cannot be empty.")
 
         runtime_context = context or {}
-        instance_id = str(runtime_context.get("instanceId") or "anonymous").strip()
-        router = self._routers.get(instance_id)
-        if router is None:
-            router = CommandRouter()
-            self._routers[instance_id] = router
-            if len(self._routers) > 128:
-                oldest_key = next(iter(self._routers))
-                if oldest_key != instance_id:
-                    self._routers.pop(oldest_key, None)
-
-        routed = router.route(clean)
+        # HTTP callers cannot choose sessionId: the authenticated boundary supplies it.
+        identity = str(runtime_context.get("sessionId") or runtime_context.get("instanceId") or "anonymous")[:256]
+        conversation = str(runtime_context.get("conversationId") or "default")[:96]
+        key = f"{identity}:{conversation}"
+        with self._router_lock:
+            now = time.monotonic()
+            for expired in [name for name, (seen, _) in self._routers.items() if now - seen > 1800]:
+                self._routers.pop(expired, None)
+            existing = self._routers.get(key)
+            router = existing[1] if existing else CommandRouter()
+            self._routers[key] = (now, router)
+            self._routers.move_to_end(key)
+            while len(self._routers) > 128:
+                self._routers.popitem(last=False)
+            routed = router.route(clean)
         if routed is None:
             return DirectiveRouteResult(matched=False)
 
@@ -115,6 +124,11 @@ class AidaServicesGateway:
             slots=dict(routed.slots),
             clarification_text=routed.clarification_text,
         )
+
+    def clear_session(self, session_id: str) -> None:
+        with self._router_lock:
+            for key in [name for name in self._routers if name.startswith(session_id + ":")]:
+                self._routers.pop(key, None)
 
     def reason(
         self,
@@ -176,13 +190,15 @@ class AidaServicesGateway:
                 pass
 
     def _get_brain(self) -> AIDABrain:
-        if self._brain is None:
-            self._brain = AIDABrain()
+        with self._provider_lock:
+            if self._brain is None:
+                self._brain = AIDABrain()
         return self._brain
 
     def _get_transcriber(self) -> OpenAITranscriptionProvider:
-        if self._transcriber is None:
-            self._transcriber = OpenAITranscriptionProvider()
+        with self._provider_lock:
+            if self._transcriber is None:
+                self._transcriber = OpenAITranscriptionProvider()
         return self._transcriber
 
     def _reasoning_configured(self) -> bool:

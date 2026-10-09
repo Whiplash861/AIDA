@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Iterable
+from threading import RLock
+from dataclasses import replace
 
 from aida.applications.monitor import ApplicationHealthMonitor
 from aida.applications.models import RepairAction
+from aida.aegis.bootstrap import build_aegis_engine
+from aida.aegis.scan_modes import AegisScanStrategy
+from aida.frontend.commands.aegis import AegisSecurityScanExecutor, AegisSecurityStatusExecutor
+from aida.frontend.commands.aegis_review import AegisReviewExecutor
+from aida.frontend.commands.remote_security import AegisRemoteSecurityExecutor, RemoteSecurityOperation
+from aida.frontend.commands.technomancer import TechnomancerCommandExecutor
+from aida.technomancer.engine import TechnomancerEngine
 from aida.applications.repair import ApplicationRepairPlanner
 from aida.assistance.planner import GuidedResponsePlanner
 from aida.assistance.store import AssistanceTaskStore
@@ -73,7 +82,12 @@ class CommandRegistry:
         response_planner: GuidedResponsePlanner | None = None,
         remediation_service: DefenderRemediationService | None = None,
         detection_reader: DetectionReader | None = None,
+        aegis_engine=None,
+        technomancer_engine=None,
     ) -> None:
+        self.config = config
+        self._aegis = aegis_engine
+        self._technomancer = technomancer_engine
         if memory_service is None:
             database = MemoryDatabase(config.memory_db_path)
             self.memory = MemoryService(database)
@@ -244,12 +258,70 @@ class CommandRegistry:
             ),
         }
 
+        self._register_engines()
+
+    @property
+    def aegis(self):
+        with self._engine_lock:
+            if self._aegis is None:
+                self._aegis = build_aegis_engine(self.config, memory=self.memory, threat_analysis=self.threat_analysis,
+                                               detection_reader=self._detection_reader)
+            return self._aegis
+
+    @property
+    def technomancer(self):
+        with self._engine_lock:
+            if self._technomancer is None:
+                self._technomancer = TechnomancerEngine.from_config(self.config)
+            return self._technomancer
+
+    def _register_engines(self) -> None:
+        self._engine_lock = RLock()
+        for command_type, operation in {
+            CommandType.AEGIS_BASELINE_REVIEW: "baseline", CommandType.AEGIS_BASELINE_ACCEPT: "accept",
+            CommandType.AEGIS_CASES: "cases", CommandType.AEGIS_CASE_RESOLVE: "resolve",
+        }.items():
+            self._factories[command_type] = lambda command, operation=operation: AegisReviewExecutor(
+                self.aegis, operation, command.slots, authorized=command.user_initiated and not command.requires_confirmation,
+            )
+        for command_type, strategy in {
+            CommandType.SECURITY_INTELLIGENT_SCAN: AegisScanStrategy.ADAPTIVE,
+            CommandType.SECURITY_SURFACE_SCAN: AegisScanStrategy.SURFACE,
+            CommandType.SECURITY_DEEP_SCAN: AegisScanStrategy.DEEP,
+            CommandType.SECURITY_FULL_SWEEP: AegisScanStrategy.FULL,
+        }.items():
+            self._factories[command_type] = lambda command, strategy=strategy: (
+                self._security_scan(strategy.provider_mode, command) if command.slots.get("recovery_task_id") else
+                AegisSecurityScanExecutor(self.aegis, strategy, lambda: self._security_scan(strategy.provider_mode, command))
+            )
+        self._factories[CommandType.SECURITY_STATUS] = lambda command: AegisSecurityStatusExecutor(self.aegis)
+        for command_type, operation in {
+            CommandType.SECURITY_REMOTE_INTRUSION_CHECK: RemoteSecurityOperation.INSPECT,
+            CommandType.SECURITY_REMOTE_SUPPORT_AUTHORIZE: RemoteSecurityOperation.AUTHORIZE_SUPPORT,
+            CommandType.SECURITY_REMOTE_SUPPORT_LIST: RemoteSecurityOperation.LIST_SUPPORT,
+            CommandType.SECURITY_REMOTE_SUPPORT_REVOKE: RemoteSecurityOperation.REVOKE_SUPPORT,
+            CommandType.SECURITY_REMOTE_ATTACKER_CONFIRM: RemoteSecurityOperation.CONFIRM_ATTACKER,
+            CommandType.SENTRY_ATTACK_CONFIRM: RemoteSecurityOperation.CONFIRM_SENTRY,
+        }.items():
+            self._factories[command_type] = lambda command, operation=operation: AegisRemoteSecurityExecutor(
+                self.aegis, operation, confirmations=self.confirmations, slots=command.slots, original_text=command.original_text,
+            )
+        for command_type, mode in {
+            CommandType.TECHNOMANCER_HEALTH: "health", CommandType.TECHNOMANCER_HARDWARE: "inventory",
+            CommandType.TECHNOMANCER_UPGRADES: "upgrades", CommandType.TECHNOMANCER_ADVISORIES: "advisories",
+            CommandType.TECHNOMANCER_BACKGROUND_ENABLE: "background_on", CommandType.TECHNOMANCER_BACKGROUND_DISABLE: "background_off",
+        }.items():
+            self._factories[command_type] = lambda command, mode=mode: TechnomancerCommandExecutor(
+                self.technomancer, mode, autonomy_enabled=lambda: self.autonomy.settings.enabled and not self.autonomy.settings.kill_switch_engaged,
+            )
+
     def _security_scan(
         self, mode: SecurityScanMode, command: RoutedCommand
     ) -> SecurityScanExecutor:
         return SecurityScanExecutor(
             mode=mode,
             authorization_reason=command.original_text,
+            user_authorized=command.user_initiated,
             target_path=(command.target_path if mode is SecurityScanMode.DEEP else None),
             memory_service=self.memory,
             task_ledger=self.task_ledger,
@@ -257,6 +329,11 @@ class CommandRegistry:
             recovery_task_id=(
                 str(command.slots.get("recovery_task_id"))
                 if command.slots.get("recovery_task_id")
+                else None
+            ),
+            recovery_provider_scan_id=(
+                str(command.slots["provider_scan_id"])
+                if command.slots.get("provider_scan_id")
                 else None
             ),
         )
@@ -297,6 +374,15 @@ class CommandRegistry:
         factory = self._factories.get(command.command_type)
         return None if factory is None else factory(command)
 
+    def prepare_authorization(self, command: RoutedCommand) -> RoutedCommand:
+        operation = {
+            CommandType.AEGIS_BASELINE_ACCEPT: "accept", CommandType.AEGIS_CASE_RESOLVE: "resolve",
+        }.get(command.command_type)
+        if operation is None:
+            return command
+        scope = self.aegis.review_authorization_scope(operation, command.slots)
+        return replace(command, slots={**command.slots, "_aegis_review_scope": scope})
+
     def get(self, command_type: CommandType) -> CommandExecutor | None:
         return self.resolve(RoutedCommand(command_type=command_type, original_text=""))
 
@@ -315,5 +401,5 @@ def _read_defender_detections() -> tuple[ProviderDetection, ...]:
     discovery = WindowsAntivirusDiscovery().discover()
     getter = getattr(discovery.provider, "get_detection_snapshot", None)
     if not callable(getter):
-        return ()
+        raise RuntimeError("The active provider does not expose detection evidence")
     return tuple(getter() or ())

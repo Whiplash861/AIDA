@@ -5,7 +5,7 @@ import getpass
 import json
 import platform
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
@@ -41,6 +41,10 @@ _PROMOTED_EVENT_TYPES = {
 }
 
 
+class MemoryConflictError(ValueError):
+    """The editor's snapshot no longer matches the stored memory."""
+
+
 class MemoryService:
     """User- and device-scoped operational memory with revision history."""
 
@@ -50,12 +54,16 @@ class MemoryService:
         *,
         user_id: str | None = None,
         device_id: str | None = None,
+        journal_limit: int = 10000,
+        journal_retention_days: int = 90,
     ) -> None:
         self.database = (
             database
             if isinstance(database, MemoryDatabase)
             else MemoryDatabase(database)
         )
+        self.journal_limit = max(1, min(100000, int(journal_limit)))
+        self.journal_retention_days = max(1, min(3650, int(journal_retention_days)))
         self.user_id = (user_id or _default_user_id()).strip()
         self.device_id = (device_id or _default_device_id()).strip()
         if not self.user_id:
@@ -105,27 +113,38 @@ class MemoryService:
                     _iso(event.created_at),
                 ),
             )
+            # The journal is rolling operational evidence. Durable user memories
+            # retain their own facts and revisions when a source event expires.
+            cutoff = _iso(utc_now() - timedelta(days=self.journal_retention_days))
+            connection.execute("""DELETE FROM event_journal WHERE user_id=? AND device_id=?
+                AND (created_at<? OR event_id IN (SELECT event_id FROM event_journal
+                WHERE user_id=? AND device_id=? ORDER BY created_at DESC,event_id DESC LIMIT -1 OFFSET ?))""",
+                (self.user_id, self.device_id, cutoff, self.user_id, self.device_id, self.journal_limit))
         should_promote = (
             event.event_type in _PROMOTED_EVENT_TYPES
             if promote is None
             else promote
         )
         if should_promote:
-            self.add_memory(
+            item = self.add_memory(
                 category=category,
                 title=_event_title(event),
                 summary=summary,
                 facts={
+                    **event.payload,
                     "event_type": event.event_type,
                     "event_id": event.event_id,
                     "outcome": event.outcome.value if event.outcome else None,
-                    **event.payload,
+                    "evidence_kind": "reported_operational_event",
+                    "causal_success_verified": False,
                 },
-                confidence=1.0 if confidence is None else confidence,
-                confidence_basis=("Recorded from an AIDA operational event.",),
+                confidence=0.5 if confidence is None else confidence,
+                confidence_basis=("Reported by an AIDA operational event; this does not establish a successful remedy or causal explanation.",),
                 tags=(event.event_type.lower(),),
                 source="event_journal",
             )
+            with self.database.transaction() as connection:
+                connection.execute("INSERT INTO memory_event_links SELECT ?,event_id FROM event_journal WHERE event_id=?", (item.memory_id, event.event_id))
         return event
 
     def record_process_outcome(
@@ -172,7 +191,7 @@ class MemoryService:
             device_id=self.device_id,
             facts=sanitize_payload(facts or {}),
             confidence=confidence,
-            confidence_basis=tuple(confidence_basis),
+            confidence_basis=tuple(sanitize_text(value) for value in confidence_basis),
             status=status,
             sensitivity=sensitivity,
             tags=tuple(_clean_tags(tags)),
@@ -220,73 +239,63 @@ class MemoryService:
         title: str | None = None,
         status: MemoryStatus | None = None,
         pinned: bool | None = None,
+        category: str | None = None,
+        expected_updated_at: datetime | None = None,
+        user_correction: bool | None = None,
     ) -> MemoryItem:
-        current = self.get_memory(memory_id)
-        if current is None:
-            raise KeyError(f"Unknown memory: {memory_id}")
-        updated = replace(
-            current,
-            title=(
-                current.title
-                if title is None
-                else sanitize_text(title)
-            ),
-            summary=(
-                current.summary
-                if summary is None
-                else sanitize_text(summary)
-            ),
-            facts=(
-                current.facts
-                if facts is None
-                else sanitize_payload(facts)
-            ),
-            confidence=current.confidence if confidence is None else confidence,
-            status=current.status if status is None else status,
-            pinned=current.pinned if pinned is None else pinned,
-            updated_at=utc_now(),
-        )
+        # Read, compare, update and number the revision under one write lock.
         with self.database.transaction() as connection:
             row = connection.execute(
-                """
-                SELECT COALESCE(MAX(revision_number), 0) AS revision_number
-                FROM memory_revisions WHERE memory_id = ?
-                """,
-                (memory_id,),
+                "SELECT * FROM memory_items WHERE memory_id=? AND user_id=? AND device_id=?",
+                (memory_id, self.user_id, self.device_id),
             ).fetchone()
-            revision_number = int(row["revision_number"]) + 1
+            if row is None:
+                raise KeyError(f"Unknown memory: {memory_id}")
+            current = _memory_from_row(row)
+            if expected_updated_at is not None and current.updated_at != expected_updated_at:
+                raise MemoryConflictError("This memory changed while it was being edited. Reload it before saving.")
+            correction = (revised_by in (None, self.user_id)) if user_correction is None else user_correction
+            content_changed = summary is not None and sanitize_text(summary) != current.summary
+            unreconciled = correction and content_changed and bool(current.facts) and facts is None
+            new_status = status or current.status
+            if correction and (content_changed or facts is not None):
+                new_status = MemoryStatus.DISPUTED if unreconciled else MemoryStatus.USER_CORRECTED
+            basis = current.confidence_basis
+            if correction and (content_changed or facts is not None):
+                basis = ("User correction; not independently verified.",)
+                if unreconciled:
+                    basis += ("Existing structured facts require reconciliation with the corrected summary.",)
+            updated = replace(
+                current,
+                category=current.category if category is None else category.strip(),
+                title=current.title if title is None else sanitize_text(title),
+                summary=current.summary if summary is None else sanitize_text(summary),
+                facts=current.facts if facts is None else sanitize_payload(facts),
+                confidence=(min(current.confidence, 0.5) if correction and content_changed else current.confidence) if confidence is None else confidence,
+                confidence_basis=basis,
+                source="user_correction" if correction and (content_changed or facts is not None) else current.source,
+                status=new_status,
+                pinned=current.pinned if pinned is None else pinned,
+                updated_at=utc_now(),
+            )
+            revision_number = int(connection.execute(
+                "SELECT COALESCE(MAX(revision_number),0) FROM memory_revisions WHERE memory_id=?",
+                (memory_id,),
+            ).fetchone()[0]) + 1
             connection.execute(
-                """
-                UPDATE memory_items
-                SET title = ?, summary = ?, facts_json = ?, confidence = ?,
-                    status = ?, pinned = ?, updated_at = ?
-                WHERE memory_id = ? AND user_id = ? AND device_id = ?
-                """,
-                (
-                    updated.title,
-                    updated.summary,
-                    _json(updated.facts),
-                    updated.confidence,
-                    updated.status.value,
-                    int(updated.pinned),
-                    _iso(updated.updated_at),
-                    memory_id,
-                    self.user_id,
-                    self.device_id,
-                ),
+                """UPDATE memory_items SET category=?,title=?,summary=?,facts_json=?,confidence=?,
+                    confidence_basis_json=?,source=?,status=?,pinned=?,updated_at=?
+                    WHERE memory_id=? AND user_id=? AND device_id=?""",
+                (updated.category, updated.title, updated.summary, _json(updated.facts),
+                 updated.confidence, _json(updated.confidence_basis), updated.source,
+                 updated.status.value, int(updated.pinned), _iso(updated.updated_at),
+                 memory_id, self.user_id, self.device_id),
             )
-            _insert_revision(
-                connection,
-                MemoryRevision(
-                    memory_id=memory_id,
-                    revision_number=revision_number,
-                    summary=updated.summary,
-                    facts=updated.facts,
-                    confidence=updated.confidence,
-                    reason=reason,
-                    revised_by=revised_by or self.user_id,
-                ),
-            )
+            _insert_revision(connection, MemoryRevision(
+                memory_id=memory_id, revision_number=revision_number,
+                summary=updated.summary, facts=updated.facts, confidence=updated.confidence,
+                reason=sanitize_text(reason), revised_by=sanitize_text(revised_by or self.user_id),
+            ))
         return updated
 
     def list_revisions(self, memory_id: str) -> list[MemoryRevision]:
@@ -347,14 +356,48 @@ class MemoryService:
         )
 
     def purge(self, memory_id: str) -> None:
+        """Remove a scoped memory, its revisions and exclusively linked source events."""
         with self.database.transaction() as connection:
-            connection.execute(
-                """
-                DELETE FROM memory_items
-                WHERE memory_id = ? AND user_id = ? AND device_id = ?
-                """,
+            row = connection.execute(
+                "SELECT facts_json FROM memory_items WHERE memory_id=? AND user_id=? AND device_id=?",
                 (memory_id, self.user_id, self.device_id),
-            )
+            ).fetchone()
+            if row is None:
+                return
+            events = {r[0] for r in connection.execute(
+                "SELECT event_id FROM memory_event_links WHERE memory_id=?", (memory_id,))}
+            legacy_event = _loads(row["facts_json"], {}).get("event_id")
+            if legacy_event:
+                events.add(legacy_event)
+            connection.execute("DELETE FROM memory_items WHERE memory_id=?", (memory_id,))
+            legacy_shared = {_loads(other["facts_json"], {}).get("event_id") for other in connection.execute(
+                "SELECT facts_json FROM memory_items WHERE user_id=? AND device_id=?",
+                (self.user_id, self.device_id))}
+            for event_id in events:
+                if event_id in legacy_shared:
+                    continue
+                connection.execute(
+                    """DELETE FROM event_journal WHERE event_id=? AND user_id=? AND device_id=?
+                    AND NOT EXISTS(SELECT 1 FROM memory_event_links WHERE event_id=?)""",
+                    (event_id, self.user_id, self.device_id, event_id),
+                )
+            # Management events contain copied titles/reasons and must not defeat purge.
+            for event in connection.execute(
+                "SELECT event_id,payload_json FROM event_journal WHERE user_id=? AND device_id=? AND category='memory.management'",
+                (self.user_id, self.device_id),
+            ).fetchall():
+                if _loads(event["payload_json"], {}).get("memory_id") == memory_id:
+                    connection.execute("DELETE FROM event_journal WHERE event_id=?", (event["event_id"],))
+
+    def retrieve_context(self, query: str, *, limit: int = 8) -> list[MemoryItem]:
+        """Return scoped, current evidence; disputed histories are management-only."""
+        return [item for item in self.search(query, limit=min(1000, max(limit, limit * 4)))
+                if self.retrieval_eligible(item)][:limit]
+
+    @staticmethod
+    def retrieval_eligible(item: MemoryItem) -> bool:
+        return (item.status in {MemoryStatus.ACTIVE, MemoryStatus.USER_CORRECTED}
+                and (item.expires_at is None or item.expires_at > utc_now()))
 
     def get_memory(self, memory_id: str) -> MemoryItem | None:
         with self.database.connect() as connection:
@@ -372,6 +415,7 @@ class MemoryService:
         *,
         category: str | None = None,
         include_deleted: bool = False,
+        include_expired: bool = False,
         limit: int = 100,
     ) -> list[MemoryItem]:
         clauses = ["user_id = ?", "device_id = ?"]
@@ -379,6 +423,9 @@ class MemoryService:
         if not include_deleted:
             clauses.append("status != ?")
             values.append(MemoryStatus.DELETED.value)
+        if not include_expired:
+            clauses.append("status != ? AND (expires_at IS NULL OR expires_at > ?)")
+            values.extend([MemoryStatus.EXPIRED.value, _iso(utc_now())])
         if category:
             clauses.append("category = ?")
             values.append(category)
@@ -402,6 +449,8 @@ class MemoryService:
             self.device_id,
             MemoryStatus.DELETED.value,
         ]
+        clauses.append("status != ? AND (expires_at IS NULL OR expires_at > ?)")
+        values.extend([MemoryStatus.EXPIRED.value, _iso(utc_now())])
         for term in terms:
             clauses.append(
                 "(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? "
@@ -638,7 +687,7 @@ def _clean_tags(tags: Iterable[str]) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
     for tag in tags:
-        clean = tag.strip().lower()
+        clean = sanitize_text(tag).strip().lower()
         if not clean or clean in seen:
             continue
         seen.add(clean)

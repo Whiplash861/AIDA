@@ -43,11 +43,15 @@ The following values must be configured on the trusted gateway host. They must n
 | `ELEVENLABS_VOICE_ID` | Canonical AIDA voice ID | Treat as private configuration |
 | `OPENAI_API_KEY` | Disposable voice transcription credential | Yes |
 | `AIDA_TRANSCRIPTION_MODEL` | Transcription model selector | No |
-| `AIDA_SERVICES_GATEWAY_TOKEN` | Early Alpha gateway bearer credential | Yes |
+| `AIDA_SERVICES_GATEWAY_TOKEN` | Bootstrap enrollment credential | Yes |
+| `AIDA_GATEWAY_SESSION_DB` | Durable per-device session SQLite path | No |
+| `AIDA_GATEWAY_CORS_ORIGINS` | Exact allowed browser origins, comma separated | No |
 
-For Early Alpha, `AIDA_SERVICES_GATEWAY_TOKEN` is a long random revocable enrollment credential. It is stored server-side as a secret and, after manual enrollment, in Android SecureStore. It is not an `EXPO_PUBLIC_*` value and is not compiled into the APK.
+Protocol 2 exchanges the bootstrap token at `POST /v1/enroll` for a per-device session. The bootstrap cannot access provider routes. Sessions expire after seven days, are stored as hashes server-side, and are individually revocable through `DELETE /v1/session`. Mobile retains the endpoint and device session in a single SecureStore envelope; the bootstrap is not retained after enrollment. Browser sessions remain in memory.
 
-A later release should replace the shared Early Alpha bearer credential with invitation/account exchange and per-device revocable session credentials before broader distribution.
+The updated client migrates old split URL/token values by enrolling with them. Existing protocol-1 installed builds must be upgraded alongside this gateway release; they cannot call protocol-2 provider routes using their old shared bearer token. Do not deploy this protocol change independently of the supported client upgrade.
+
+The container runs without root privileges. Mount durable state at `/home/aida/state` and use one gateway replica for this SQLite-backed release. Router follow-up context is process-local with a 30-minute idle expiry; deployments needing multiple replicas require a shared session/context design first.
 
 ## Azure Container Apps deployment
 
@@ -140,13 +144,13 @@ $Fqdn = az containerapp show `
 "https://$Fqdn"
 ```
 
-The public health endpoint should return the service and readiness flags:
+The public health endpoint returns service liveness and protocol version; it does not expose provider configuration:
 
 ```powershell
 Invoke-RestMethod -Uri "https://$Fqdn/health"
 ```
 
-Before enrolling a phone, expected Early Alpha readiness is:
+The authenticated readiness response should report configured providers as follows:
 
 ```text
 reasoning_configured: true
@@ -158,13 +162,15 @@ intent_resolution_configured: true
 The authenticated readiness endpoint can be tested locally without exposing the token in source:
 
 ```powershell
-$Headers = @{ Authorization = "Bearer $GatewayToken" }
+$Enrollment = Invoke-RestMethod -Uri "https://$Fqdn/v1/enroll" -Method Post -Headers @{ Authorization = "Bearer $GatewayToken" }
+$Headers = @{ Authorization = "Bearer $($Enrollment.token)" }
 Invoke-RestMethod -Uri "https://$Fqdn/v1/ready" -Headers $Headers
+Invoke-RestMethod -Uri "https://$Fqdn/v1/session" -Method Delete -Headers $Headers
 ```
 
-## Connect the existing Play-installed AIDA build
+## Connect the updated mobile build
 
-The current Early Alpha Android runtime already supports manual gateway enrollment, so a new AAB is not required merely to test the hosted provider boundary.
+Install the protocol-2 mobile build before connecting to this gateway version.
 
 On the phone:
 
@@ -174,7 +180,7 @@ On the phone:
 4. Enter the Early Alpha gateway credential.
 5. Select **Enroll Gateway**.
 
-The app probes `/v1/ready` before saving enrollment. The URL is stored in device-local application storage and the bearer credential is stored in Expo SecureStore.
+The app exchanges the bootstrap credential at `/v1/enroll`, probes `/v1/ready` with the returned session and atomically saves its endpoint/session envelope in Expo SecureStore. Failed persistence triggers best-effort revocation of the new session and leaves the previous enrollment intact.
 
 After enrollment, verify:
 
@@ -193,7 +199,7 @@ No credential may be placed in `EXPO_PUBLIC_AIDA_GATEWAY_TOKEN` or any other pub
 
 ## Scaling
 
-For a small Early Alpha, Container Apps may use `minReplicas = 0` to reduce idle cost. The first request after scale-to-zero can have a cold-start delay. If that delay harms voice/reasoning UX, set the minimum replica count to `1` during active field testing.
+For this single-replica Early Alpha, keep `maxReplicas = 1` and a durable state volume. Container Apps may use `minReplicas = 0` to reduce idle cost. The first request after scale-to-zero can have a cold-start delay. If that delay harms voice/reasoning UX, set the minimum replica count to `1` during active field testing.
 
 ## Release boundary
 

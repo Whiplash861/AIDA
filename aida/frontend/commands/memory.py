@@ -141,6 +141,8 @@ class MemoryCommandExecutor(CommandExecutor):
                 "Memory revised.\n\n"
                 f"Memory ID: {item.memory_id}\n"
                 f"Current summary: {item.summary}"
+                + ("\nThis correction conflicts with stored facts and is excluded from factual retrieval until reconciled."
+                   if item.status.value == "disputed" else "")
             ),
             speech_text="The selected memory was revised.",
         )

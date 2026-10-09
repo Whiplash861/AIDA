@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from aida.artificer.state_file import locked_state, write_json
 from aida.artificer.models import TelemetryLevel, utc_now
 
 
@@ -24,6 +25,7 @@ class ConsentManager:
 
     @property
     def state(self) -> ConsentState:
+        self._state = self._load()
         return self._state
 
     def set_level(
@@ -34,31 +36,32 @@ class ConsentManager:
         allow_compatibility_reports: bool | None = None,
         allow_raw_diagnostic_bundles: bool | None = None,
     ) -> ConsentState:
-        current = self._state
-        self._state = ConsentState(
-            telemetry_level=level,
-            allow_crash_reports=(
-                current.allow_crash_reports
-                if allow_crash_reports is None
-                else allow_crash_reports
-            ),
-            allow_compatibility_reports=(
-                current.allow_compatibility_reports
-                if allow_compatibility_reports is None
-                else allow_compatibility_reports
-            ),
-            allow_raw_diagnostic_bundles=(
-                current.allow_raw_diagnostic_bundles
-                if allow_raw_diagnostic_bundles is None
-                else allow_raw_diagnostic_bundles
-            ),
-            updated_at_utc=utc_now().isoformat(),
-        )
-        self._save()
-        return self._state
+        with locked_state(self.path):
+            current = self._load()
+            self._state = ConsentState(
+                telemetry_level=level,
+                allow_crash_reports=(
+                    current.allow_crash_reports
+                    if allow_crash_reports is None
+                    else allow_crash_reports
+                ),
+                allow_compatibility_reports=(
+                    current.allow_compatibility_reports
+                    if allow_compatibility_reports is None
+                    else allow_compatibility_reports
+                ),
+                allow_raw_diagnostic_bundles=(
+                    current.allow_raw_diagnostic_bundles
+                    if allow_raw_diagnostic_bundles is None
+                    else allow_raw_diagnostic_bundles
+                ),
+                updated_at_utc=utc_now().isoformat(),
+            )
+            self._save()
+            return self._state
 
     def permits(self, report_type: str) -> bool:
-        state = self._state
+        state = self.state
         if state.telemetry_level is TelemetryLevel.LOCAL_ONLY:
             return False
         if report_type == "critical_crash":
@@ -81,6 +84,11 @@ class ConsentManager:
             return ConsentState(updated_at_utc=utc_now().isoformat())
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("Consent must be an object")
+            for key in ("allow_crash_reports", "allow_compatibility_reports", "allow_raw_diagnostic_bundles"):
+                if key in payload and not isinstance(payload[key], bool):
+                    raise ValueError("Consent flags must be booleans")
             return ConsentState(
                 telemetry_level=TelemetryLevel(
                     payload.get("telemetry_level", TelemetryLevel.LOCAL_ONLY.value)
@@ -105,6 +113,4 @@ class ConsentManager:
             "allow_raw_diagnostic_bundles": self._state.allow_raw_diagnostic_bundles,
             "updated_at_utc": self._state.updated_at_utc,
         }
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        write_json(self.path, payload)

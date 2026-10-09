@@ -242,7 +242,8 @@ def _select_matching_task(
     timed = [
         task
         for task in candidates
-        if task.provider_started_at is not None
+        if not task.provider_scan_id
+        and task.provider_started_at is not None
         and abs(
             (
                 task.provider_started_at.astimezone(timezone.utc) - active_started

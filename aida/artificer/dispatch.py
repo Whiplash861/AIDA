@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
+import hashlib
+from urllib.parse import urlsplit
 import os
 import urllib.error
 import urllib.request
@@ -14,7 +16,7 @@ from aida.artificer.consent import ConsentManager
 from aida.artificer.developer_registry import DeveloperRegistry
 from aida.artificer.ledger import ArtificerLedger
 from aida.artificer.sanitizer import PayloadSanitizer
-from aida.artificer.models import utc_now
+from aida.artificer.models import utc_now, TelemetryLevel
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +51,9 @@ class LocalExportTransport:
 
 class HTTPSDispatchTransport:
     def __init__(self, endpoint: str, *, timeout_seconds: int = 20) -> None:
+        parsed = urlsplit(endpoint)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Dispatch requires an HTTPS endpoint without embedded credentials")
         self.endpoint = endpoint
         self.timeout_seconds = timeout_seconds
 
@@ -122,6 +127,8 @@ class ArtificerDispatch:
         if not self.consent.permits(report_type):
             raise PermissionError(f"Current consent does not permit {report_type} dispatch")
         sanitized = self.sanitizer.sanitize(payload)
+        if self.consent.state.telemetry_level is TelemetryLevel.ANONYMOUS:
+            sanitized = _anonymous_summary(sanitized)
         recipients = self.developers.list_active(report_type)
         if not recipients:
             raise RuntimeError(f"No authorized recipients exist for {report_type}")
@@ -141,6 +148,7 @@ class ArtificerDispatch:
                     {
                         "recipient_id": recipient.developer_id,
                         "encrypted": True,
+                        "key_fingerprint": hashlib.sha256(recipient.public_key_pem.encode()).hexdigest(),
                         "envelope": encrypted,
                     }
                 )
@@ -156,6 +164,8 @@ class ArtificerDispatch:
             "dispatch_id": dispatch_id,
             "report_type": report_type,
             "recipients": recipient_payloads,
+            "consent_revision": self.consent.state.updated_at_utc,
+            "telemetry_level": self.consent.state.telemetry_level.value,
         }
         self.ledger.queue_dispatch(
             dispatch_id=dispatch_id, report_type=report_type, payload=bundle
@@ -165,7 +175,29 @@ class ArtificerDispatch:
     def flush(self, limit: int = 20) -> list[DispatchResult]:
         results: list[DispatchResult] = []
         for queued in self.ledger.list_queued_dispatches(limit=limit):
-            result = self.transport.send(queued["payload"])
+            bundle = queued["payload"]
+            state = self.consent.state
+            authorized = {record.developer_id: record for record in self.developers.list_active(queued["report_type"])}
+            valid = (self.consent.permits(queued["report_type"])
+                     and bundle.get("consent_revision") == state.updated_at_utc
+                     and bundle.get("telemetry_level") == state.telemetry_level.value)
+            recipients = bundle.get("recipients", [])
+            valid = valid and bool(recipients)
+            for item in recipients:
+                recipient = authorized.get(item.get("recipient_id"))
+                if recipient is None:
+                    valid = False
+                    continue
+                if item.get("encrypted"):
+                    valid = valid and bool(recipient.public_key_pem) and item.get("key_fingerprint") == hashlib.sha256((recipient.public_key_pem or "").encode()).hexdigest()
+                elif isinstance(self.transport, HTTPSDispatchTransport):
+                    valid = False
+            if not valid:
+                result = DispatchResult(False, "blocked", "Consent, recipient authorization or encryption changed; create a new report.")
+                results.append(result)
+                self.ledger.update_dispatch_status(queued["dispatch_id"], "blocked", error=result.detail)
+                continue
+            result = self.transport.send(bundle)
             results.append(result)
             self.ledger.update_dispatch_status(
                 queued["dispatch_id"],
@@ -173,3 +205,20 @@ class ArtificerDispatch:
                 error=None if result.success else result.detail,
             )
         return results
+
+
+def _anonymous_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    """Anonymous reports contain aggregate measurements, never stable IDs/text."""
+    import math
+    allowed = {"count", "status", "duration_ms", "error_count", "finding_count", "sample_count", "success", "failed", "version", "engine", "category"}
+    output = {}
+    for key, value in payload.items():
+        if key not in allowed and not key.endswith("_count"):
+            continue
+        if isinstance(value, bool) or isinstance(value, (int, float)) and math.isfinite(value):
+            output[key] = value
+        elif key in {"status", "version", "engine", "category"} and isinstance(value, str):
+            import re
+            if re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", value):
+                output[key] = value
+    return output

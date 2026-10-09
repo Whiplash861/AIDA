@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from aida.assistance.models import AssistanceTaskRecord
 from aida.assistance.store import AssistanceTaskStore
+from aida.authorization.confirmation import ConfirmationService
 
 
 class TaskCenterDialog(QDialog):
@@ -27,9 +28,12 @@ class TaskCenterDialog(QDialog):
         self,
         store: AssistanceTaskStore,
         parent: QWidget | None = None,
+        *,
+        confirmations: ConfirmationService | None = None,
     ) -> None:
         super().__init__(parent)
         self.store = store
+        self.confirmations = confirmations
         self._records: dict[str, AssistanceTaskRecord] = {}
         self.setWindowTitle("AIDA Task Center")
         self.resize(900, 560)
@@ -111,6 +115,11 @@ class TaskCenterDialog(QDialog):
             )
             return
         self.store.request_cancel(task_id)
+        if self.confirmations is not None and record.authorization_id:
+            try:
+                self.confirmations.reject(record.authorization_id)
+            except RuntimeError:
+                pass  # A restarted session has no live in-process grant.
         self.refresh()
 
     @Slot(object, object)

@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Callable
+import logging
+from functools import wraps
+from threading import RLock
 
 from aida.autonomy.models import (
     ActionProposal,
@@ -19,6 +22,28 @@ PreferenceGetter = Callable[[str, object], object]
 PreferenceSetter = Callable[[str, object], None]
 
 
+def _serialized(method):
+    @wraps(method)
+    def run(self, *args, **kwargs):
+        notifications = ()
+        try:
+            with self._settings_lock:
+                self._notification_depth += 1
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    self._notification_depth -= 1
+                    if self._notification_depth == 0:
+                        notifications = tuple(self._pending_notifications)
+                        self._pending_notifications.clear()
+        finally:
+            # A lifecycle listener may initialize an Engine. Never keep the
+            # settings lock while it runs: another caller must be able to revoke.
+            for settings in notifications:
+                self._notify(settings)
+    return run
+
+
 class AutonomyController:
     """Single policy-enforced source of truth for the frontend autonomy switch."""
 
@@ -31,13 +56,32 @@ class AutonomyController:
     ) -> None:
         self.memory = memory
         self.policy = policy or AutonomyPolicy()
+        self._settings_lock = RLock()
+        self._notification_depth = 0
+        self._pending_notifications = []
         self._settings = self._load()
+        self._committed_settings = self._settings
+        self._listeners: list[Callable[[AutonomySettings], None]] = []
+
+    @_serialized
+    def subscribe(self, callback: Callable[[AutonomySettings], None]) -> None:
+        if callback not in self._listeners:
+            self._listeners.append(callback)
+
+    @_serialized
+    def unsubscribe(self, callback: Callable[[AutonomySettings], None]) -> None:
+        if callback in self._listeners:
+            self._listeners.remove(callback)
 
     @property
     def settings(self) -> AutonomySettings:
-        return self._settings
+        with self._settings_lock:
+            return self._settings
 
+    @_serialized
     def set_enabled(self, enabled: bool, *, changed_by: str) -> AutonomySettings:
+        if not isinstance(enabled, bool):
+            raise ValueError("Autonomy enablement requires a Boolean")
         previous = self._settings
         if enabled and previous.kill_switch_engaged:
             self.memory.log_event(
@@ -60,7 +104,7 @@ class AutonomyController:
         elif level is AutonomyLevel.MANUAL:
             level = AutonomyLevel.OBSERVE
 
-        self._settings = AutonomySettings(
+        candidate = AutonomySettings(
             enabled=enabled,
             level=level,
             kill_switch_engaged=previous.kill_switch_engaged,
@@ -71,7 +115,7 @@ class AutonomyController:
             daily_surface_scan_budget=previous.daily_surface_scan_budget,
             surface_scan_cooldown_minutes=previous.surface_scan_cooldown_minutes,
         )
-        self._save()
+        self._save(candidate)
         self.memory.log_event(
             "AUTONOMY_ENABLED" if enabled else "AUTONOMY_DISABLED",
             "autonomy.settings",
@@ -92,9 +136,10 @@ class AutonomyController:
         )
         return self._settings
 
+    @_serialized
     def engage_kill_switch(self, *, changed_by: str) -> AutonomySettings:
         previous = self._settings
-        self._settings = AutonomySettings(
+        candidate = AutonomySettings(
             enabled=False,
             level=AutonomyLevel.MANUAL,
             kill_switch_engaged=True,
@@ -105,7 +150,7 @@ class AutonomyController:
             daily_surface_scan_budget=previous.daily_surface_scan_budget,
             surface_scan_cooldown_minutes=previous.surface_scan_cooldown_minutes,
         )
-        self._save()
+        self._save(candidate)
         self.memory.log_event(
             "AUTONOMY_KILL_SWITCH_ENGAGED",
             "autonomy.settings",
@@ -116,9 +161,10 @@ class AutonomyController:
         )
         return self._settings
 
+    @_serialized
     def release_kill_switch(self, *, changed_by: str) -> AutonomySettings:
         current = self._settings
-        self._settings = AutonomySettings(
+        candidate = AutonomySettings(
             enabled=False,
             level=AutonomyLevel.MANUAL,
             kill_switch_engaged=False,
@@ -129,7 +175,7 @@ class AutonomyController:
             daily_surface_scan_budget=current.daily_surface_scan_budget,
             surface_scan_cooldown_minutes=current.surface_scan_cooldown_minutes,
         )
-        self._save()
+        self._save(candidate)
         self.memory.log_event(
             "AUTONOMY_KILL_SWITCH_RELEASED",
             "autonomy.settings",
@@ -140,6 +186,7 @@ class AutonomyController:
         )
         return self._settings
 
+    @_serialized
     def evaluate(self, proposal: ActionProposal) -> PolicyDecision:
         decision = self.policy.evaluate(proposal, self._settings)
         self.memory.log_event(
@@ -175,6 +222,10 @@ class AutonomyController:
         payload = self.memory.get_preference(self._PREFERENCE_KEY, {})
         if not isinstance(payload, dict):
             return AutonomySettings()
+        if any(key in payload and not isinstance(payload[key], bool) for key in (
+            "enabled", "kill_switch_engaged", "allow_autonomous_surface_scan", "allow_autonomous_deep_scan",
+        )):
+            return AutonomySettings()
         try:
             return AutonomySettings(
                 enabled=bool(payload.get("enabled", False)),
@@ -200,7 +251,30 @@ class AutonomyController:
         except (TypeError, ValueError):
             return AutonomySettings()
 
-    def _save(self) -> None:
-        payload = asdict(self._settings)
-        payload["level"] = int(self._settings.level)
-        self.memory.set_preference(self._PREFERENCE_KEY, payload)
+    @_serialized
+    def _save(self, candidate: AutonomySettings | None = None) -> None:
+        candidate = candidate or self._settings
+        payload = asdict(candidate)
+        payload["level"] = int(candidate.level)
+        try:
+            self.memory.set_preference(self._PREFERENCE_KEY, payload)
+        except Exception:
+            # Also protects legacy callers that directly prepared _settings.
+            self._settings = self._committed_settings
+            raise
+        self._settings = candidate
+        self._committed_settings = candidate
+        self._pending_notifications.append(candidate)
+
+    def _notify(self, settings: AutonomySettings) -> None:
+        with self._settings_lock:
+            if settings is not self._settings:
+                return  # A newer committed setting superseded this notification.
+            listeners = tuple(self._listeners)
+        for callback in listeners:
+            try:
+                with self._settings_lock:
+                    current = self._settings
+                callback(current)
+            except Exception:
+                logging.getLogger(__name__).warning("An autonomy lifecycle listener failed")

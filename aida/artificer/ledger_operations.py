@@ -7,6 +7,17 @@ from aida.artificer.models import ModificationAttempt, utc_now
 
 
 class LedgerOperationsMixin:
+    def get_modification_attempt(self, attempt_id: str):
+        with self._lock, self._connect() as connection:
+            row = connection.execute("SELECT payload_json FROM modification_attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def append_rollback_event(self, attempt_id: str, status: str, detail: str) -> None:
+        payload = {"attempt_id": attempt_id, "status": status, "detail": detail, "occurred_at_utc": utc_now().isoformat()}
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute("INSERT INTO rollback_events(attempt_id,status,detail,occurred_at_utc) VALUES(?,?,?,?)", tuple(payload.values()))
+            self._chain(connection, "rollback_event", str(cursor.lastrowid), payload)
+
     def append_modification_attempt(self, attempt: ModificationAttempt) -> None:
         payload = attempt.to_record()
         with self._lock, self._connect() as connection:

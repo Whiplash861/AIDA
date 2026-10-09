@@ -291,6 +291,10 @@ class MessageFeed(QScrollArea):
             insertion_index,
             reveal,
         )
+        while self._feed_layout.count() > 501:
+            expired = self._feed_layout.takeAt(0).widget()
+            if expired is not None:
+                expired.deleteLater()
 
         if should_follow:
             reveal.reveal_finished.connect(

@@ -96,12 +96,13 @@ def test_reattaches_to_matching_full_scan_after_restart() -> None:
         ),
     })
     provider = RecoveringMicrosoftDefenderProvider(runner)
-    handle = provider.start_scan(full_sweep_request())
+    handle = provider.attach_scan(full_sweep_request(), "{FULL-SCAN-ID}")
 
     status = provider.get_scan_status(handle)
 
     assert status.state is SecurityScanState.RUNNING
-    assert "reattached" in status.detail
+    assert "monitoring" in status.detail
+    assert runner.started_scripts == []
     assert "Get-WinEvent" in runner.json_scripts[0]
     assert "(?i)\\bfull\\b" in runner.json_scripts[0]
 
@@ -141,7 +142,7 @@ def test_recovered_full_scan_reports_provider_completion() -> None:
         },
     ])
     provider = RecoveringMicrosoftDefenderProvider(runner)
-    handle = provider.start_scan(full_sweep_request())
+    handle = provider.attach_scan(full_sweep_request(), "{FULL-SCAN-ID}")
 
     first = provider.get_scan_status(handle)
     provider._last_provider_checks.clear()

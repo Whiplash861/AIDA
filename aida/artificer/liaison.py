@@ -39,6 +39,10 @@ class Liaison:
             except importlib.metadata.PackageNotFoundError:
                 dependencies[dependency] = "not-installed"
 
+        provider = self.adapter.security_provider_status()
+        capabilities = dict(self.adapter.capabilities())
+        capabilities = {name: ("unverified" if status in {"native", "compatible"} else status) for name, status in capabilities.items()}
+        capabilities["security.provider"] = "compatible" if provider.available and provider.enabled is True else "unverified"
         payload = {
             "os_family": platform.system(),
             "os_release": platform.release(),
@@ -51,8 +55,8 @@ class Liaison:
             "utc_offset_seconds": offset_seconds,
             "permission_level": self.adapter.permission_level(),
             "available_shell": self.adapter.available_shell(),
-            "security_provider": self.adapter.security_provider_status().provider,
-            "capabilities": self.adapter.capabilities(),
+            "security_provider": provider.provider,
+            "capabilities": capabilities,
             "dependency_versions": dependencies,
         }
         profile_id = hashlib.sha256(
@@ -83,7 +87,7 @@ class Liaison:
             CapabilityResult(
                 capability=name,
                 status=status,
-                detail=f"{name} reported as {status} by {self.adapter.name} adapter",
+                detail=f"{name}: {status}; provider health was read, other adapter declarations do not prove successful execution",
                 verified_at_utc=verified_at,
                 profile_id=profile.profile_id,
             )

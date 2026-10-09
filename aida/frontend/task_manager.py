@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any, Optional
+from uuid import uuid4
+import logging
 
 from PySide6.QtCore import (
     QObject,
@@ -47,9 +49,9 @@ class ManagedTask(QRunnable):
             self.signals.result.emit(result)
 
         except Exception as exc:
-            error_message = (
-                f"{type(exc).__name__}: {exc}"
-            )
+            incident = uuid4().hex[:12]
+            logging.getLogger(__name__).warning("Task failed [%s], category=%s", incident, type(exc).__name__)
+            error_message = f"{type(exc).__name__}: operation unavailable (reference {incident})."
             self.signals.error.emit(error_message)
 
         finally:
@@ -72,6 +74,8 @@ class TaskManager(QObject):
 
         self._pool = QThreadPool.globalInstance()
         self._active_tasks: dict[str, ManagedTask] = {}
+        self._failed_tasks: set[str] = set()
+        self._closing = False
 
     @property
     def active_task_names(self) -> tuple[str, ...]:
@@ -96,6 +100,8 @@ class TaskManager(QObject):
         """
 
         clean_name = name.strip()
+        if self._closing:
+            return False
 
         if not clean_name:
             raise ValueError("Task name cannot be empty")
@@ -108,15 +114,23 @@ class TaskManager(QObject):
             function=function,
         )
 
-        if on_result is not None:
-            task.signals.result.connect(on_result)
+        def deliver_result(result: Any) -> None:
+            if self._closing:
+                return
+            # Completion of a worker is not proof that its operation succeeded.
+            if getattr(result, "successful", True) is False:
+                self._handle_error(clean_name, "Operation ended without a verified successful result.")
+            if on_result is not None:
+                on_result(result)
+
+        task.signals.result.connect(deliver_result)
 
         if on_error is not None:
-            task.signals.error.connect(on_error)
+            task.signals.error.connect(lambda message: on_error(message) if not self._closing else None)
 
         if on_finished is not None:
             task.signals.finished.connect(
-                lambda _name: on_finished()
+                lambda _name: on_finished() if not self._closing else None
             )
 
         task.signals.error.connect(
@@ -131,6 +145,7 @@ class TaskManager(QObject):
         )
 
         self._active_tasks[clean_name] = task
+        self._failed_tasks.discard(clean_name)
 
         self.task_started.emit(clean_name)
         self._pool.start(task)
@@ -143,6 +158,9 @@ class TaskManager(QObject):
         task_name: str,
         message: str,
     ) -> None:
+        if self._closing:
+            return
+        self._failed_tasks.add(task_name)
         self.task_failed.emit(
             task_name,
             message,
@@ -155,7 +173,23 @@ class TaskManager(QObject):
             None,
         )
 
-        self.task_finished.emit(task_name)
+        if not self._closing:
+            self.task_finished.emit(task_name)
+
+    def failed(self, task_name: str) -> bool:
+        return task_name in self._failed_tasks
+
+    def close(self, timeout_ms: int = 5000) -> bool:
+        self._closing = True
+        for task in tuple(self._active_tasks.values()):
+            # Detach UI callbacks even when a bounded external call is still
+            # completing. The worker retains its own signals until it returns.
+            task.signals.result.disconnect()
+            task.signals.error.disconnect()
+            task.signals.finished.disconnect()
+        completed = self.wait_for_done(timeout_ms)
+        self._active_tasks.clear()
+        return completed
 
     def wait_for_done(
         self,

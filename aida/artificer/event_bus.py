@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import logging
 from collections.abc import Callable
 
 from aida.artificer.models import OperationalEvent
@@ -33,4 +34,4 @@ class EventBus:
             try:
                 listener(event)
             except Exception:
-                continue
+                logging.getLogger(__name__).exception("Artificer event subscriber failed")

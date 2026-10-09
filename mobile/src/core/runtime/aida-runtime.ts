@@ -1,15 +1,19 @@
+import { MOBILE_AEGIS } from '@/src/core/engines/aegis/runtime';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 import { executeMobileRoutedDirective } from '@/src/core/commands/mobile-command-executor';
-import { speakAidaText, testAidaSpeech } from '@/src/core/interaction/speech-output';
+import { cleanupAidaSpeechCache, speakAidaText, stopAidaSpeech, testAidaSpeech } from '@/src/core/interaction/speech-output';
+import { OperationCoordinator, OperationLease } from '@/src/core/runtime/operation-coordinator';
 import { MOBILE_REASONING } from '@/src/core/reasoning/service';
 import {
   loadActivity,
+  loadEvidence,
   loadOrCreateInstanceId,
   loadRuntimeState,
   saveActivity,
   saveRuntimeState,
+  saveEvidence,
 } from '@/src/core/storage/mobile-storage';
 
 export type StatusTone = 'ready' | 'active' | 'warning' | 'error' | 'idle' | 'offline';
@@ -69,6 +73,11 @@ type ActivityListener = (items: RuntimeActivityItem[]) => void;
 let snapshot = createStartingSnapshot();
 let activity: RuntimeActivityItem[] = [];
 let initialization: Promise<MobileRuntimeSnapshot> | null = null;
+const operations = new OperationCoordinator();
+let voiceLease: OperationLease | null = null;
+let speechActive = false;
+let speechPreferenceEpoch = 0;
+let activityPersistence: Promise<unknown> = Promise.resolve();
 const runtimeListeners = new Set<RuntimeListener>();
 const activityListeners = new Set<ActivityListener>();
 
@@ -111,7 +120,7 @@ export async function configureServicesGateway(baseUrl: string, token: string): 
     updated_at: new Date().toISOString(),
     statuses: snapshot.statuses.map((item) => {
       if (item.id === 'brain') {
-        return { ...item, value: 'IDLE', tone: 'ready' as const };
+        return { ...item, value: gateway.reasoningConfigured ? 'IDLE' : 'STAGED', tone: gateway.reasoningConfigured ? 'ready' as const : 'idle' as const };
       }
       if (item.id === 'microphone') {
         return {
@@ -124,7 +133,7 @@ export async function configureServicesGateway(baseUrl: string, token: string): 
     }),
     capabilities: buildCapabilities(
       snapshot.platform,
-      true,
+      gateway.reasoningConfigured,
       gateway.speechConfigured,
       gateway.transcriptionConfigured,
       gateway.source,
@@ -139,8 +148,33 @@ export async function configureServicesGateway(baseUrl: string, token: string): 
   );
 }
 
-export async function setSpeechEnabled(enabled: boolean): Promise<void> {
+export async function refreshServicesGateway(): Promise<void> {
   await initializeAidaRuntime();
+  await MOBILE_REASONING.initialize(true);
+  const gateway = MOBILE_REASONING.gatewayRuntimeState();
+  snapshot = {...snapshot, capabilities: buildCapabilities(snapshot.platform, gateway.reasoningConfigured, gateway.speechConfigured, gateway.transcriptionConfigured, gateway.source)};
+  setSubsystemStatus('brain', gateway.reasoningConfigured ? 'IDLE' : 'STAGED', gateway.reasoningConfigured ? 'ready' : 'idle');
+  setSubsystemStatus('microphone', gateway.transcriptionConfigured ? 'READY' : 'STAGED', gateway.transcriptionConfigured ? 'ready' : 'idle');
+}
+
+export function reserveVoiceInput(): AbortSignal {
+  voiceLease = operations.acquire('voice');
+  void stopAidaSpeech();
+  return voiceLease.signal;
+}
+export function cancelRuntimeOperation(): void {
+  operations.cancel();
+  voiceLease = null;
+  void stopAidaSpeech();
+  speechActive = false;
+  setRuntimeStatus('STANDBY', 'ready');
+}
+
+export async function setSpeechEnabled(enabled: boolean): Promise<void> {
+  const epoch = ++speechPreferenceEpoch;
+  await initializeAidaRuntime();
+  if (epoch !== speechPreferenceEpoch) return;
+  if (!enabled) { await stopAidaSpeech(); speechActive = false; }
   snapshot = {
     ...snapshot,
     speech_enabled: enabled,
@@ -155,7 +189,7 @@ export async function setSpeechEnabled(enabled: boolean): Promise<void> {
   await saveRuntimeState({
     autonomy_enabled: snapshot.autonomy.enabled,
     speech_enabled: enabled,
-  });
+  }).catch(() => addActivity('STORAGE', 'Speech preference could not be saved.', 'warning', 'mobile.storage', false));
   await addActivity(
     'SPEECH',
     enabled ? 'AIDA speech output enabled.' : 'AIDA speech output muted.',
@@ -168,13 +202,18 @@ export async function setSpeechEnabled(enabled: boolean): Promise<void> {
     return;
   }
 
+  if (epoch !== speechPreferenceEpoch || !snapshot.speech_enabled) return;
   const transport = await testAidaSpeech({
     onStart: () => {
+      if (epoch !== speechPreferenceEpoch || !snapshot.speech_enabled) return;
+      speechActive = true;
       setRuntimeStatus('SPEAKING', 'active');
       setSubsystemStatus('speech', 'SPEAKING', 'active');
     },
     onDone: () => {
-      setSubsystemStatus('speech', 'READY', 'ready');
+      if (epoch !== speechPreferenceEpoch) return;
+      speechActive = false;
+      setSubsystemStatus('speech', snapshot.speech_enabled ? 'READY' : 'MUTED', snapshot.speech_enabled ? 'ready' : 'idle');
       setRuntimeStatus('STANDBY', 'ready');
     },
     onWarning: (message) => {
@@ -193,8 +232,9 @@ export async function setSpeechEnabled(enabled: boolean): Promise<void> {
   );
 }
 
-export async function beginVoiceListening(): Promise<void> {
+export async function beginVoiceListening(signal?: AbortSignal): Promise<void> {
   await initializeAidaRuntime();
+  if (signal?.aborted || (signal && voiceLease?.signal !== signal)) throw new Error('Voice input cancelled.');
   setRuntimeStatus('LISTENING', 'active');
   setSubsystemStatus('microphone', 'LISTENING', 'active');
   await addActivity(
@@ -205,8 +245,9 @@ export async function beginVoiceListening(): Promise<void> {
   );
 }
 
-export async function beginVoiceProcessing(): Promise<void> {
+export async function beginVoiceProcessing(signal?: AbortSignal): Promise<void> {
   await initializeAidaRuntime();
+  if (signal?.aborted || (signal && voiceLease?.signal !== signal)) throw new Error('Voice input cancelled.');
   setRuntimeStatus('ANALYZING', 'active');
   setSubsystemStatus('microphone', 'PROCESSING', 'active');
   await addActivity(
@@ -217,7 +258,10 @@ export async function beginVoiceProcessing(): Promise<void> {
   );
 }
 
-export async function completeVoiceInput(): Promise<void> {
+export async function completeVoiceInput(signal?: AbortSignal): Promise<void> {
+  if (signal && voiceLease?.signal !== signal) return;
+  if (voiceLease) operations.release(voiceLease);
+  voiceLease = null;
   await initializeAidaRuntime();
   setSubsystemStatus('microphone', 'READY', 'ready');
   setRuntimeStatus('STANDBY', 'ready');
@@ -229,7 +273,10 @@ export async function completeVoiceInput(): Promise<void> {
   );
 }
 
-export async function failVoiceInput(message: string): Promise<void> {
+export async function failVoiceInput(message: string, signal?: AbortSignal): Promise<void> {
+  if (signal && voiceLease?.signal !== signal) return;
+  if (voiceLease) operations.release(voiceLease);
+  voiceLease = null;
   await initializeAidaRuntime();
   const clean = message.trim() || 'Voice input failed.';
   setSubsystemStatus('microphone', 'ERROR', 'warning');
@@ -247,15 +294,17 @@ export async function submitLocalDirective(
   message: string,
   conversationContext: string[] = [],
 ): Promise<DirectiveSubmissionResult> {
-  await initializeAidaRuntime();
   const clean = message.trim();
-  if (!clean) throw new Error('Directive cannot be empty.');
+  if (!clean || clean.length > 8000) throw new Error('Directive must contain between 1 and 8000 characters.');
+  const lease = operations.acquire('directive');
+  try {
+  await stopAidaSpeech();
+  await initializeAidaRuntime();
 
   const remote = MOBILE_REASONING.isRemoteConfigured();
   setAgentState('ANALYZING', remote ? 'ANALYZING' : 'STAGED', 'active');
   await addActivity('DIRECTIVE', 'Directive received.', 'info', 'mobile.runtime');
 
-  try {
     const response = await MOBILE_REASONING.respond(clean, {
       platform: snapshot.platform,
       platformVersion: snapshot.platform_version,
@@ -264,13 +313,16 @@ export async function submitLocalDirective(
       supportedCapabilities: snapshot.capabilities
         .filter((item) => item.state === 'supported')
         .map((item) => item.label),
-      conversationContext: conversationContext.slice(-12),
-    });
+      conversationContext: conversationContext.slice(-12).map(line => line.slice(0, 4000)),
+    }, lease.signal);
+    if (lease.signal.aborted) throw new Error('Operation cancelled.');
 
     if (response.mode === 'routed' && response.routedDirective) {
       const command = await executeMobileRoutedDirective(response.routedDirective, {
         platform: snapshot.platform,
       });
+      if (lease.signal.aborted) throw new Error('Operation cancelled.');
+      if (command.evidence) await saveEvidence(command.evidence).catch(() => addActivity('STORAGE', 'Diagnostic evidence could not be saved.', 'warning', 'mobile.storage', false));
       await addActivity(
         'COMMAND',
         command.executed
@@ -279,6 +331,7 @@ export async function submitLocalDirective(
         command.executed ? 'info' : 'warning',
         'mobile.commands',
       );
+      if (lease.signal.aborted) throw new Error('Operation cancelled.');
       setAgentState('STANDBY', 'IDLE', 'ready');
       void speakResponseIfEnabled(command.speechText);
       return {
@@ -296,6 +349,7 @@ export async function submitLocalDirective(
       'info',
       response.provider,
     );
+    if (lease.signal.aborted) throw new Error('Operation cancelled.');
     setAgentState(
       'STANDBY',
       response.mode === 'remote' ? 'IDLE' : 'STAGED',
@@ -310,10 +364,13 @@ export async function submitLocalDirective(
       routeIntentId: '',
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'AIDA brain request failed.';
-    setAgentState('STANDBY', 'ERROR', 'ready');
+    const message = lease.signal.aborted ? 'Operation cancelled.' : 'AIDA request could not complete. Check service availability and retry.';
+    if (!lease.signal.aborted) setAgentState('STANDBY', 'ERROR', 'ready');
     await addActivity('BRAIN', `AIDA brain request failed: ${message}`, 'error', 'mobile.reasoning');
-    throw error;
+    throw new Error(message);
+  } finally {
+    operations.release(lease);
+    setRuntimeStatus(speechActive ? 'SPEAKING' : 'STANDBY', speechActive ? 'active' : 'ready');
   }
 }
 
@@ -327,8 +384,11 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
       loadActivity<RuntimeActivityItem>(),
     ]);
     await MOBILE_REASONING.initialize();
+    void cleanupAidaSpeechCache();
 
     activity = storedActivity.slice(0, 100);
+    const previousAegis = (await loadEvidence()).find(item => item.kind === 'aegis');
+    if (previousAegis) MOBILE_AEGIS.restoreObservation(previousAegis.capturedAt, previousAegis.gaps);
     const gatewayReady = MOBILE_REASONING.isRemoteConfigured();
     const gateway = MOBILE_REASONING.gatewayRuntimeState();
     const now = new Date().toISOString();
@@ -363,7 +423,8 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
         status('agent', 'AGENT', 'STANDBY', 'ready'),
         status('brain', 'BRAIN', brainValue, brainTone),
         status('speech', 'SPEECH', state.speech_enabled ? 'READY' : 'MUTED', state.speech_enabled ? 'ready' : 'idle'),
-        status('diagnostics', 'DIAGNOSTICS', 'READY', 'ready'),
+        status('diagnostics', 'DIAGNOSTICS', platform === 'Android' ? 'READY' : 'STAGED', platform === 'Android' ? 'ready' : 'idle'),
+        status('aegis', 'AEGIS', platform === 'Android' ? 'LIMITED' : 'STAGED', 'idle'),
         status('memory', 'MEMORY', 'READY', 'ready'),
         status('artificer', 'ARTIFICER', 'STAGED', 'idle'),
         status('technomancer', 'TECHNOMANCER', 'STAGED', 'idle'),
@@ -412,16 +473,21 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
     notifyRuntime();
     return snapshot;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : 'Unknown storage error';
+    const detail = 'Local storage is unavailable; this session will use temporary state.';
     snapshot = {
       ...snapshot,
-      status: 'WARNING',
+      status: 'STANDBY',
+      instance_id: 'ephemeral_' + Date.now().toString(36),
+      identity_persistent: false,
+      capabilities: buildCapabilities(platform, false, false, false, 'none').map(item =>
+        ['identity.persistent', 'activity.persistent', 'memory.persistent'].includes(item.id)
+          ? {...item, state: 'limited' as const, detail: 'Persistent storage is unavailable; this session uses temporary state.'} : item),
       updated_at: new Date().toISOString(),
       statuses: snapshot.statuses.map((item) =>
         item.id === 'memory'
           ? { ...item, value: 'DEGRADED', tone: 'warning' as const }
           : item.id === 'agent'
-            ? { ...item, value: 'WARNING', tone: 'warning' as const }
+            ? { ...item, value: 'STANDBY', tone: 'ready' as const }
             : item,
       ),
     };
@@ -432,6 +498,7 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
       'mobile.storage',
       false,
     );
+    setTimeout(() => { initialization = null; }, 5000);
     notifyRuntime();
     return snapshot;
   }
@@ -441,11 +508,13 @@ async function speakResponseIfEnabled(text: string) {
   if (!snapshot.speech_enabled || !text.trim()) return;
   const transport = await speakAidaText(text, {
     onStart: () => {
+      speechActive = true;
       setRuntimeStatus('SPEAKING', 'active');
       setSubsystemStatus('speech', 'SPEAKING', 'active');
     },
     onDone: () => {
-      setSubsystemStatus('speech', 'READY', 'ready');
+      speechActive = false;
+      setSubsystemStatus('speech', snapshot.speech_enabled ? 'READY' : 'MUTED', snapshot.speech_enabled ? 'ready' : 'idle');
       setRuntimeStatus('STANDBY', 'ready');
     },
     onWarning: (message) => {
@@ -465,6 +534,10 @@ async function speakResponseIfEnabled(text: string) {
 }
 
 function setRuntimeStatus(next: LocalRuntimeStatus, agentTone: StatusTone) {
+  if (operations.current && (next === 'STANDBY' || next === 'SPEAKING')) {
+    next = operations.current.kind === 'voice' && snapshot.status === 'LISTENING' ? 'LISTENING' : 'ANALYZING';
+    agentTone = 'active';
+  }
   snapshot = {
     ...snapshot,
     status: next,
@@ -505,7 +578,7 @@ function buildCapabilities(
       id: 'identity.persistent',
       label: 'Persistent instance identity',
       state: 'supported',
-      detail: 'This AIDA instance retains a secure device-local identity across application restarts.',
+      detail: platform === 'web' ? 'Browser identity uses local storage; gateway session credentials remain in memory.' : 'This AIDA instance retains a secure device-local identity across application restarts.',
     },
     {
       id: 'platform.identity',
@@ -516,10 +589,10 @@ function buildCapabilities(
     {
       id: 'intent.native',
       label: 'Native AIDA intent resolution',
-      state: gatewayReady ? 'supported' : 'staged',
+      state: gatewayReady ? 'supported' : 'limited',
       detail: gatewayReady
         ? 'Registered directives are resolved through the same AIDA intent registry before language-model reasoning.'
-        : 'Native intent resolution requires the AIDA services gateway in this Early Alpha build.',
+        : 'Supported device diagnostics resolve locally offline. Additional intent resolution requires the services gateway.',
     },
     {
       id: 'conversation.context',
@@ -553,7 +626,7 @@ function buildCapabilities(
       state: speechConfigured ? 'supported' : 'limited',
       detail: speechConfigured
         ? 'Responses use canonical start/end chimes and the configured ElevenLabs AIDA voice.'
-        : 'Canonical chimes are available; Android TTS is a degraded fallback until the AIDA voice service is available.',
+        : 'Canonical chimes are available. Spoken output remains silent until the configured AIDA voice service is available.',
     },
     {
       id: 'speech.queue',
@@ -564,8 +637,8 @@ function buildCapabilities(
     {
       id: 'voice.input',
       label: 'Voice input and transcription',
-      state: transcriptionConfigured ? 'supported' : 'staged',
-      detail: transcriptionConfigured
+      state: transcriptionConfigured && platform !== 'web' ? 'supported' : 'staged',
+      detail: platform === 'web' ? 'Browser recording and disposable audio handling remain staged.' : transcriptionConfigured
         ? 'Push-to-talk microphone capture uses native LISTENING/PROCESSING states, disposable audio, and AIDA transcription.'
         : 'Microphone capture is present, but secure AIDA transcription requires an authenticated transcription provider.',
     },
@@ -606,6 +679,7 @@ function createStartingSnapshot(): MobileRuntimeSnapshot {
 }
 
 function setAgentState(next: LocalRuntimeStatus, brainValue: string, agentTone: StatusTone) {
+  if (operations.current && next === 'STANDBY') { next = 'ANALYZING'; agentTone = 'active'; }
   snapshot = {
     ...snapshot,
     status: next,
@@ -651,7 +725,9 @@ async function addActivity(
   notifyActivity();
   if (persist) {
     try {
-      await saveActivity(activity);
+      const entries = [...activity];
+      activityPersistence = activityPersistence.catch(() => undefined).then(() => saveActivity(entries));
+      await activityPersistence;
     } catch {
       // Runtime operation must not fail merely because activity persistence did.
     }

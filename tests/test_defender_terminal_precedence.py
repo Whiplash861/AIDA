@@ -73,6 +73,7 @@ def test_provider_cancel_event_wins_over_start_mpscan_host_failure():
     )
     provider = RecoveringMicrosoftDefenderProvider(runner=runner)
     handle = provider.start_scan(_request())
+    runner.payload["StartTime"] = handle.started_at.isoformat()
 
     status = provider.get_scan_status(handle)
 

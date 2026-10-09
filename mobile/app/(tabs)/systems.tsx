@@ -6,6 +6,7 @@ import { PageShell } from '@/src/components/page-shell';
 import { StatusPill } from '@/src/components/status-pill';
 import {
   getRuntimeSnapshot,
+  refreshServicesGateway,
   MobileRuntimeSnapshot,
   StatusTone,
   SubsystemStatus,
@@ -24,6 +25,7 @@ const CORE_IDS = new Set([
   'speech',
   'diagnostics',
   'memory',
+  'aegis',
   'artificer',
   'technomancer',
   'platform',
@@ -35,7 +37,8 @@ export default function SystemsScreen() {
   );
   const [showAll, setShowAll] = useState(false);
 
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
+    await refreshServicesGateway();
     setSnapshot({ ...getRuntimeSnapshot() });
   }, []);
 

@@ -75,7 +75,7 @@ def request(
     )
 
 
-def test_quick_scan_timestamp_completes_while_host_is_still_running() -> None:
+def test_quick_scan_timestamp_alone_cannot_complete_owned_host() -> None:
     command = FakeCommand(return_code=None)
     runner = FakeRunner(command)
     runner.json_results.append({
@@ -89,9 +89,9 @@ def test_quick_scan_timestamp_completes_while_host_is_still_running() -> None:
 
     status = provider.get_scan_status(handle)
 
-    assert status.state is SecurityScanState.COMPLETED
-    assert status.progress_percent == 100.0
-    assert command.terminated is True
+    assert status.state is SecurityScanState.RUNNING
+    assert status.progress_percent is None
+    assert command.terminated is False
     assert "QuickScanStartTime" in runner.json_scripts[0]
     assert "QuickScanEndTime" in runner.json_scripts[0]
 

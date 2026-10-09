@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { GlassPanel } from '@/src/components/glass-panel';
@@ -91,13 +91,18 @@ export default function MoreScreen() {
   const [gatewayToken, setGatewayToken] = useState('');
   const [gatewaySaving, setGatewaySaving] = useState(false);
   const [gatewayMessage, setGatewayMessage] = useState('');
+  const gatewaySavingRef = useRef(false);
+  const speechUpdatingRef = useRef(false);
 
   useEffect(() => subscribeRuntime(setRuntime), []);
   useEffect(() => {
+    let mounted = true;
     void loadGatewayConfiguration().then((configuration) => {
+      if (!mounted) return;
       setGateway(configuration);
       setGatewayUrl(configuration.baseUrl);
-    });
+    }).catch(() => { if (mounted) setGatewayMessage('Gateway configuration is unavailable. Enroll again or refresh after reconnecting.'); });
+    return () => { mounted = false; };
   }, []);
 
   const brainValue = runtime.statuses.find((item) => item.id === 'brain')?.value;
@@ -107,17 +112,22 @@ export default function MoreScreen() {
   const voiceReady = voiceCapability?.state === 'supported';
 
   async function toggleSpeech() {
-    if (speechUpdating) return;
+    if (speechUpdatingRef.current) return;
+    speechUpdatingRef.current = true;
     setSpeechUpdating(true);
     try {
       await setSpeechEnabled(!runtime.speech_enabled);
+    } catch {
+      setGatewayMessage('Speech preference could not be updated.');
     } finally {
+      speechUpdatingRef.current = false;
       setSpeechUpdating(false);
     }
   }
 
   async function enrollGateway() {
-    if (gatewaySaving || developmentAuto) return;
+    if (gatewaySavingRef.current || developmentAuto) return;
+    gatewaySavingRef.current = true;
     setGatewaySaving(true);
     setGatewayMessage('');
     try {
@@ -129,6 +139,7 @@ export default function MoreScreen() {
     } catch (error) {
       setGatewayMessage(error instanceof Error ? error.message : 'Gateway enrollment failed.');
     } finally {
+      gatewaySavingRef.current = false;
       setGatewaySaving(false);
     }
   }

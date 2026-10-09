@@ -10,7 +10,7 @@ class Architect:
     """Converts mature findings into reviewable subsystem upgrade proposals."""
 
     def propose(self, finding: ArtificerFinding, current_version: str = "1.0.0") -> UpgradeProposal:
-        proposed_version = self._next_minor(current_version)
+        proposed_version = current_version  # Version selection follows an approved, scoped implementation.
         return UpgradeProposal(
             proposal_id=f"AE-PROP-{uuid.uuid4().hex[:10].upper()}",
             title=f"Improve {finding.title}",
@@ -22,10 +22,10 @@ class Architect:
             alternatives_considered=("Retain current behavior and continue observation",),
             expected_outcomes=finding.expected_outcomes,
             success_metrics=(
-                "Finding does not recur across the next validated observation window",
+                f"Re-run the evidence checks for {finding.fingerprint or finding.finding_id}; compare with the recorded {finding.observation_count} observations",
                 "No regression findings are created by the change",
             ),
-            required_tests=("Focused unit tests", "Integration regression test", "Rollback verification"),
+            required_tests=(f"Regression fixture reproducing {finding.finding_id}: {finding.evidence_summary}", "Candidate integration check at affected public interfaces", "Rollback verification against captured original hashes"),
             compatibility_requirements=("Preserve current public interfaces",),
             rollback_procedure="Restore the pre-change file hashes and restart the affected subsystem.",
             implementation_risk=finding.implementation_risk,

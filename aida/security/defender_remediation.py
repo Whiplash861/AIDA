@@ -90,6 +90,9 @@ class DefenderRemediationService:
             raise RuntimeError(
                 "The sole active Defender threat does not match the requested file path."
             )
+        resources = tuple(detection.metadata.get("resources") or ())
+        if not resources or any(not _exact_file_resource(resource, target) for resource in resources):
+            raise RuntimeError("The active threat includes unknown or additional resources; exact-file remediation is unavailable.")
         threat_id = str(detection.metadata.get("threat_id") or "").strip()
         if not threat_id:
             raise RuntimeError(
@@ -107,8 +110,12 @@ class DefenderRemediationService:
     def execute(
         self,
         candidate: DefenderRemediationCandidate,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> DefenderRemediationResult:
         # Revalidate every scope element immediately before requesting elevation.
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Remediation was cancelled before elevation")
         current = self.prepare(
             candidate.path,
             expected_sha256=candidate.sha256,
@@ -125,6 +132,8 @@ class DefenderRemediationService:
                     "Remediation was blocked because the active Defender detection identity changed."
                 ),
             )
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Remediation was cancelled before elevation")
         payload = self.runner.run_json(
             _remediation_script(current),
             timeout=180.0,
@@ -166,6 +175,8 @@ def _remediation_script(candidate: DefenderRemediationCandidate) -> str:
     expected_threat = base64.b64encode(
         candidate.threat_id.encode("utf-8")
     ).decode("ascii")
+    expected_detection = base64.b64encode(candidate.detection_id.encode("utf-8")).decode("ascii")
+    expected_hash = base64.b64encode(candidate.sha256.encode("ascii")).decode("ascii")
     result_path = Path(os.getenv("TEMP") or Path.home()) / (
         f"aida-remediation-{uuid4().hex}.json"
     )
@@ -176,6 +187,8 @@ def _remediation_script(candidate: DefenderRemediationCandidate) -> str:
 $ErrorActionPreference = 'Stop'
 $expectedPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{expected_path}'))
 $expectedThreatId = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{expected_threat}'))
+$expectedDetectionId = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{expected_detection}'))
+$expectedHash = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{expected_hash}'))
 $resultPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_result}'))
 $result = [ordered]@{{
     Attempted = $false
@@ -191,20 +204,22 @@ try {{
     }} elseif ([string]$active[0].ThreatID -ne $expectedThreatId) {{
         $result.Detail = 'Guard failed: the sole active Defender Threat ID changed.'
     }} else {{
-        $detections = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object {{ [string]$_.ThreatID -eq $expectedThreatId }})
+        $detections = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object {{ [string]$_.ThreatID -eq $expectedThreatId -and [string]$_.DetectionID -eq $expectedDetectionId }})
         $pathMatched = $false
-        foreach ($detection in $detections) {{
-            foreach ($resource in @($detection.Resources)) {{
-                $resourceText = ([string]$resource).ToLowerInvariant()
-                if ($resourceText.Contains($expectedPath.ToLowerInvariant())) {{
-                    $pathMatched = $true
-                    break
-                }}
+        if ($detections.Count -eq 1) {{
+            $resources = @($detections[0].Resources) + @($active[0].Resources)
+            $pathMatched = ($resources.Count -gt 0)
+            foreach ($resource in $resources) {{
+                $resourceText = [string]$resource
+                if (-not $resourceText.StartsWith('file:_', [StringComparison]::OrdinalIgnoreCase)) {{ $pathMatched = $false; break }}
+                $resourcePath = [IO.Path]::GetFullPath($resourceText.Substring(6))
+                if (-not $resourcePath.Equals([IO.Path]::GetFullPath($expectedPath), [StringComparison]::OrdinalIgnoreCase)) {{ $pathMatched = $false; break }}
             }}
-            if ($pathMatched) {{ break }}
         }}
         if (-not $pathMatched) {{
-            $result.Detail = 'Guard failed: Defender resources no longer include the authorized path.'
+            $result.Detail = 'Guard failed: Defender detection identity or exact resource scope changed.'
+        }} elseif ((Get-FileHash -LiteralPath $expectedPath -Algorithm SHA256 -ErrorAction Stop).Hash -ne $expectedHash) {{
+            $result.Detail = 'Guard failed: the authorized file SHA-256 changed during elevation.'
         }} else {{
             $result.GuardPassed = $true
             $result.Attempted = $true
@@ -236,7 +251,7 @@ $exitCode = $null
 try {{
     $powershell = Join-Path $PSHOME 'powershell.exe'
     if (-not (Test-Path $powershell)) {{ $powershell = 'powershell.exe' }}
-    $process = Start-Process -FilePath $powershell -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand','{child_encoded}') -Verb RunAs -Wait -PassThru -ErrorAction Stop
+    $process = Start-Process -FilePath $powershell -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand','{child_encoded}') -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
     $attempted = $true
     $elevationAccepted = $true
     $exitCode = $process.ExitCode
@@ -281,6 +296,11 @@ def _path_key(path: Path) -> str:
         return os.path.normcase(str(path.expanduser().resolve()))
     except OSError:
         return os.path.normcase(str(path.expanduser().absolute()))
+
+
+def _exact_file_resource(resource: object, target: Path) -> bool:
+    text = str(resource)
+    return text.lower().startswith("file:_") and _path_key(Path(text[6:])) == _path_key(target)
 
 
 def _optional_bool(value: object) -> bool | None:

@@ -1,40 +1,32 @@
-import logging
-import os
-from typing import Optional
-from .config import AidaConfig
+from __future__ import annotations
 
-_LOGGER: Optional[logging.Logger] = None
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from aida.config import AidaConfig
+from aida.memory.privacy import sanitize_text
+
+
+class _RedactedFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return sanitize_text(super().format(record))
+
 
 def setup_logging(config: AidaConfig) -> None:
-    """
-    Initialize AIDA's logging system. Creates a log directory if needed.
-    """
-    global _LOGGER
-
-    # Prevent re-initialization
-    if _LOGGER is not None:
-        return
-
-    os.makedirs(config.log_dir, exist_ok=True)
-    log_path = os.path.join(config.log_dir, "aida.log")
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.FileHandler(log_path, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
-    )
-
-    _LOGGER = logging.getLogger("AIDA")
+    """Install bounded AIDA logging even if another library configured logging."""
+    logger = logging.getLogger("aida")
+    path = Path(config.log_dir) / "aida.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for handler in logger.handlers:
+        if getattr(handler, "baseFilename", None) == str(path.resolve()):
+            return
+    handler = RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    handler.setFormatter(_RedactedFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 def get_logger(name: str) -> logging.Logger:
-    """
-    Retrieve a logger for a given module or component.
-    """
-    if _LOGGER is None:
-        # Fallback if logging wasn't initialized yet
-        logging.basicConfig(level=logging.INFO)
     return logging.getLogger(name)

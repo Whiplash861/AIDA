@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import os
+import math
 import subprocess
 
 import psutil
@@ -22,37 +23,13 @@ def run_performance_diagnostics() -> list[Finding]:
 
     findings: list[Finding] = []
 
-    try:
-        findings.extend(_scan_cpu())
-        findings.extend(_scan_memory())
-        findings.extend(_scan_top_memory_processes())
-        findings.extend(_scan_nvidia_gpu())
-
-        log.info("Performance diagnostics complete.")
-
-    except Exception as exc:
-        log.exception(
-            "Performance diagnostics failed: %s",
-            exc,
-        )
-
-        findings.append(
-            Finding(
-                id="perf.error",
-                title="Performance diagnostics error",
-                severity="high",
-                detail=(
-                    "Performance diagnostics encountered "
-                    "an unexpected error."
-                ),
-                evidence=str(exc),
-                recommended_next=(
-                    "Review the application logs and rerun "
-                    "the performance scan."
-                ),
-            )
-        )
-
+    for name, scan in (("cpu", _scan_cpu), ("memory", _scan_memory), ("processes", _scan_top_memory_processes), ("gpu", _scan_nvidia_gpu)):
+        try:
+            findings.extend(scan())
+        except Exception as exc:
+            log.warning("%s telemetry unavailable: %s", name, type(exc).__name__)
+            findings.append(Finding(id=f"perf.{name}_unavailable", title=f"{name.title()} telemetry",
+                severity="info", detail="Telemetry unavailable; no health conclusion was made.", evidence=type(exc).__name__))
     return findings
 
 
@@ -380,8 +357,8 @@ def _scan_nvidia_gpu() -> list[Finding]:
 
         evidence = (
             f"{name}; "
-            f"{memory_used_mb:.0f} MB used of "
-            f"{memory_total_mb:.0f} MB"
+            f"{_display(memory_used_mb)} MB used of "
+            f"{_display(memory_total_mb)} MB"
         )
 
         recommended_next = ""
@@ -443,30 +420,19 @@ def _usage_interpretation(
     critical_threshold: float,
 ) -> str:
     if value >= critical_threshold:
-        return "Critical load condition"
+        return "High utilization in this snapshot; workload context is needed"
 
     if value >= warning_threshold:
         return "Elevated resource pressure"
 
-    return "Operating within normal parameters"
+    return "Below the configured utilization threshold"
 
 
-def _gpu_severity(
-    utilization: float,
-    temperature_c: float,
-) -> str:
-    if (
-        utilization >= 95.0
-        or temperature_c >= 85.0
-    ):
-        return "high"
-
-    if (
-        utilization >= 80.0
-        or temperature_c >= 75.0
-    ):
+def _gpu_severity(utilization: float | None, temperature_c: float | None) -> str:
+    # A busy GPU is expected for many workloads. Temperature is a prompt to
+    # verify device-specific limits, not proof of hardware failure.
+    if temperature_c is not None and temperature_c >= 85:
         return "medium"
-
     return "info"
 
 
@@ -476,13 +442,13 @@ def _bytes_to_gb(
     return value / (1024 ** 3)
 
 
-def _safe_float(
-    value: str,
-) -> float:
+def _safe_float(value: str) -> float | None:
     try:
-        return float(
-            value.strip()
-        )
+        number = float(value.strip())
+        return number if math.isfinite(number) else None
+    except (ValueError, TypeError):
+        return None
 
-    except ValueError:
-        return 0.0
+
+def _display(value: float | None) -> str:
+    return "unavailable" if value is None else f"{value:.1f}"

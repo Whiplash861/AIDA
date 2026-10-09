@@ -47,7 +47,7 @@ async function runAndroidQuickscan(includeInContext: boolean): Promise<EngineCom
   }
 
   const speechText = warnings.length === 0
-    ? 'Quickscan complete. Android device posture is within available operating parameters.'
+    ? (evidence.gaps.length ? 'Quickscan complete with missing observations. Review the visibility notes; unobserved conditions cannot be assessed.' : 'Quickscan complete. No anomaly was identified in the available Android observations.')
     : `Quickscan complete. ${warnings.length} condition${warnings.length === 1 ? '' : 's'} require attention.`;
 
   return {
@@ -55,6 +55,7 @@ async function runAndroidQuickscan(includeInContext: boolean): Promise<EngineCom
     speechText,
     includeInContext,
     executed: true,
+    evidence: {id: evidence.capturedAt + '-' + Math.random().toString(36).slice(2), capturedAt: evidence.capturedAt, platform: evidence.platform, kind: 'diagnostic', observations: {...evidence}, gaps: evidence.gaps.map(gap => gap.detail), transcript: lines.join('\n')},
   };
 }
 
@@ -113,7 +114,7 @@ async function runAndroidPerformanceScan(includeInContext: boolean): Promise<Eng
   }
 
   const speechText = warnings.length === 0
-    ? 'Performance scan complete. No Android-visible storage, power, or connectivity pressure detected. Process-level visibility remains limited by Android.'
+    ? (evidence.gaps.length ? 'Performance scan complete with missing observations. Review the visibility notes.' : 'Performance scan complete. No Android-visible storage, power, or connectivity pressure detected. Process-level visibility remains limited by Android.')
     : `Performance scan complete. ${warnings.length} Android-visible performance condition${warnings.length === 1 ? '' : 's'} detected.`;
 
   return {
@@ -121,6 +122,7 @@ async function runAndroidPerformanceScan(includeInContext: boolean): Promise<Eng
     speechText,
     includeInContext,
     executed: true,
+    evidence: {id: evidence.capturedAt + '-' + Math.random().toString(36).slice(2), capturedAt: evidence.capturedAt, platform: evidence.platform, kind: 'diagnostic', observations: {...evidence}, gaps: evidence.gaps.map(gap => gap.detail), transcript: lines.join('\n')},
   };
 }
 

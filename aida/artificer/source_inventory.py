@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,8 +20,8 @@ class SourceInventory:
 
     def collect(self) -> tuple[SourceFileRecord, ...]:
         records: list[SourceFileRecord] = []
-        for path in sorted(self.source_root.rglob("*")):
-            if not path.is_file() or self._ignored(path):
+        for path in iter_source_files(self.source_root):
+            if not path.is_file() or path.is_symlink() or self._ignored(path):
                 continue
             try:
                 data = path.read_bytes()
@@ -37,9 +38,25 @@ class SourceInventory:
         return tuple(records)
 
     def _ignored(self, path: Path) -> bool:
-        parts = {part.lower() for part in path.parts}
+        relative = path.relative_to(self.source_root)
+        parts = {part.lower() for part in relative.parts}
         return bool(
             parts.intersection(
-                {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "logs", "memory"}
+                {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "logs"}
             )
         )
+
+
+def iter_source_files(root: Path):
+    """Prune generated/private trees before traversing; include aida/memory."""
+    ignored = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", "dist", "build", "logs"}
+    for directory, folders, files in os.walk(root, topdown=True, followlinks=False):
+        parent = Path(directory)
+        folders[:] = sorted(name for name in folders
+                            if name.lower() not in ignored
+                            and not (parent / name).is_symlink()
+                            and not (parent == root and name.lower() == "memory"))
+        for name in sorted(files):
+            path = parent / name
+            if not name.startswith(".env") and not path.is_symlink():
+                yield path

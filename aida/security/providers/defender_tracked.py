@@ -105,7 +105,7 @@ class CompletionAwareMicrosoftDefenderProvider(MicrosoftDefenderProvider):
             if self._provider_check_due(handle.scan_id):
                 payload = self._read_provider_scan_state(record.request, handle)
                 terminal_status = _terminal_status_from_payload(payload)
-                if terminal_status is not None:
+                if terminal_status is not None and record.request.mode is SecurityScanMode.DEEP:
                     record.terminal_status = terminal_status
                     self._last_provider_checks.pop(handle.scan_id, None)
                     _terminate_completed_host(record.command)
@@ -218,7 +218,7 @@ $start = $status.{start_property}
 $end = $status.{end_property}
 $startedForRequest = (
     $null -ne $start -and
-    $start.ToUniversalTime() -ge $requested.AddMinutes(-1)
+    $start.ToUniversalTime() -ge $requested
 )
 $completedForRequest = (
     $startedForRequest -and
@@ -308,7 +308,7 @@ $events = @(
     Get-WinEvent -FilterHashtable @{{
         LogName = 'Microsoft-Windows-Windows Defender/Operational'
         Id = 1000, 1001, 1002
-        StartTime = $requested.AddMinutes(-1)
+        StartTime = $requested
     }} -ErrorAction SilentlyContinue |
         Sort-Object TimeCreated |
         ForEach-Object {{ Convert-DefenderScanEvent $_ }}
@@ -317,7 +317,7 @@ $events = @(
 $starts = @(
     $events | Where-Object {{
         $_.Id -eq 1000 -and
-        $_.TimeCreated -ge $requested.AddSeconds(-10)
+        $_.TimeCreated -ge $requested
     }}
 )
 
@@ -326,7 +326,7 @@ $matchingStarts = @(
         $resourceText = ([string]$_.Resources).ToLowerInvariant()
         $matchedTarget = $false
         foreach ($target in $targets) {{
-            if ($resourceText.Contains(([string]$target).ToLowerInvariant())) {{
+            if ($resourceText -eq ([string]$target).ToLowerInvariant()) {{
                 $matchedTarget = $true
                 break
             }}
@@ -336,19 +336,10 @@ $matchingStarts = @(
 )
 
 $start = $null
-if ($matchingStarts.Count -gt 0) {{
-    $start = $matchingStarts[-1]
-}} else {{
-    $customStarts = @(
-        $starts | Where-Object {{
-            ([string]$_.Parameters) -match '(?i)custom|customer'
-        }}
-    )
-    if ($customStarts.Count -gt 0) {{
-        $start = $customStarts[-1]
-    }} elseif ($starts.Count -eq 1) {{
-        $start = $starts[0]
-    }}
+# A multi-target host runs scans sequentially; one target event cannot prove
+# completion of the entire request. Ambiguous events remain non-authoritative.
+if ($targets.Count -eq 1 -and $matchingStarts.Count -eq 1) {{
+    $start = $matchingStarts[0]
 }}
 
 $terminal = $null

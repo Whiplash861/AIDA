@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 
-WINDOW_PATH = Path("aida/frontend/window.py")
+WINDOW_PATH = Path("aida/frontend/_window_base.py")
 VOICE_PATH = Path("aida/interaction/voice_capture.py")
 BRIDGE_PATH = Path("aida/interaction/qt_bridge.py")
 

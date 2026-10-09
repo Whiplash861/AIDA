@@ -7,14 +7,15 @@
     "eas-build-post-install": "npm run sync-aida-assets",
     "prestart": "npm run sync-aida-assets",
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
     "preandroid": "npm run sync-aida-assets",
     "android": "expo start --android",
     "preios": "npm run sync-aida-assets",
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.cjs",
+    "eas-build-pre-install": "node ./scripts/validate-release.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -22,14 +23,17 @@
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "expo": "~54.0.37",
+    "expo-asset": "~12.0.13",
     "expo-audio": "~1.1.1",
     "expo-battery": "~10.0.8",
+    "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.14",
     "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.23",
     "expo-font": "~14.0.12",
     "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",
+    "expo-image-picker": "~17.0.11",
     "expo-linking": "~8.0.12",
     "expo-network": "~8.0.8",
     "expo-router": "~6.0.24",
@@ -53,9 +57,9 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
-    "typescript": "~5.9.2",
     "eslint": "^9.25.0",
-    "eslint-config-expo": "~10.0.0"
+    "eslint-config-expo": "~10.0.0",
+    "typescript": "~5.9.2"
   },
   "private": true
 }

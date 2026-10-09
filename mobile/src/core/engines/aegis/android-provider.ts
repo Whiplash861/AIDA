@@ -33,7 +33,7 @@ async function runSecurityStatus(includeInContext: boolean): Promise<EngineComma
     `Android API level: ${evidence.apiLevel ?? 'Unavailable'}`,
     `OS build: ${evidence.osBuildId ?? 'Unavailable'}`,
     `Root indicator: ${rooted == null ? 'Unavailable' : rooted ? 'DETECTED' : 'Not detected'}`,
-    `Build signing posture: ${testKeys ? 'TEST-KEYS REPORTED' : 'No test-key indicator reported'}`,
+    `Build signing posture: ${!evidence.osBuildFingerprint ? 'Unavailable' : testKeys ? 'TEST-KEYS REPORTED' : 'No test-key indicator reported'}`,
     `Network: ${evidence.networkType}, ${connectivityLabel(evidence.networkConnected, evidence.internetReachable)}`,
     '',
     'Provider visibility:',
@@ -49,13 +49,14 @@ async function runSecurityStatus(includeInContext: boolean): Promise<EngineComma
   const warningCount = Number(rooted === true) + Number(testKeys);
   const speechText = warningCount > 0
     ? `Aegis security status complete. ${warningCount} Android-visible security condition${warningCount === 1 ? '' : 's'} require attention. Provider visibility remains limited.`
-    : 'Aegis security status complete. No Android-visible root or test-key indicator detected. Security-provider visibility remains limited.';
+    : 'Aegis security status complete. Available observations are displayed; missing root, signing, and security-provider evidence cannot establish healthy status.';
 
   return {
     transcriptText: lines.join('\n'),
     speechText,
     includeInContext,
     executed: true,
+    evidence: {id: evidence.capturedAt + '-' + Math.random().toString(36).slice(2), capturedAt: evidence.capturedAt, platform: evidence.platform, kind: 'aegis', observations: {...evidence}, gaps: evidence.gaps.map(gap => gap.detail), transcript: lines.join('\n')},
   };
 }
 
@@ -141,6 +142,7 @@ async function runSurfaceSecurityScan(includeInContext: boolean): Promise<Engine
     speechText,
     includeInContext,
     executed: true,
+    evidence: {id: evidence.capturedAt + '-' + Math.random().toString(36).slice(2), capturedAt: evidence.capturedAt, platform: evidence.platform, kind: 'aegis', observations: {...evidence}, gaps: evidence.gaps.map(gap => gap.detail), transcript: lines.join('\n')},
   };
 }
 

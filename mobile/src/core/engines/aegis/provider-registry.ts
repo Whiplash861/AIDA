@@ -87,7 +87,7 @@ export class AegisAndroidProviderRegistry {
       label: slot.subprocess.label,
       state: slot.state,
       provider: slot.subprocess.provider ?? 'unassigned',
-      executable: Boolean(slot.executor),
+      executable: Boolean(slot.executor && slot.state !== 'staged'),
       detail: slot.subprocess.detail,
     }));
   }

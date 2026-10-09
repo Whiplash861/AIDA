@@ -1,3 +1,6 @@
+import { Platform } from 'react-native';
+import { MOBILE_AEGIS } from '@/src/core/engines/aegis/runtime';
+import { captureAndroidSystemEvidence } from '@/src/core/platform/android/system-evidence';
 import { executeAndroidAegisCommand } from '@/src/core/engines/aegis/android-provider';
 import { AEGIS_ENGINE } from '@/src/core/engines/aegis/manifest';
 import { ARTIFICER_ENGINE } from '@/src/core/engines/artificer/manifest';
@@ -10,16 +13,18 @@ import {
 } from '@/src/core/engines/types';
 import { RoutedDirective } from '@/src/core/reasoning/types';
 
+if (Platform.OS === 'android') {
+  MOBILE_AEGIS.providers.register('provider.health', input => executeAndroidAegisCommand(input as RoutedDirective, {platform: 'Android'}), 'limited');
+  MOBILE_AEGIS.providers.register('scan.surface', input => executeAndroidAegisCommand(input as RoutedDirective, {platform: 'Android'}), 'limited');
+  MOBILE_AEGIS.providers.register('sensor.network', async () => {
+    const evidence = await captureAndroidSystemEvidence();
+    return {capturedAt: evidence.capturedAt, connected: evidence.networkConnected, internetReachable: evidence.internetReachable, type: evidence.networkType};
+  }, 'limited');
+}
 const AEGIS_ANDROID_ENGINE: MobileEngineDefinition = {
   ...AEGIS_ENGINE,
-  state: 'limited',
-  subprocesses: AEGIS_ENGINE.subprocesses.map((item) => {
-    if (item.id === 'sensor.network') return { ...item, state: 'supported' as const };
-    if (item.id === 'provider.health' || item.id === 'scan.surface') {
-      return { ...item, state: 'limited' as const };
-    }
-    return item;
-  }),
+  state: Platform.OS === 'android' ? 'limited' : 'staged',
+  subprocesses: AEGIS_ENGINE.subprocesses.map(item => ({...item, state: MOBILE_AEGIS.providers.get(item.id)?.state ?? 'staged'})),
 };
 
 export const MOBILE_ENGINE_CATALOG: readonly MobileEngineDefinition[] = [
@@ -54,8 +59,18 @@ export async function executeEngineDirective(
   // This keeps the Engine contract stable while allowing Android capability
   // slices to graduate independently as genuine providers become available.
   if (engine.id === 'aegis') {
-    const androidAegisResult = await executeAndroidAegisCommand(directive, context);
-    if (androidAegisResult) return androidAegisResult;
+    const slot = directive.commandType === 'SECURITY_STATUS' ? 'provider.health' : directive.commandType === 'SECURITY_SURFACE_SCAN' ? 'scan.surface' : '';
+    if (context.platform.toLowerCase() === 'android' && slot && MOBILE_AEGIS.providers.canExecute(slot)) {
+      MOBILE_AEGIS.beginInvestigation();
+      try {
+        const result = await MOBILE_AEGIS.providers.execute(slot, directive) as EngineCommandResult;
+        MOBILE_AEGIS.completeObservation({degradedReasons: [...(result.evidence?.gaps ?? []), 'Background observation and native security-provider telemetry remain unavailable.']});
+        return result;
+      } catch (error) {
+        MOBILE_AEGIS.completeObservation({degradedReasons: ['Manual Android evidence collection failed.']});
+        throw error;
+      }
+    }
   }
 
   if (!engine.execute) {

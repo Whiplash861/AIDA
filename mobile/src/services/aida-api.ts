@@ -64,13 +64,18 @@ export type ActivityResponse = {
   items: ActivityItem[];
 };
 
-const API_URL = (process.env.EXPO_PUBLIC_AIDA_API_URL ?? '')
-  .trim()
-  .replace(/\/$/, '');
-
-const PAIRING_TOKEN = (
-  process.env.EXPO_PUBLIC_AIDA_PAIRING_TOKEN ?? ''
-).trim();
+// Optional desktop bridge. This credential is explicitly supplied at runtime,
+// kept in memory, and independent of the standalone services enrollment.
+let API_URL = '';
+let PAIRING_TOKEN = '';
+export function configureDesktopBridge(baseUrl: string, token: string): void {
+  const url = new URL(baseUrl.trim());
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Desktop bridge requires an HTTPS endpoint without embedded credentials.');
+  if (!/^[\x21-\x7E]{1,512}$/.test(token.trim())) throw new Error('Desktop pairing token is invalid.');
+  API_URL = url.toString().replace(/\/$/, '');
+  PAIRING_TOKEN = token.trim();
+}
+export function disconnectDesktopBridge(): void { API_URL = ''; PAIRING_TOKEN = ''; }
 
 export function configuredApiUrl() {
   return API_URL;
@@ -119,7 +124,7 @@ async function request<T>(
 ): Promise<T> {
   if (!API_URL) {
     throw new Error(
-      'Mobile bridge address is not configured. Set EXPO_PUBLIC_AIDA_API_URL.',
+      'Optional desktop bridge has not been configured for this session.',
     );
   }
 
@@ -145,11 +150,7 @@ async function request<T>(
     const payload = await response.json().catch(() => null);
 
     if (!response.ok) {
-      const detail =
-        payload && typeof payload.detail === 'string'
-          ? payload.detail
-          : `AIDA mobile bridge returned HTTP ${response.status}.`;
-      throw new Error(detail);
+      throw new Error('AIDA desktop bridge request failed (HTTP ' + response.status + ').');
     }
 
     return payload as T;
@@ -157,7 +158,7 @@ async function request<T>(
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('AIDA mobile bridge timed out.');
     }
-    throw error;
+    throw new Error('AIDA desktop bridge is unavailable.');
   } finally {
     clearTimeout(timeout);
   }

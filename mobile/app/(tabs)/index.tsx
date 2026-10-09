@@ -6,9 +6,11 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
+import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -36,6 +38,9 @@ import {
 } from '@/src/core/interaction/transcription-client';
 import {
   beginVoiceListening,
+  reserveVoiceInput,
+  cancelRuntimeOperation,
+  refreshServicesGateway,
   beginVoiceProcessing,
   completeVoiceInput,
   failVoiceInput,
@@ -83,6 +88,15 @@ export default function HomeScreen() {
   ]);
   const scrollRef = useRef<ScrollView>(null);
   const voiceRecordingRef = useRef(false);
+  const voiceBusyRef = useRef(false);
+  const voiceStartingRef = useRef(false);
+  const voiceGenerationRef = useRef(0);
+  const submissionRef = useRef(false);
+  const mountedRef = useRef(true);
+  const voiceSignalRef = useRef<AbortSignal | null>(null);
+  const recordingUriRef = useRef<string | null>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const voiceLimitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
@@ -134,21 +148,35 @@ export default function HomeScreen() {
     }
   }, [keyboardVisible, scrollMessagesToEnd]);
 
-  useEffect(
-    () => () => {
-      if (voiceLimitTimerRef.current) {
-        clearTimeout(voiceLimitTimerRef.current);
-      }
-      if (voiceRecordingRef.current) {
-        void audioRecorder.stop().catch(() => undefined);
-      }
-    },
-    [audioRecorder],
-  );
+  const cancelCapture = useCallback(() => {
+    const generation = ++voiceGenerationRef.current;
+    const ownedUri = recordingUriRef.current;
+    cancelRuntimeOperation();
+    if (voiceLimitTimerRef.current) clearTimeout(voiceLimitTimerRef.current);
+    voiceLimitTimerRef.current = null;
+    voiceRecordingRef.current = false;
+    void audioRecorder.stop().catch(() => undefined).then(async () => {
+      await discardAidaRecording(ownedUri).catch(() => undefined);
+      if (generation !== voiceGenerationRef.current) return;
+      await setAudioModeAsync({playsInSilentMode: true, allowsRecording: false}).catch(() => undefined);
+      if (generation === voiceGenerationRef.current && !voiceStartingRef.current) voiceBusyRef.current = false;
+    });
+    if (mountedRef.current) { setVoiceRecording(false); setVoiceProcessing(false); }
+  }, [audioRecorder]);
+
+  useFocusEffect(useCallback(() => () => cancelCapture(), [cancelCapture]));
+  useEffect(() => {
+    mountedRef.current = true;
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') cancelCapture();
+      else void refreshServicesGateway();
+    });
+    return () => { mountedRef.current = false; subscription.remove(); cancelCapture(); };
+  }, [cancelCapture]);
 
   async function submitMessage() {
     const clean = draft.trim();
-    if (!clean || !inputReady) {
+    if (!clean || !inputReady || submissionRef.current) {
       return;
     }
     setDraft('');
@@ -156,32 +184,32 @@ export default function HomeScreen() {
   }
 
   async function submitDirectiveText(clean: string) {
+    if (submissionRef.current || !mountedRef.current) return;
+    submissionRef.current = true;
     // Native AIDA captures the previous eligible conversation before adding
     // the current User message, then passes that recent context to AIDABrain.
-    const conversationContext = buildConversationContext(messages);
+    const conversationContext = buildConversationContext(messagesRef.current);
     const userMessage: MobileMessage = {
-      id: `user-${Date.now()}`,
+      id: `user-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       sender: 'user',
       text: clean,
+      includeInContext: false,
     };
 
-    setMessages((current) => [...current, userMessage]);
+    setMessages((current) => [...current.slice(-199), userMessage]);
     setShowQuickActions(false);
 
     try {
       const result = await submitLocalDirective(clean, conversationContext);
+      if (!mountedRef.current) return;
       setMessages((current) => {
-        const contextualized = result.includeInContext
-          ? current
-          : current.map((message) =>
-              message.id === userMessage.id
-                ? { ...message, includeInContext: false }
-                : message,
-            );
+        const contextualized = current.map(message =>
+          message.id === userMessage.id ? {...message, includeInContext: result.includeInContext} : message,
+        );
         return [
-          ...contextualized,
+          ...contextualized.slice(-199),
           {
-            id: `aida-${Date.now()}`,
+            id: `aida-${Date.now()}-${Math.random().toString(36).slice(2)}`,
             sender: 'aida',
             text: result.text,
             includeInContext: result.includeInContext,
@@ -189,16 +217,18 @@ export default function HomeScreen() {
         ];
       });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Unknown brain error.';
+      if (!mountedRef.current) return;
+      const detail = error instanceof Error ? error.message : 'AIDA request could not complete.';
       setMessages((current) => [
-        ...current,
+        ...current.slice(-199),
         {
-          id: `system-${Date.now()}`,
+          id: `system-${Date.now()}-${Math.random().toString(36).slice(2)}`,
           sender: 'system',
           text: `AIDA brain request failed: ${detail}`,
+          includeInContext: false,
         },
       ]);
-    }
+    } finally { submissionRef.current = false; }
   }
 
   async function toggleVoiceCapture() {
@@ -211,98 +241,100 @@ export default function HomeScreen() {
   }
 
   async function startVoiceCapture() {
-    if (runtime.status !== 'STANDBY' || voiceProcessing) return;
-    if (!voiceAvailable) {
-      appendSystemMessage(
-        'Voice transcription is unavailable. No microphone recording was started.',
-      );
-      return;
-    }
-
+    if (voiceBusyRef.current || submissionRef.current || runtime.status !== 'STANDBY') return;
+    if (!voiceAvailable) { appendSystemMessage('Voice transcription is unavailable. No microphone recording was started.'); return; }
+    voiceBusyRef.current = true;
+    voiceStartingRef.current = true;
+    const generation = ++voiceGenerationRef.current;
+    let ownedUri: string | null = null;
+    let started = false;
+    let ownedSignal: AbortSignal | undefined;
     try {
+      const signal = reserveVoiceInput();
+      ownedSignal = signal;
+      voiceSignalRef.current = signal;
+      const check = () => { if (signal.aborted || generation !== voiceGenerationRef.current || !mountedRef.current) throw new Error('Voice input cancelled.'); };
       const permission = await AudioModule.requestRecordingPermissionsAsync();
-      if (!permission.granted) {
-        throw new Error('Microphone access was denied by the operating system.');
-      }
-
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: true,
-      });
+      check();
+      if (!permission.granted) throw new Error('Microphone access was denied by the operating system.');
+      await setAudioModeAsync({playsInSilentMode: true, allowsRecording: true});
+      check();
       await audioRecorder.prepareToRecordAsync();
-      audioRecorder.record();
+      ownedUri = audioRecorder.uri;
+      check();
+      recordingUriRef.current = ownedUri;
+      // Native duration remains bounded even if the JavaScript thread is suspended.
+      audioRecorder.record({forDuration: VOICE_RECORDING_LIMIT_MS / 1000});
       voiceRecordingRef.current = true;
+      started = true;
       setVoiceRecording(true);
       setShowQuickActions(true);
-      await beginVoiceListening();
-
-      voiceLimitTimerRef.current = setTimeout(() => {
-        void stopVoiceCapture(true);
-      }, VOICE_RECORDING_LIMIT_MS);
-    } catch (error) {
-      const detail =
-        error instanceof Error ? error.message : 'Microphone capture could not start.';
+      await beginVoiceListening(signal);
+      check();
+      voiceLimitTimerRef.current = setTimeout(() => { void stopVoiceCapture(true); }, VOICE_RECORDING_LIMIT_MS);
+    } catch {
+      if (!ownedSignal) {
+        if (mountedRef.current) appendSystemMessage('AIDA is already processing an operation.');
+        return;
+      }
+      await audioRecorder.stop().catch(() => undefined);
+      await discardAidaRecording(ownedUri).catch(() => undefined);
       voiceRecordingRef.current = false;
-      setVoiceRecording(false);
-      await failVoiceInput(detail);
-      appendSystemMessage(detail);
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: false,
-      }).catch(() => undefined);
-    }
+      started = false;
+      if (mountedRef.current) setVoiceRecording(false);
+      await failVoiceInput('Microphone capture could not start or was cancelled.', ownedSignal);
+      if (mountedRef.current) appendSystemMessage('Microphone capture could not start or was cancelled.');
+      await setAudioModeAsync({playsInSilentMode: true, allowsRecording: false}).catch(() => undefined);
+    } finally { voiceStartingRef.current = false; if (!started) voiceBusyRef.current = false; }
   }
 
   async function stopVoiceCapture(limitReached: boolean) {
     if (!voiceRecordingRef.current) return;
-
     voiceRecordingRef.current = false;
     setVoiceRecording(false);
-    if (voiceLimitTimerRef.current) {
-      clearTimeout(voiceLimitTimerRef.current);
-      voiceLimitTimerRef.current = null;
-    }
-
-    let recordingUri: string | null = null;
+    if (voiceLimitTimerRef.current) clearTimeout(voiceLimitTimerRef.current);
+    voiceLimitTimerRef.current = null;
+    let recordingUri: string | null = recordingUriRef.current;
+    const generation = voiceGenerationRef.current;
+    const signal = voiceSignalRef.current ?? undefined;
     try {
       await audioRecorder.stop();
+      if (generation !== voiceGenerationRef.current) throw new Error('Voice input cancelled.');
       recordingUri = audioRecorder.uri;
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: false,
-      });
-
-      if (limitReached) {
-        throw new Error('Recording exceeded the 120-second limit.');
-      }
-      if (!recordingUri) {
-        throw new Error('No microphone audio was captured.');
-      }
-
+      recordingUriRef.current = recordingUri;
+      await setAudioModeAsync({playsInSilentMode: true, allowsRecording: false});
+      if (signal?.aborted) throw new Error('Voice input cancelled.');
+      if (limitReached) throw new Error('Recording reached the 120-second limit and was discarded.');
+      if (!recordingUri) throw new Error('No microphone audio was captured.');
       setVoiceProcessing(true);
-      await beginVoiceProcessing();
-      const transcript = await transcribeAidaRecording(recordingUri);
-      await completeVoiceInput();
-      setVoiceProcessing(false);
-      await submitDirectiveText(transcript);
-    } catch (error) {
-      const detail =
-        error instanceof Error ? error.message : 'Voice transcription failed.';
-      setVoiceProcessing(false);
-      await failVoiceInput(detail);
-      appendSystemMessage(detail);
-    } finally {
+      await beginVoiceProcessing(signal);
+      const transcript = await transcribeAidaRecording(recordingUri, signal);
       await discardAidaRecording(recordingUri);
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: false,
-      }).catch(() => undefined);
+      recordingUri = null;
+      recordingUriRef.current = null;
+      if (signal?.aborted || generation !== voiceGenerationRef.current || !mountedRef.current) throw new Error('Voice input cancelled.');
+      await completeVoiceInput(signal);
+      setVoiceProcessing(false);
+      voiceBusyRef.current = false;
+      await submitDirectiveText(transcript);
+    } catch {
+      const detail = signal?.aborted ? 'Voice input cancelled.' : 'Voice input could not complete. Check microphone permission and gateway availability.';
+      await failVoiceInput(detail, signal);
+      if (mountedRef.current && generation === voiceGenerationRef.current) { setVoiceProcessing(false); appendSystemMessage(detail); }
+    } finally {
+      await discardAidaRecording(recordingUri).catch(() => {
+        if (mountedRef.current) appendSystemMessage('Temporary microphone audio could not be removed.');
+      });
+      if (generation === voiceGenerationRef.current) {
+        await setAudioModeAsync({playsInSilentMode: true, allowsRecording: false}).catch(() => undefined);
+        if (generation === voiceGenerationRef.current) voiceBusyRef.current = false;
+      }
     }
   }
 
   function appendSystemMessage(text: string) {
     setMessages((current) => [
-      ...current,
+      ...current.slice(-199),
       {
         id: `system-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         sender: 'system',
@@ -314,7 +346,7 @@ export default function HomeScreen() {
 
   function stageAction(label: string) {
     setMessages((current) => [
-      ...current,
+      ...current.slice(-199),
       {
         id: `system-${label}-${Date.now()}`,
         sender: 'system',
@@ -483,6 +515,7 @@ export default function HomeScreen() {
               </Pressable>
 
               <TextInput
+                maxLength={8000}
                 value={draft}
                 onChangeText={setDraft}
                 onFocus={() => scrollMessagesToEnd(false)}

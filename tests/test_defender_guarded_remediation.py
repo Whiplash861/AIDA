@@ -17,6 +17,7 @@ def _detection(path: Path, detection_id="d1", threat_id="42"):
             "is_active": True,
             "action_success": False,
             "threat_id": threat_id,
+            "resources": [f"file:_{path}"],
         },
     )
 

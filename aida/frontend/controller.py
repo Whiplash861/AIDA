@@ -14,6 +14,7 @@ from aida.frontend.models import ChatHistory, ChatMessage
 from aida.frontend.status import AIDAStatus, StatusManager
 from aida.frontend.task_manager import TaskManager
 from aida.frontend.window import AIDAWindow
+from aida.perception.service import PerceptionService
 
 
 class AIDAController:
@@ -41,6 +42,7 @@ class AIDAController:
 
         self._brain_failed = False
         self._speech_failed = False
+        self._shutting_down = False
         self._pending_speech: deque[str] = deque(maxlen=12)
 
         self._connect_components()
@@ -65,6 +67,9 @@ class AIDAController:
 
     @Slot(str)
     def _handle_task_finished(self, task_name: str) -> None:
+        if self.task_manager.failed(task_name):
+            self._update_task_count()
+            return
         normalized_name = task_name.lower()
         if normalized_name == "brain":
             self.window.set_brain_status("IDLE")
@@ -127,12 +132,14 @@ class AIDAController:
         self.status_manager.set(AIDAStatus.STANDBY)
 
     @Slot(str)
-    def handle_user_message(self, text: str) -> None:
+    def handle_user_message(self, text: str) -> bool:
+        if self._shutting_down:
+            return False
         clean_text = text.strip()
         if not clean_text:
-            return
+            return False
 
-        routed_command = self.command_router.route(clean_text)
+        routed_command = self.command_router.route(clean_text, commit=False)
         if self.command_manager.is_running:
             if (
                 routed_command is None
@@ -145,27 +152,62 @@ class AIDAController:
                     "Only approved control commands can run until it finishes.",
                     include_in_context=False,
                 )
-                return
+                return False
         elif self.status_manager.current is not AIDAStatus.STANDBY:
-            return
+            return False
 
         if self.task_manager.is_running("brain"):
-            return
+            return False
+
+        evidence = tuple(getattr(self.window, "attached_evidence", ()))
 
         context = self.history.recent_context(limit=12)
         self.history.add_user(
             clean_text,
             include_in_context=(
-                routed_command is None or not routed_command.local_only
+                not evidence and (routed_command is None or not routed_command.local_only)
             ),
         )
         self.window.set_input_enabled(False)
 
+        if evidence:
+            self.status_manager.set(AIDAStatus.ANALYZING)
+
+            def deliver_review(report: object) -> None:
+                if self._shutting_down:
+                    return
+                self.history.add_aida(str(report), include_in_context=False)
+                if routed_command is not None:
+                    if self.command_manager.execute(routed_command):
+                        self.command_router.accept(routed_command)
+                else:
+                    self.history.add_system(
+                        "This review stayed on this device. Describe any visible warning text to continue the diagnosis.",
+                        include_in_context=False,
+                    )
+
+            def finish_review() -> None:
+                if not self.command_manager.is_running:
+                    self.status_manager.set(AIDAStatus.STANDBY)
+                    self.window.set_input_enabled(True)
+
+            started = self.task_manager.run_task(
+                name="perception", function=lambda: PerceptionService().review(evidence),
+                on_result=deliver_review,
+                on_error=lambda _error: self.history.add_system("Local image review is unavailable.", include_in_context=False),
+                on_finished=finish_review,
+            )
+            if not started:
+                finish_review()
+            return started
+
         if routed_command is not None:
             started = self.command_manager.execute(routed_command)
+            if started:
+                self.command_router.accept(routed_command)
             if not started:
                 self.window.set_input_enabled(True)
-            return
+            return started
 
         self.status_manager.set(AIDAStatus.ANALYZING)
         self._brain_failed = False
@@ -183,6 +225,7 @@ class AIDAController:
             self.history.add_system("AIDA brain task could not be started.")
             self.status_manager.set(AIDAStatus.ERROR)
             self.window.set_input_enabled(True)
+        return started
 
     @Slot(bool)
     def _handle_autonomy_toggled(self, enabled: bool) -> None:
@@ -220,7 +263,7 @@ class AIDAController:
 
     @Slot(str)
     def _handle_command_started(self, task_name: str) -> None:
-        if task_name.startswith("security_") and task_name not in {
+        if (task_name.startswith("security_") or task_name.startswith("aegis_")) and task_name not in {
             "security_cancel_request",
             "security_cancel_confirm",
         }:
@@ -233,7 +276,7 @@ class AIDAController:
 
     @Slot(str, str)
     def _handle_command_status_changed(self, category: str, status: str) -> None:
-        if category in {"DIAGNOSTICS", "SECURITY", "APPLICATION", "NAVIGATION"}:
+        if category in {"DIAGNOSTICS", "SECURITY", "APPLICATION", "NAVIGATION", "TECHNOMANCER"}:
             self.window.set_diagnostics_status(status)
         elif category == "MEMORY":
             self.window.set_memory_status(status)
@@ -255,6 +298,8 @@ class AIDAController:
                 )
 
     def _handle_brain_response(self, result: object) -> None:
+        if self._shutting_down:
+            return
         response = str(result).strip()
         if not response:
             self._brain_failed = True
@@ -279,6 +324,8 @@ class AIDAController:
             self.window.set_input_enabled(True)
 
     def _start_speech(self, text: str) -> None:
+        if self._shutting_down:
+            return
         clean = text.strip()
         if not clean:
             return
@@ -313,7 +360,7 @@ class AIDAController:
             QTimer.singleShot(0, self._drain_speech_queue)
 
     def _drain_speech_queue(self) -> None:
-        if self.task_manager.is_running("speech") or not self._pending_speech:
+        if self._shutting_down or self.task_manager.is_running("brain") or self.task_manager.is_running("speech") or not self._pending_speech:
             return
         self._start_speech(self._pending_speech.popleft())
 
@@ -323,6 +370,8 @@ class AIDAController:
         self.status_manager.set(AIDAStatus.ERROR)
 
     def _handle_speech_finished(self) -> None:
+        if self._shutting_down or self.task_manager.is_running("brain"):
+            return
         if self.command_manager.is_running:
             self.status_manager.set(AIDAStatus.ANALYZING)
         else:
@@ -342,7 +391,9 @@ class AIDAController:
         self.window.set_status(new_status)
 
     def shutdown(self) -> None:
+        self._shutting_down = True
         self._pending_speech.clear()
+        self.command_manager.shutdown()
         self.status_manager.unsubscribe(self._handle_status_changed)
         self.history.unsubscribe(self._handle_message_added)
         self.task_manager.task_started.disconnect(self._handle_task_started)
@@ -365,7 +416,7 @@ class AIDAController:
             self.window.autonomy_toggled.disconnect(
                 self._handle_autonomy_toggled
             )
-        self.task_manager.wait_for_done(timeout_ms=5000)
+        self.task_manager.close(timeout_ms=5000)
 
 
 def _local_user() -> str:

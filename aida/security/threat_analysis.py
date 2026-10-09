@@ -161,6 +161,9 @@ class LocalThreatAnalyzer:
             )
         _raise_if_cancelled(cancel_check)
         signature = self._inspect_signature(target)
+        after = target.stat()
+        if (stat.st_size, stat.st_mtime_ns, stat.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+            raise RuntimeError("The file changed while its identity was being inspected. Run a fresh analysis.")
         return FileIdentity(
             path=target,
             sha256=sha256,
@@ -503,7 +506,7 @@ def render_threat_analysis(record: ThreatAnalysisRecord) -> str:
             "",
             f"Provider classification: {record.provider_name or 'No provider classification linked'}",
             f"AIDA assessment: {record.assessment.value.replace('_', ' ').title()}",
-            f"Analysis confidence: {round(record.confidence * 100)} percent",
+            f"Analysis evidence score: {round(record.confidence * 100)} percent (heuristic; not a calibrated probability)",
             f"Current activity: {record.current_activity}",
         ]
     )
@@ -836,7 +839,7 @@ def _persistence_observations(path: Path) -> tuple[str, ...]:
                             except OSError:
                                 break
                             index += 1
-                            if str(path).lower() in str(value).lower():
+                            if _command_references_path(str(value), path):
                                 observations.append(
                                     f"{label} entry {name!r} references the exact path."
                                 )
@@ -845,6 +848,25 @@ def _persistence_observations(path: Path) -> tuple[str, ...]:
         except (ImportError, OSError):
             pass
     return tuple(observations)
+
+
+def _command_references_path(command: str, path: Path) -> bool:
+    """Require a whole command argument, never a path-prefix substring."""
+    import shlex
+
+    try:
+        arguments = shlex.split(command, posix=False)
+    except ValueError:
+        return False
+    target = os.path.normcase(str(path.resolve()))
+    for argument in arguments:
+        try:
+            candidate = Path(argument.strip('"')).expanduser()
+            if candidate.is_absolute() and os.path.normcase(str(candidate.resolve())) == target:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def _impacts(
@@ -864,7 +886,7 @@ def _impacts(
         (("adware", "pua"), "Browser manipulation, privacy loss, or unwanted software"),
     )
     for keywords, impact in mapping:
-        if any(keyword in name for keyword in keywords):
+        if any((re.search(r"\brat\b", name) is not None) if keyword == "rat" else keyword in name for keyword in keywords):
             impacts.append(impact)
     if processes:
         impacts.append("The file is currently running and may affect the active user session")

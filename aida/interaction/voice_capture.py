@@ -5,7 +5,7 @@ import time
 import uuid
 import wave
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 
 from aida.interaction.errors import (
     EmptyRecordingError,
@@ -27,6 +27,8 @@ class VoiceCaptureService:
         channels: int = 1,
         max_duration_seconds: float = 120.0,
     ) -> None:
+        if sample_rate < 8000 or sample_rate > 48000 or channels not in (1, 2) or not 0 < max_duration_seconds <= 120:
+            raise ValueError("Voice capture parameters exceed the supported bounds.")
         self.sample_rate = sample_rate
         self.channels = channels
         self.max_duration_seconds = max_duration_seconds
@@ -34,6 +36,9 @@ class VoiceCaptureService:
         self._frames: list[bytes] = []
         self._started_at: float | None = None
         self._lock = Lock()
+        self._lifecycle_lock = RLock()
+        self._captured_bytes = 0
+        self._limit_reached = False
 
     @property
     def is_recording(self) -> bool:
@@ -46,6 +51,10 @@ class VoiceCaptureService:
         return max(0.0, time.monotonic() - self._started_at)
 
     def start(self) -> None:
+        with self._lifecycle_lock:
+            self._start_locked()
+
+    def _start_locked(self) -> None:
         if self.is_recording:
             raise MicrophoneBusyError("Microphone capture is already active.")
         try:
@@ -69,12 +78,24 @@ class VoiceCaptureService:
         with self._lock:
             self._frames = []
         self._started_at = time.monotonic()
+        self._captured_bytes = 0
+        self._limit_reached = False
+        maximum_bytes = int(self.sample_rate * self.channels * 2 * self.max_duration_seconds)
 
         def callback(indata, frames, time_info, status) -> None:
             del frames, time_info, status
             with self._lock:
-                self._frames.append(bytes(indata))
+                remaining = maximum_bytes - self._captured_bytes
+                data = bytes(indata)
+                if remaining > 0 and self.elapsed_seconds < self.max_duration_seconds:
+                    chunk = data[:remaining]
+                    self._frames.append(chunk)
+                    self._captured_bytes += len(chunk)
+                if len(data) >= remaining or self.elapsed_seconds >= self.max_duration_seconds:
+                    self._limit_reached = True
+                    raise sd.CallbackStop
 
+        stream = None
         try:
             stream = sd.RawInputStream(
                 samplerate=self.sample_rate,
@@ -84,6 +105,11 @@ class VoiceCaptureService:
             )
             stream.start()
         except Exception as exc:
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
             self._started_at = None
             message = str(exc).lower()
             if "permission" in message or "access" in message:
@@ -95,11 +121,15 @@ class VoiceCaptureService:
                     "The microphone is currently in use by another application."
                 ) from exc
             raise MicrophoneUnavailableError(
-                f"Microphone capture could not start: {exc}"
+                "Microphone capture could not start."
             ) from exc
         self._stream = stream
 
     def stop(self) -> VoiceCaptureResult:
+        with self._lifecycle_lock:
+            return self._stop_locked()
+
+    def _stop_locked(self) -> VoiceCaptureResult:
         stream = self._stream
         if stream is None:
             raise MicrophoneUnavailableError("Microphone capture is not active.")
@@ -115,7 +145,7 @@ class VoiceCaptureService:
             payload = b"".join(self._frames)
             self._frames = []
 
-        if duration > self.max_duration_seconds:
+        if self._limit_reached or duration > self.max_duration_seconds:
             raise RecordingLimitError(
                 f"Recording exceeded the {self.max_duration_seconds:.0f}-second limit."
             )
@@ -123,11 +153,15 @@ class VoiceCaptureService:
             raise EmptyRecordingError("No microphone audio was captured.")
 
         target = Path(tempfile.gettempdir()) / f"aida_voice_{uuid.uuid4().hex}.wav"
-        with wave.open(str(target), "wb") as wav_file:
-            wav_file.setnchannels(self.channels)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(self.sample_rate)
-            wav_file.writeframes(payload)
+        try:
+            with wave.open(str(target), "wb") as wav_file:
+                wav_file.setnchannels(self.channels)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(payload)
+        except Exception:
+            self.discard(target)
+            raise
         return VoiceCaptureResult(
             path=target,
             duration_seconds=duration,
@@ -136,6 +170,10 @@ class VoiceCaptureService:
         )
 
     def cancel(self) -> None:
+        with self._lifecycle_lock:
+            self._cancel_locked()
+
+    def _cancel_locked(self) -> None:
         stream = self._stream
         self._stream = None
         self._started_at = None

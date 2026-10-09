@@ -1,3 +1,4 @@
+import type { StoredEvidence } from '@/src/core/storage/mobile-storage';
 import { RoutedDirective } from '@/src/core/reasoning/types';
 
 export type MobileEngineId =
@@ -28,6 +29,7 @@ export type EngineCommandResult = {
   speechText: string;
   includeInContext: boolean;
   executed: boolean;
+  evidence?: StoredEvidence;
 };
 
 export type MobileEngineDefinition = {

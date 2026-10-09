@@ -37,3 +37,31 @@ def test_navigation_opens_folder_without_launching_target(tmp_path):
     assert folder == tmp_path
     assert launched
     assert str(target) not in launched[0]
+
+
+def test_known_hash_mismatch_is_never_promoted_to_identity(tmp_path):
+    target = tmp_path / "sample.exe"
+    target.write_bytes(b"changed content")
+    stat = target.stat()
+    result = EvidenceNavigationService().locate(target, expected_sha256="0" * 64,
+        expected_size=stat.st_size, expected_modified_ns=stat.st_mtime_ns, roots=[tmp_path])
+    assert result.exact_match_found is False
+    assert all(item.match_type is EvidenceMatchType.POSSIBLE_FILENAME for item in result.matches)
+    assert "differs" in result.matches[0].reason
+
+
+def test_existing_path_must_match_supplied_size(tmp_path):
+    target = tmp_path / "sample.exe"
+    target.write_bytes(b"changed")
+    result = EvidenceNavigationService().locate(target, expected_size=999, roots=[tmp_path])
+    assert not result.exact_match_found
+
+
+def test_hashing_obeys_time_budget(tmp_path):
+    target = tmp_path / "large.bin"
+    target.write_bytes(b"x" * (2 * 1024 * 1024))
+    ticks = iter([0, 2, 3, 4, 5])
+    service = EvidenceNavigationService(clock=lambda: next(ticks), timeout_seconds=1)
+    result = service.locate(target, expected_sha256="0" * 64, roots=[tmp_path])
+    assert result.truncated
+    assert not result.exact_match_found

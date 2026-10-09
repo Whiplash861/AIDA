@@ -63,6 +63,13 @@ class MobileAegisRuntime {
     this.degradedReasons = [];
   }
 
+  restoreObservation(capturedAt: string, gaps: string[]): void {
+    if (!Number.isFinite(Date.parse(capturedAt))) return;
+    this.lastObservationAt = capturedAt;
+    this.degradedReasons = [...gaps];
+    this.state = gaps.length ? 'degraded' : 'stopped';
+  }
+
   stop(): void {
     this.running = false;
     this.state = 'stopped';
@@ -111,7 +118,7 @@ class MobileAegisRuntime {
     } else if (options.elevated) {
       this.state = 'elevated';
     } else {
-      this.state = 'observing';
+      this.state = this.running ? 'observing' : 'stopped';
     }
   }
 }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from threading import RLock
@@ -61,7 +62,7 @@ class ConfirmationService:
         request = ConfirmationRequest(
             action_id=action_id,
             summary=summary,
-            scope=dict(scope),
+            scope=deepcopy(scope),
             requested_by=requested_by,
             required_phrase=required_phrase,
             expires_at=now + timedelta(seconds=max(15, ttl_seconds)),
@@ -74,14 +75,14 @@ class ConfirmationService:
             for confirmation_id, existing in tuple(self._requests.items()):
                 if (
                     existing.action_id == action_id
-                    and existing.status is ConfirmationStatus.PENDING
+                    and existing.status in {ConfirmationStatus.PENDING, ConfirmationStatus.CONFIRMED}
                 ):
                     self._requests[confirmation_id] = _replace_status(
                         existing,
                         ConfirmationStatus.REJECTED,
                     )
             self._requests[request.confirmation_id] = request
-        return request
+        return deepcopy(request)
 
     def pending_for_action(self, action_id: str) -> ConfirmationRequest | None:
         now = datetime.now(timezone.utc)
@@ -95,7 +96,7 @@ class ConfirmationService:
             ]
         if len(pending) != 1:
             return None
-        return pending[0]
+        return deepcopy(pending[0])
 
     def confirm(
         self,
@@ -118,7 +119,7 @@ class ConfirmationService:
                 ConfirmationStatus.CONFIRMED,
             )
             self._requests[request.confirmation_id] = confirmed
-            return confirmed
+            return deepcopy(confirmed)
 
     def consume(
         self,
@@ -144,24 +145,26 @@ class ConfirmationService:
                 ConfirmationStatus.CONSUMED,
             )
             self._requests[confirmation_id] = consumed
-            return consumed
+            return deepcopy(consumed)
 
     def reject(self, confirmation_id: str) -> ConfirmationRequest:
         with self._lock:
             request = self._requests.get(confirmation_id)
             if request is None:
                 raise RuntimeError("Unknown confirmation.")
+            if request.status not in {ConfirmationStatus.PENDING, ConfirmationStatus.CONFIRMED}:
+                return deepcopy(request)
             rejected = _replace_status(
                 request,
                 ConfirmationStatus.REJECTED,
             )
             self._requests[confirmation_id] = rejected
-            return rejected
+            return deepcopy(rejected)
 
     def invalidate_all(self) -> None:
         with self._lock:
             for confirmation_id, request in tuple(self._requests.items()):
-                if request.status is ConfirmationStatus.PENDING:
+                if request.status in {ConfirmationStatus.PENDING, ConfirmationStatus.CONFIRMED}:
                     self._requests[confirmation_id] = _replace_status(
                         request,
                         ConfirmationStatus.EXPIRED,
@@ -170,13 +173,18 @@ class ConfirmationService:
     def _expire_locked(self, now: datetime) -> None:
         for confirmation_id, request in tuple(self._requests.items()):
             if (
-                request.status is ConfirmationStatus.PENDING
+                request.status in {ConfirmationStatus.PENDING, ConfirmationStatus.CONFIRMED}
                 and request.expires_at <= now
             ):
                 self._requests[confirmation_id] = _replace_status(
                     request,
                     ConfirmationStatus.EXPIRED,
                 )
+        # Retain a bounded diagnostic tail; outstanding approvals are never evicted.
+        terminal = [key for key, request in self._requests.items()
+                    if request.status not in {ConfirmationStatus.PENDING, ConfirmationStatus.CONFIRMED}]
+        for key in terminal[:-256]:
+            del self._requests[key]
 
 
 def _replace_status(

@@ -98,8 +98,8 @@ class MicrosoftDefenderProvider(AntivirusProvider):
         healthy = (
             active
             and service_enabled
-            and real_time is not False
-            and signatures_current is not False
+            and real_time is True
+            and signatures_current is True
         )
 
         detail_parts = []
@@ -318,8 +318,8 @@ $rows = @(
                 }} else {{
                     0
                 }}
-                InitialDetectionTime = $detection.InitialDetectionTime
-                LastThreatStatusChangeTime = $detection.LastThreatStatusChangeTime
+                InitialDetectionTime = if ($null -ne $detection.InitialDetectionTime) {{ $detection.InitialDetectionTime.ToUniversalTime().ToString('o') }} else {{ $null }}
+                LastThreatStatusChangeTime = if ($null -ne $detection.LastThreatStatusChangeTime) {{ $detection.LastThreatStatusChangeTime.ToUniversalTime().ToString('o') }} else {{ $null }}
                 ActionSuccess = $detection.ActionSuccess
                 IsActive = $threat.IsActive
                 Resources = @($detection.Resources)

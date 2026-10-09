@@ -17,7 +17,6 @@ def test_routes_security_status() -> None:
         "Run a surface-level security scan",
         "run a surface level security scan",
         "start surface security scan",
-        "initiate a malware scan",
     ],
 )
 def test_routes_surface_security_scan_separately_from_quickscan(
@@ -61,8 +60,8 @@ def test_routes_deep_resource_scan_without_target(
 ) -> None:
     command = CommandRouter().route(text)
     assert command is not None
-    assert command.command_type is CommandType.SECURITY_DEEP_SCAN
-    assert command.target_path is None
+    assert command.command_type is CommandType.INTENT_CLARIFICATION
+    assert "target path" in command.clarification_text
     assert command.local_only is True
 
 
@@ -88,8 +87,8 @@ def test_routes_deep_folder_scan_with_of_target() -> None:
 def test_deep_scan_placeholder_requires_explicit_path() -> None:
     command = CommandRouter().route("Deep scan this folder")
     assert command is not None
-    assert command.command_type is CommandType.SECURITY_DEEP_SCAN
-    assert command.target_path is None
+    assert command.command_type is CommandType.INTENT_CLARIFICATION
+    assert "target path" in command.clarification_text
 
 
 @pytest.mark.parametrize(

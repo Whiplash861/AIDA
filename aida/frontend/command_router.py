@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import replace
 from enum import Enum, auto
 from typing import Any
+import re
 
 from aida.intent.defaults import build_default_intent_registry
 from aida.intent.early_alpha import register_early_alpha_intents
@@ -15,6 +17,17 @@ class CommandType(Enum):
     QUICKSCAN = auto()
     PERFORMANCE_SCAN = auto()
     SECURITY_STATUS = auto()
+    SECURITY_INTELLIGENT_SCAN = auto()
+    AEGIS_BASELINE_REVIEW = auto()
+    AEGIS_BASELINE_ACCEPT = auto()
+    AEGIS_CASES = auto()
+    AEGIS_CASE_RESOLVE = auto()
+    SECURITY_REMOTE_INTRUSION_CHECK = auto()
+    SECURITY_REMOTE_SUPPORT_AUTHORIZE = auto()
+    SECURITY_REMOTE_SUPPORT_LIST = auto()
+    SECURITY_REMOTE_SUPPORT_REVOKE = auto()
+    SECURITY_REMOTE_ATTACKER_CONFIRM = auto()
+    SENTRY_ATTACK_CONFIRM = auto()
     SECURITY_SURFACE_SCAN = auto()
     SECURITY_DEEP_SCAN = auto()
     SECURITY_FULL_SWEEP = auto()
@@ -55,6 +68,8 @@ class CommandType(Enum):
     TECHNOMANCER_BACKGROUND_ENABLE = auto()
     TECHNOMANCER_BACKGROUND_DISABLE = auto()
     INTENT_CLARIFICATION = auto()
+    COMMAND_CONFIRM = auto()
+    COMMAND_CANCEL = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,11 +127,21 @@ class CommandRouter:
             extra=self._context.extra,
         )
 
-    def route(self, text: str) -> RoutedCommand | None:
+    def route(self, text: str, *, commit: bool = True) -> RoutedCommand | None:
+        if text.strip().lower() == "cancel action":
+            return RoutedCommand(CommandType.COMMAND_CANCEL, text, local_only=True)
+        if self._context.extra.get("clarification_candidates") and text.strip().lower() in {"cancel", "cancel that", "never mind", "nevermind", "forget it"}:
+            command = RoutedCommand(CommandType.INTENT_CLARIFICATION, text, local_only=True,
+                                    clarification_text="The pending clarification was cancelled.")
+            if commit:
+                self.accept(command)
+            return command
+        if re.fullmatch(r"confirm action [a-f0-9]{8}", text.strip(), re.I):
+            return RoutedCommand(CommandType.COMMAND_CONFIRM, text, local_only=True)
         resolution = self.resolver.resolve(text, self._context)
         if resolution.resolved is None:
             if resolution.clarification:
-                return RoutedCommand(
+                command = RoutedCommand(
                     command_type=CommandType.INTENT_CLARIFICATION,
                     original_text=text,
                     local_only=any(
@@ -124,32 +149,27 @@ class CommandRouter:
                         for candidate in resolution.candidates
                     ),
                     clarification_text=resolution.clarification,
+                    slots={"clarification_candidates": tuple(c.definition.intent_id for c in resolution.candidates)},
                 )
+                if commit:
+                    self.accept(command)
+                return command
             return None
 
         resolved = resolution.resolved
+        if resolved.missing_slots:
+            return RoutedCommand(
+                command_type=CommandType.INTENT_CLARIFICATION, original_text=text,
+                local_only=resolved.local_only,
+                clarification_text="Specify " + ", ".join(name.replace("_", " ") for name in resolved.missing_slots) + " before this operation can be prepared.",
+            )
         try:
             command_type = CommandType[resolved.command_type]
         except KeyError:
             return None
 
         target_path = resolved.slots.get("target_path")
-        self._context = IntentContext(
-            last_intent_id=resolved.intent_id,
-            current_domain=resolved.intent_id.split(".", 1)[0],
-            last_path=(
-                str(target_path)
-                if target_path
-                else self._context.last_path
-            ),
-            active_task=self._context.active_task,
-            pending_confirmation_id=self._context.pending_confirmation_id,
-            pending_confirmation_action=(
-                self._context.pending_confirmation_action
-            ),
-            extra=self._context.extra,
-        )
-        return RoutedCommand(
+        command = RoutedCommand(
             command_type=command_type,
             original_text=text,
             target_path=str(target_path) if target_path else None,
@@ -158,6 +178,28 @@ class CommandRouter:
             confidence=resolved.confidence,
             requires_confirmation=resolved.requires_confirmation,
             slots=resolved.slots,
+        )
+        if commit:
+            self.accept(command)
+        return command
+
+    def accept(self, command: RoutedCommand) -> None:
+        extra = dict(self._context.extra)
+        extra.pop("clarification_candidates", None)
+        if command.command_type is CommandType.INTENT_CLARIFICATION:
+            extra.update(command.slots)
+            self._context = replace(self._context, extra=extra)
+            return
+        if command.intent_id is None:
+            return
+        self._context = IntentContext(
+            last_intent_id=command.intent_id,
+            current_domain=command.intent_id.split(".", 1)[0],
+            last_path=command.target_path or self._context.last_path,
+            active_task=self._context.active_task,
+            pending_confirmation_id=self._context.pending_confirmation_id,
+            pending_confirmation_action=self._context.pending_confirmation_action,
+            extra=extra,
         )
 
     def is_control_command(self, command: RoutedCommand) -> bool:

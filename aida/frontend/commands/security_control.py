@@ -351,7 +351,7 @@ class SecurityControlExecutor(CommandExecutor):
                 "Create an AIDA-local user trust exception. This does not change "
                 "Microsoft Defender settings or prove the file safe."
             ),
-            scope={"target_path": self.target_path},
+            scope=self.stand_down.prepare_identity(self.target_path),
             requested_by=_user(),
             required_phrase="confirm stand down",
             risk="high",
@@ -394,6 +394,7 @@ class SecurityControlExecutor(CommandExecutor):
             target,
             reason="Direct user override from the AIDA frontend",
             authorized_by=_user(),
+            expected_identity=consumed.scope,
         )
         return CommandResult(
             transcript_text=(

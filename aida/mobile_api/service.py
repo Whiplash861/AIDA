@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Callable
 
 from aida.brain.llm_client import AIDABrain
@@ -36,6 +37,7 @@ class MobileAidaService:
     ) -> None:
         self._brain_factory = brain_factory
         self._brain: AIDABrain | None = None
+        self._brain_lock = threading.Lock()
         self._state_store = state_store or OperationalStateStore()
 
     def health(self) -> HealthResponse:
@@ -149,7 +151,7 @@ class MobileAidaService:
                 context=context,
             )
         except Exception as exc:
-            log.exception(
+            log.warning(
                 "Mobile reasoning request failed. request_id=%s",
                 request.request_id,
             )
@@ -163,8 +165,9 @@ class MobileAidaService:
         )
 
     def _get_brain(self) -> AIDABrain:
-        if self._brain is None:
-            self._brain = self._brain_factory()
+        with self._brain_lock:
+            if self._brain is None:
+                self._brain = self._brain_factory()
         return self._brain
 
     @staticmethod

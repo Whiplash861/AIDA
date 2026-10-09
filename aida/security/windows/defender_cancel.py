@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import time
+import base64
+import os
+from pathlib import Path
+from uuid import uuid4
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable
@@ -118,7 +122,7 @@ class DefenderCancellationService:
         # The user has already supplied the exact, single-use confirmation
         # phrase before this method is called. Windows may still require UAC
         # approval because MpCmdRun cancellation must execute elevated.
-        payload = self.runner.run_json(_CANCEL_SCRIPT, timeout=120.0)
+        payload = self.runner.run_json(_cancel_script(scan), timeout=120.0)
         if not isinstance(payload, dict):
             return CancellationResult(
                 requested=False,
@@ -313,75 +317,53 @@ $selected = if ($null -ne $terminal) { $terminal } else { $start }
 ).strip()
 
 
-_CANCEL_SCRIPT = r"""
-$ErrorActionPreference = 'Stop'
+def _cancel_script(scan: ActiveDefenderScan) -> str:
+    """Revalidate the provider identity after UAC, immediately before cancellation."""
+    result_path = Path(os.getenv("TEMP") or Path.home()) / f"aida-cancel-{uuid4().hex}.json"
+    result_literal = _ps_literal(str(result_path))
+    child = (
+        "$ErrorActionPreference = 'Stop'\n"
+        + "$result = @{ Attempted = $false; ExitCode = $null; Detail = '' }\n"
+        + "try {\n$active = (& {\n" + _ACTIVE_SCAN_SCRIPT + "\n}) | ConvertFrom-Json\n"
+        + "if ($null -eq $active -or $active.ScanId -ne " + _ps_literal(scan.scan_id)
+        + " -or $active.Mode -ne " + _ps_literal(scan.mode.value)
+        + " -or $active.StartTime -ne " + _ps_literal(scan.started_at) + ") {\n"
+        + "throw 'The authorized provider scan changed during elevation. Cancellation was not sent.'\n}\n"
+        + r"""
 $platformRoot = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Platform'
 $candidates = @()
-if (Test-Path $platformRoot) {
-    $candidates += Get-ChildItem -Path $platformRoot -Directory |
+if (Test-Path -LiteralPath $platformRoot) {
+    $candidates += Get-ChildItem -LiteralPath $platformRoot -Directory |
         Sort-Object Name -Descending |
         ForEach-Object { Join-Path $_.FullName 'MpCmdRun.exe' }
 }
 $candidates += Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
-$executable = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $executable) {
-    throw 'Microsoft Defender MpCmdRun.exe was not found.'
-}
-
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$principal = [Security.Principal.WindowsPrincipal]::new($identity)
-$isElevated = $principal.IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator
-)
-$elevationRequested = -not $isElevated
-$elevationAccepted = $isElevated
-$attempted = $false
-$exitCode = $null
-$errorDetail = ''
-$cancelArguments = '-Scan -Cancel'
-
-try {
-    if ($isElevated) {
-        & $executable -Scan -Cancel | Out-Null
-        $exitCode = $LASTEXITCODE
-        $attempted = $true
-    } else {
-        $process = Start-Process -FilePath $executable -ArgumentList $cancelArguments -Verb RunAs -Wait -PassThru -ErrorAction Stop
-        $process.Refresh()
-        $exitCode = $process.ExitCode
-        $elevationAccepted = $true
-        $attempted = $true
-    }
-} catch {
-    $elevationAccepted = $false
-    $attempted = $false
-    $errorDetail = [string]$_.Exception.Message
-}
-
-$detail = if ($attempted) {
-    if ($null -eq $exitCode) {
-        'The elevated Defender cancellation command executed without an exit code. Provider-event confirmation is still required.'
-    } else {
-        "The elevated Defender cancellation command executed with exit code $exitCode. Provider-event confirmation is still required."
-    }
-} elseif ($elevationRequested -and -not $elevationAccepted) {
-    'Windows elevation was declined or could not be completed. Defender did not receive a cancellation command.'
-} elseif ($errorDetail) {
-    $errorDetail
-} else {
-    'The Defender cancellation command could not be executed.'
-}
-
-[PSCustomObject]@{
-    Attempted = $attempted
-    Requested = $attempted
-    ExitCode = $exitCode
-    Executable = $executable
-    ElevationRequested = $elevationRequested
-    ElevationAccepted = $elevationAccepted
-    Detail = $detail
-} | ConvertTo-Json -Compress
+$executable = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $executable) { throw 'Microsoft Defender MpCmdRun.exe was not found.' }
+& $executable -Scan -Cancel | Out-Null
+$result.ExitCode = $LASTEXITCODE
+$result.Attempted = $true
+$result.Detail = 'The exact provider scan was revalidated after elevation; provider-event confirmation is still required.'
+} catch { $result.Detail = [string]$_.Exception.Message }
+"""
+        + "$result | ConvertTo-Json -Compress | Set-Content -LiteralPath " + result_literal + " -Encoding UTF8"
+    )
+    encoded = base64.b64encode(child.encode("utf-16-le")).decode("ascii")
+    return f"""
+$ErrorActionPreference = 'Stop'
+$resultPath = {result_literal}
+try {{
+    $powershell = Join-Path $PSHOME 'powershell.exe'
+    $process = Start-Process -FilePath $powershell -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand','{encoded}') -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
+    if (-not (Test-Path -LiteralPath $resultPath)) {{ throw 'The elevated cancellation guard returned no result.' }}
+    Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json | ConvertTo-Json -Compress
+}} catch {{
+    [PSCustomObject]@{{ Attempted = $false; ExitCode = $null; Detail = [string]$_.Exception.Message }} | ConvertTo-Json -Compress
+}} finally {{
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+}}
 """.strip()
+
 
 
 def _ps_literal(value: str) -> str:

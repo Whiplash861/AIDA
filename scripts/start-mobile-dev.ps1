@@ -5,7 +5,6 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $repoRoot "mobile"
-$envFile = Join-Path $mobileRoot ".env.local"
 $gatewayPort = 8787
 $gatewayProcess = $null
 
@@ -37,11 +36,17 @@ function Resolve-LanIPv4 {
     return $address
 }
 
-function Wait-GatewayReady([string]$url) {
+function Wait-GatewayReady([string]$url, [string]$enrollmentToken) {
     $deadline = (Get-Date).AddSeconds(20)
     do {
         try {
-            return Invoke-RestMethod -Uri "$url/health" -TimeoutSec 2
+            $enrolled = Invoke-RestMethod -Uri "$url/v1/enroll" -Method Post -Headers @{Authorization = "Bearer $enrollmentToken"} -TimeoutSec 2
+            try {
+                return Invoke-RestMethod -Uri "$url/v1/ready" -Headers @{Authorization = "Bearer $($enrolled.token)"} -TimeoutSec 2
+            }
+            finally {
+                $null = Invoke-RestMethod -Uri "$url/v1/session" -Method Delete -Headers @{Authorization = "Bearer $($enrolled.token)"} -TimeoutSec 2
+            }
         }
         catch {
             Start-Sleep -Milliseconds 500
@@ -74,14 +79,14 @@ if (-not $token) {
 $gatewayUrl = "http://${lanIp}:$gatewayPort"
 $localGatewayUrl = "http://127.0.0.1:$gatewayPort"
 
-# Expo only exposes EXPO_PUBLIC values to the JavaScript bundle. These are
-# ephemeral development credentials written to an ignored .env.local file and
-# are never committed or used by release builds.
-@"
-EXPO_PUBLIC_AIDA_DEV_GATEWAY_URL=$gatewayUrl
-EXPO_PUBLIC_AIDA_DEV_GATEWAY_TOKEN=$token
-"@ | Set-Content -Path $envFile -Encoding utf8
-
+# Pass development settings only to this launcher and its child processes.
+# The user's existing dotenv files remain intact.
+$originalDirectory = Get-Location
+$environmentNames = @("EXPO_PUBLIC_AIDA_DEV_GATEWAY_URL", "EXPO_PUBLIC_AIDA_DEV_GATEWAY_TOKEN", "AIDA_SERVICES_GATEWAY_TOKEN", "AIDA_SERVICES_GATEWAY_HOST", "AIDA_SERVICES_GATEWAY_PORT")
+$previousEnvironment = @{}
+foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process") }
+$env:EXPO_PUBLIC_AIDA_DEV_GATEWAY_URL = $gatewayUrl
+$env:EXPO_PUBLIC_AIDA_DEV_GATEWAY_TOKEN = $token
 $env:AIDA_SERVICES_GATEWAY_TOKEN = $token
 $env:AIDA_SERVICES_GATEWAY_HOST = "0.0.0.0"
 $env:AIDA_SERVICES_GATEWAY_PORT = "$gatewayPort"
@@ -97,9 +102,10 @@ try {
         -FilePath $python `
         -ArgumentList @("-m", "aida.services_gateway") `
         -WorkingDirectory $repoRoot `
+        -WindowStyle Hidden `
         -PassThru
 
-    $health = Wait-GatewayReady $localGatewayUrl
+    $health = Wait-GatewayReady $localGatewayUrl $token
     Write-Host "Gateway intent resolution:       $($health.intent_resolution_configured)"
     Write-Host "Gateway reasoning configured:    $($health.reasoning_configured)"
     Write-Host "Gateway speech configured:       $($health.speech_configured)"
@@ -111,13 +117,10 @@ try {
 
     Set-Location $mobileRoot
 
-    # npm install is intentionally safe/repeatable here. It keeps node_modules
-    # and the generated lock state aligned with package.json before TypeScript
-    # validation, rather than guessing from the presence of one dependency.
-    Write-Host "Reconciling mobile dependencies..." -ForegroundColor DarkCyan
-    npm install
-    if ($LASTEXITCODE -ne 0) {
-        throw "Mobile dependency installation failed."
+    if (-not (Test-Path -LiteralPath (Join-Path $mobileRoot "node_modules/typescript/bin/tsc"))) {
+        Write-Host "Installing locked mobile dependencies..." -ForegroundColor DarkCyan
+        npm ci
+        if ($LASTEXITCODE -ne 0) { throw "Mobile dependency installation failed." }
     }
 
     npm run sync-aida-assets
@@ -141,6 +144,6 @@ finally {
     if ($gatewayProcess -and -not $gatewayProcess.HasExited) {
         Stop-Process -Id $gatewayProcess.Id -Force -ErrorAction SilentlyContinue
     }
-    Remove-Item $envFile -Force -ErrorAction SilentlyContinue
-    Set-Location $repoRoot
+    foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], "Process") }
+    Set-Location $originalDirectory
 }

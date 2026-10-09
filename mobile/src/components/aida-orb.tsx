@@ -4,7 +4,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, AppState, StyleSheet, Text, View } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import Svg, {
   Circle,
   ClipPath,
@@ -176,6 +177,16 @@ export function AidaOrb({
 }: AidaOrbProps) {
   const [, renderFrame] = useState(0);
 
+  const focused = useIsFocused();
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then(value => { if (alive) setReduceMotion(value); }).catch(() => undefined);
+    const motion = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    const app = AppState.addEventListener('change', value => setForeground(value === 'active'));
+    return () => { alive = false; motion.remove(); app.remove(); };
+  }, []);
   const targetStateRef = useRef<AidaOrbVisualState>(state);
   const transitionRef = useRef<{
     from: AidaOrbVisualState;
@@ -204,14 +215,15 @@ export function AidaOrb({
       return;
     }
 
-    transitionRef.current = {
+    transitionRef.current = reduceMotion ? null : {
       from: targetStateRef.current,
       startedAt: clockNow(),
     };
     targetStateRef.current = state;
-  }, [state]);
+  }, [state, reduceMotion]);
 
   useEffect(() => {
+    if (!focused || !foreground || reduceMotion) return;
     let animationFrame = 0;
     let lastTick = clockNow();
 
@@ -262,7 +274,7 @@ export function AidaOrb({
 
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, []);
+  }, [focused, foreground, reduceMotion]);
 
   const now = frameNowRef.current;
   const targetState = targetStateRef.current;

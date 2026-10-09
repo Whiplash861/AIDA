@@ -139,58 +139,75 @@ class SecurityTaskLedger:
         provider_check_succeeded: bool = True,
         terminal: bool = False,
     ) -> SecurityTaskRecord:
-        current = self.get(task_id)
-        if current is None:
-            raise KeyError(f"Unknown security task: {task_id}")
-        now = datetime.now(timezone.utc)
-        updated = replace(
-            current,
-            provider_scan_id=(
-                current.provider_scan_id
-                if provider_scan_id is None
-                else provider_scan_id
-            ),
-            provider_started_at=(
-                current.provider_started_at
-                if provider_started_at is None
-                else provider_started_at
-            ),
-            monitoring_session_started_at=(
-                current.monitoring_session_started_at
-                if monitoring_session_started_at is None
-                else monitoring_session_started_at
-            ),
-            last_provider_check_at=(
-                now if provider_check_succeeded else current.last_provider_check_at
-            ),
-            provider_state=provider_state or current.provider_state,
-            tracking_state=tracking_state or current.tracking_state,
-            recovered=current.recovered if recovered is None else recovered,
-            recovery_count=(
-                current.recovery_count
-                if recovery_count is None
-                else max(0, recovery_count)
-            ),
-            last_recovered_at=(
-                current.last_recovered_at
-                if last_recovered_at is None
-                else last_recovered_at
-            ),
-            cancellation_requested_at=(
-                current.cancellation_requested_at
-                if cancellation_requested_at is None
-                else cancellation_requested_at
-            ),
-            cancellation_confirmed_at=(
-                current.cancellation_confirmed_at
-                if cancellation_confirmed_at is None
-                else cancellation_confirmed_at
-            ),
-            detail=current.detail if detail is None else detail,
-            updated_at=now,
-            terminal_at=now if terminal else current.terminal_at,
-        )
         with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM security_tasks WHERE task_id = ? AND user_id = ? AND device_id = ?",
+                (task_id, self.user_id, self.device_id),
+            ).fetchone()
+            current = None if row is None else _from_row(row)
+            if current is None:
+                raise KeyError(f"Unknown security task: {task_id}")
+            if current.terminal_at is not None or current.provider_state in {
+                ProviderTaskState.COMPLETED, ProviderTaskState.CANCELLED, ProviderTaskState.FAILED,
+            }:
+                return current
+            if provider_scan_id and current.provider_scan_id and provider_scan_id != current.provider_scan_id:
+                raise ValueError("Cannot replace the provider identity of an existing security task")
+            if current.provider_state is ProviderTaskState.RUNNING and provider_state is ProviderTaskState.PENDING:
+                provider_state = current.provider_state
+            terminal = terminal or provider_state in {
+                ProviderTaskState.COMPLETED, ProviderTaskState.CANCELLED, ProviderTaskState.FAILED,
+            }
+            if terminal and tracking_state is not TrackingState.ABANDONED:
+                tracking_state = TrackingState.TERMINAL
+            now = datetime.now(timezone.utc)
+            updated = replace(
+                current,
+                provider_scan_id=(
+                    current.provider_scan_id
+                    if provider_scan_id is None
+                    else provider_scan_id
+                ),
+                provider_started_at=(
+                    current.provider_started_at
+                    if provider_started_at is None
+                    else provider_started_at
+                ),
+                monitoring_session_started_at=(
+                    current.monitoring_session_started_at
+                    if monitoring_session_started_at is None
+                    else monitoring_session_started_at
+                ),
+                last_provider_check_at=(
+                    now if provider_check_succeeded else current.last_provider_check_at
+                ),
+                provider_state=provider_state or current.provider_state,
+                tracking_state=tracking_state or current.tracking_state,
+                recovered=current.recovered if recovered is None else recovered,
+                recovery_count=(
+                    current.recovery_count
+                    if recovery_count is None
+                    else max(0, recovery_count)
+                ),
+                last_recovered_at=(
+                    current.last_recovered_at
+                    if last_recovered_at is None
+                    else last_recovered_at
+                ),
+                cancellation_requested_at=(
+                    current.cancellation_requested_at
+                    if cancellation_requested_at is None
+                    else cancellation_requested_at
+                ),
+                cancellation_confirmed_at=(
+                    current.cancellation_confirmed_at
+                    if cancellation_confirmed_at is None
+                    else cancellation_confirmed_at
+                ),
+                detail=current.detail if detail is None else detail,
+                updated_at=now,
+                terminal_at=now if terminal else current.terminal_at,
+            )
             connection.execute(
                 """
                 UPDATE security_tasks
@@ -265,6 +282,7 @@ class SecurityTaskLedger:
                 item
                 for item in self.open_tasks()
                 if item.provider_id == "microsoft_defender"
+                and not item.provider_scan_id
                 and item.mode in {"SURFACE", "FULL_SWEEP"}
             ]
             # AIDA allows only one foreground security scan. Linking an unknown

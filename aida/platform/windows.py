@@ -50,13 +50,12 @@ class WindowsAdapter(PlatformAdapter):
         )
 
     def capabilities(self) -> dict[str, str]:
-        status = self.security_provider_status()
         return {
             "process.telemetry": "native",
             "system.settings": "native",
             "filesystem.reveal": "native",
-            "security.provider": "native" if status.available else "blocked",
-            "security.quick_scan": "native" if status.available else "blocked",
+            "security.provider": "unverified",
+            "security.quick_scan": "unverified",
             "background.execution": "compatible",
             "notifications": "compatible",
         }
@@ -64,7 +63,7 @@ class WindowsAdapter(PlatformAdapter):
     def security_provider_status(self) -> SecurityProviderStatus:
         try:
             result = self._run_powershell(
-                "Get-MpComputerStatus | Select-Object "
+                "$ErrorActionPreference='Stop'; Get-MpComputerStatus | Select-Object "
                 "AMServiceEnabled,AntivirusEnabled,RealTimeProtectionEnabled "
                 "| ConvertTo-Json -Compress",
                 timeout=10,
@@ -76,6 +75,8 @@ class WindowsAdapter(PlatformAdapter):
             return SecurityProviderStatus("Microsoft Defender", False, None, detail)
         try:
             payload = json.loads(result.stdout)
+            if not isinstance(payload, dict) or any(not isinstance(payload.get(key), bool) for key in ("AMServiceEnabled", "AntivirusEnabled", "RealTimeProtectionEnabled")):
+                raise ValueError("Provider status fields are missing or invalid")
             enabled = bool(
                 payload.get("AMServiceEnabled")
                 and payload.get("AntivirusEnabled")
@@ -91,65 +92,14 @@ class WindowsAdapter(PlatformAdapter):
             return SecurityProviderStatus("Microsoft Defender", True, None, f"Unparsed status: {exc}")
 
     def request_security_scan(self, scope: str = "quick") -> SecurityScanResult:
-        scan_type = "QuickScan" if scope.lower() != "full" else "FullScan"
-        status = self.security_provider_status()
-        if not status.available:
-            return SecurityScanResult(status.provider, "unsupported", status.detail)
-        try:
-            scan = self._run_powershell(
-                "$ProgressPreference='SilentlyContinue'; "
-                f"Start-MpScan -ScanType {scan_type}; "
-                "Write-Output 'AIDA_SCAN_COMPLETED'",
-                timeout=900 if scan_type == "QuickScan" else 7200,
-            )
-        except subprocess.TimeoutExpired:
-            return SecurityScanResult(
-                status.provider,
-                "unknown",
-                "Security scan exceeded the verification timeout",
-            )
-        except FileNotFoundError as exc:
-            return SecurityScanResult(status.provider, "failed", str(exc))
-        if scan.returncode != 0 or "AIDA_SCAN_COMPLETED" not in scan.stdout:
-            detail = (scan.stderr or scan.stdout or "Defender scan failed").strip()
-            return SecurityScanResult(status.provider, "failed", detail)
-
-        threat_result = self._run_powershell(
-            "Get-MpThreat | Where-Object {$_.IsActive -eq $true} | "
-            "Select-Object ThreatID,IsActive,SeverityID | ConvertTo-Json -Compress",
-            timeout=30,
-        )
-        threats: list[str] = []
-        if threat_result.returncode == 0 and threat_result.stdout.strip():
-            try:
-                parsed = json.loads(threat_result.stdout)
-                rows = parsed if isinstance(parsed, list) else [parsed]
-                for row in rows[-10:]:
-                    threats.append(
-                        f"ThreatID {row.get('ThreatID', 'unknown')} "
-                        f"(active: {row.get('IsActive', 'unknown')}; "
-                        f"severity: {row.get('SeverityID', 'unknown')})"
-                    )
-            except (ValueError, TypeError):
-                pass
-        if threats:
-            return SecurityScanResult(
-                status.provider,
-                "completed",
-                "Threat detections were returned",
-                tuple(threats),
-            )
-        return SecurityScanResult(
-            status.provider,
-            "completed",
-            "Scan completed with no active detections returned",
-        )
+        return SecurityScanResult("Microsoft Defender", "unsupported",
+            "Use AIDA's authorized security orchestrator for provider scan lifecycle and verified outcomes.")
 
     def open_settings(self, target: str) -> None:
         uri = self.SETTINGS_URIS.get(target, target)
         if not uri.startswith("ms-settings:"):
             raise ValueError(f"Unknown Windows settings target: {target}")
-        subprocess.run(["cmd", "/c", "start", "", uri], check=False)
+        os.startfile(uri)
 
     def reveal_path(self, target: Path) -> None:
         subprocess.run(["explorer", "/select,", str(target.resolve())], check=False)

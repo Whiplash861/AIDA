@@ -3,7 +3,9 @@ from __future__ import annotations
 import getpass
 import re
 import time
+from threading import Event
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from aida.security.models import (
     SecurityScanMode,
     SecurityScanRequest,
     SecurityScanState,
+    SecurityScanStatus,
 )
 from aida.security.orchestrator import (
     ProviderCapabilityError,
@@ -158,6 +161,9 @@ class SecurityScanExecutor(CommandExecutor):
         task_ledger: SecurityTaskLedger | None = None,
         stand_down_service: StandDownService | None = None,
         recovery_task_id: str | None = None,
+        recovery_provider_scan_id: str | None = None,
+        user_authorized: bool = False,
+        max_monitor_seconds: float = 24 * 60 * 60,
     ) -> None:
         self._mode = mode
         self._authorization_reason = authorization_reason
@@ -170,6 +176,10 @@ class SecurityScanExecutor(CommandExecutor):
         self._ledger = task_ledger
         self._stand_down = stand_down_service
         self._recovery_task_id = recovery_task_id
+        self._recovery_provider_scan_id = recovery_provider_scan_id
+        self._user_authorized = user_authorized
+        self._max_monitor_seconds = max(1.0, max_monitor_seconds)
+        self._stop_monitoring = Event()
         self._provider_started_at: datetime | None = None
         self._ledger_task_id: str | None = None
         self._threat_intelligence = ThreatIntelligenceBuilder()
@@ -230,6 +240,14 @@ class SecurityScanExecutor(CommandExecutor):
         return self._provider_started_at
 
     def execute(self) -> CommandResult:
+        if self._stop_monitoring.is_set():
+            return self._monitoring_stopped_result()
+        if self._recovery_task_id is None and not self._user_authorized:
+            return CommandResult(
+                transcript_text="Security scan was not started. Explicit user authorization is required.",
+                speech_text="Security scan authorization is required.",
+                partial=True,
+            )
         scope_or_result = self._build_scope()
         if isinstance(scope_or_result, CommandResult):
             return scope_or_result
@@ -241,6 +259,8 @@ class SecurityScanExecutor(CommandExecutor):
         try:
             discovery = self._discover()
             provider_status = discovery.provider.get_status()
+            if self._stop_monitoring.is_set():
+                return self._monitoring_stopped_result()
 
             if not provider_status.active:
                 result = CommandResult(
@@ -253,6 +273,7 @@ class SecurityScanExecutor(CommandExecutor):
                         "Security scan not started. "
                         "No active supported antivirus adapter is available."
                     ),
+                    partial=True,
                 )
                 self._record_outcome(
                     ProcessOutcome.FAILED,
@@ -296,7 +317,20 @@ class SecurityScanExecutor(CommandExecutor):
                 provider=discovery.provider,
                 policy=SecurityPolicy(),
             )
-            handle = orchestrator.start(request)
+            if self._stop_monitoring.is_set():
+                return self._monitoring_stopped_result()
+            if self._recovery_task_id is not None:
+                existing = self._ledger.get(self._recovery_task_id) if self._ledger is not None else None
+                if (existing is None or existing.terminal_at is not None
+                    or existing.provider_id != discovery.provider.provider_id
+                    or existing.mode != self._mode.name or not existing.provider_scan_id
+                    or (self._recovery_provider_scan_id is not None
+                        and existing.provider_scan_id != self._recovery_provider_scan_id)):
+                    raise RuntimeError("The exact recoverable provider task could not be verified. No scan was started.")
+                self._ledger_task_id = existing.task_id
+                handle = orchestrator.attach(request, existing.provider_scan_id)
+            else:
+                handle = orchestrator.start(request)
             self._provider_started_at = handle.started_at
             self._create_ledger_record(
                 request=request,
@@ -304,8 +338,20 @@ class SecurityScanExecutor(CommandExecutor):
                 provider_started_at=handle.started_at,
             )
 
+            deadline = time.monotonic() + self._max_monitor_seconds
             while True:
+                if self._stop_monitoring.is_set():
+                    return self._monitoring_stopped_result()
                 outcome = orchestrator.poll(handle)
+                if self._ledger is not None and self._ledger_task_id is not None:
+                    durable = self._ledger.get(self._ledger_task_id)
+                    terminal_state = {
+                        ProviderTaskState.COMPLETED: SecurityScanState.COMPLETED,
+                        ProviderTaskState.CANCELLED: SecurityScanState.CANCELLED,
+                    }.get(durable.provider_state) if durable is not None else None
+                    if terminal_state is not None and terminal_state is not outcome.status.state:
+                        outcome = replace(outcome, status=SecurityScanStatus(
+                            terminal_state, detail=durable.detail))
                 effective_started_at = _effective_provider_started_at(
                     discovery.provider,
                     handle,
@@ -317,12 +363,19 @@ class SecurityScanExecutor(CommandExecutor):
                     outcome.status.detail,
                     request=request,
                 )
+                if self._stop_monitoring.is_set():
+                    return self._monitoring_stopped_result()
                 if outcome.status.state not in {
                     SecurityScanState.PENDING,
                     SecurityScanState.RUNNING,
                 }:
                     break
-                self._sleep(self._poll_interval_seconds)
+                if time.monotonic() >= deadline:
+                    return self._monitoring_stopped_result("Local monitoring reached its time limit.")
+                if self._sleep is time.sleep:
+                    self._stop_monitoring.wait(self._poll_interval_seconds)
+                else:
+                    self._sleep(self._poll_interval_seconds)
 
         except ProviderCapabilityError as exc:
             self._mark_ledger_failure(str(exc))
@@ -351,6 +404,21 @@ class SecurityScanExecutor(CommandExecutor):
             post_scan_snapshot = self._read_detection_snapshot(
                 discovery.provider
             )
+            if post_scan_snapshot is None and not outcome.detections_available:
+                result = CommandResult(
+                    transcript_text=(f"{self._scan_label()} completed.\n\n"
+                        "Provider findings are unavailable. A clean result cannot be established.\n"
+                        f"Detail: {outcome.detections_error or 'No findings interface was available.'}"),
+                    speech_text=f"{self._scan_label()} completed, but its findings could not be read.",
+                    security_outcome=outcome,
+                )
+                self._record_outcome(ProcessOutcome.PARTIAL, result.transcript_text,
+                    {"scan_completed": True, "detections_available": False})
+                self._record_recovery_completion()
+                return result
+            if post_scan_snapshot is not None:
+                outcome = replace(outcome, detections=post_scan_snapshot.detections,
+                    detections_available=True, detections_error=None)
             reconciliation = self._reconcile_detections(
                 pre_scan_snapshot,
                 post_scan_snapshot,
@@ -388,7 +456,7 @@ class SecurityScanExecutor(CommandExecutor):
                 stand_down_results,
             )
             self._record_recovery_completion()
-            return result
+            return replace(result, security_outcome=outcome)
 
         detail = outcome.status.detail or "No provider detail was returned."
         process_outcome = (
@@ -415,6 +483,7 @@ class SecurityScanExecutor(CommandExecutor):
                 f"{self._scan_label()} did not complete. "
                 "Review the local transcript for provider details."
             ),
+            security_outcome=outcome,
         )
 
     def _build_scope(self) -> ScanScope | CommandResult:
@@ -456,7 +525,9 @@ class SecurityScanExecutor(CommandExecutor):
             return None
         try:
             rows = getter()
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if rows is None:
             return None
         return self._detection_reconciler.snapshot(tuple(rows or ()))
 
@@ -564,7 +635,7 @@ class SecurityScanExecutor(CommandExecutor):
                 )
                 if stand_down is not None:
                     lines.extend(_format_stand_down_evaluation(stand_down))
-                if assessment.unresolved:
+                if assessment.unresolved and not (stand_down is not None and stand_down.suppress_aida_recommendation):
                     report = self._threat_intelligence.build(
                         assessment.detection
                     )
@@ -715,6 +786,20 @@ class SecurityScanExecutor(CommandExecutor):
             terminal=tracking_state is TrackingState.TERMINAL,
         )
 
+    def stop_monitoring(self) -> None:
+        """Release AIDA's observer without cancelling the provider-owned scan."""
+        self._stop_monitoring.set()
+
+    def shutdown(self) -> None:
+        self.stop_monitoring()
+
+    def _monitoring_stopped_result(self, reason: str = "AIDA monitoring was stopped.") -> CommandResult:
+        detail = reason + " The provider was not cancelled; an existing provider scan may continue and can be recovered when AIDA restarts."
+        if self._ledger is not None and self._ledger_task_id is not None:
+            self._ledger.update(self._ledger_task_id,
+                tracking_state=TrackingState.TRACKING_INTERRUPTED, detail=detail, provider_check_succeeded=False)
+        return CommandResult(transcript_text=detail, speech_text="Local scan monitoring stopped.", partial=True)
+
     def _mark_ledger_failure(self, detail: str) -> None:
         if self._ledger is None or self._ledger_task_id is None:
             return
@@ -853,7 +938,8 @@ def _merge_detections(
     additional: Iterable[ProviderDetection],
 ) -> tuple[ProviderDetection, ...]:
     merged: dict[str, ProviderDetection] = {}
-    for detection in (*tuple(primary), *tuple(additional)):
+    # The primary snapshot was collected later; it wins both resolution and reactivation races.
+    for detection in (*tuple(additional), *tuple(primary)):
         key = detection.detection_id.strip().lower()
         if not key:
             key = (
@@ -920,6 +1006,7 @@ def _failure_result(
     return CommandResult(
         transcript_text=f"{heading}\n\nReason: {detail}",
         speech_text=f"{heading} Review the local transcript for details.",
+        partial=True,
     )
 
 

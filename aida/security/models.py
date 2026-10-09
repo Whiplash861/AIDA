@@ -86,8 +86,8 @@ class SecurityScanRequest:
 class ProviderStatus:
     provider_id: str
     display_name: str
-    healthy: bool
-    active: bool
+    healthy: bool | None
+    active: bool | None
     real_time_protection: bool | None = None
     signatures_current: bool | None = None
     detail: str = ""

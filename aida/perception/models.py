@@ -36,6 +36,9 @@ class PerceptionEvidence:
     media_type: str | None = None
     sha256: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # An immutable bounded snapshot outlives clipboard staging files. Never
+    # serialize or send it to cloud reasoning without separate media consent.
+    content: bytes = field(default=b"", repr=False, compare=False)
 
     @classmethod
     def now(
@@ -59,5 +62,5 @@ class PerceptionEvidence:
         confidence_text = f"{self.confidence:.2f}"
         return (
             f"{self.kind.value.upper()} evidence: {subject}; "
-            f"source={self.source.value}; confidence={confidence_text}"
+            f"source={self.source.value}; capture confidence={confidence_text}"
         )
