@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -62,6 +62,17 @@ CREATE INDEX IF NOT EXISTS idx_memory_scope_status
 ON memory_items(user_id, device_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_category
 ON memory_items(category, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS memory_context_links (
+    memory_id TEXT NOT NULL REFERENCES memory_items(memory_id) ON DELETE CASCADE,
+    case_id TEXT NOT NULL,
+    entity_key TEXT NOT NULL DEFAULT '',
+    observation_id TEXT NOT NULL DEFAULT '',
+    action_id TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(memory_id, case_id, entity_key, observation_id, action_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_context_case ON memory_context_links(case_id);
+CREATE INDEX IF NOT EXISTS idx_memory_context_entity ON memory_context_links(entity_key);
 
 CREATE TABLE IF NOT EXISTS memory_revisions (
     revision_id TEXT PRIMARY KEY,

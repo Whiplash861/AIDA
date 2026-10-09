@@ -4,6 +4,7 @@ from __future__ import annotations
 import getpass
 import json
 import platform
+import re
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -389,10 +390,11 @@ class MemoryService:
                 if _loads(event["payload_json"], {}).get("memory_id") == memory_id:
                     connection.execute("DELETE FROM event_journal WHERE event_id=?", (event["event_id"],))
 
-    def retrieve_context(self, query: str, *, limit: int = 8) -> list[MemoryItem]:
+    def retrieve_context(self, query: str, *, limit: int = 8,
+                         case_id: str | None = None, entity_key: str | None = None) -> list[MemoryItem]:
         """Return scoped, current evidence; disputed histories are management-only."""
-        return [item for item in self.search(query, limit=min(1000, max(limit, limit * 4)))
-                if self.retrieval_eligible(item)][:limit]
+        return self.search(query, limit=limit, case_id=case_id,
+                           entity_key=entity_key, eligible_only=True)
 
     @staticmethod
     def retrieval_eligible(item: MemoryItem) -> bool:
@@ -439,34 +441,75 @@ class MemoryService:
             rows = connection.execute(query, values).fetchall()
         return [_memory_from_row(row) for row in rows]
 
-    def search(self, query: str, *, limit: int = 100) -> list[MemoryItem]:
-        terms = [term for term in query.lower().split() if term]
-        if not terms:
-            return self.list_memories(limit=limit)
-        clauses = ["user_id = ?", "device_id = ?", "status != ?"]
-        values: list[Any] = [
-            self.user_id,
-            self.device_id,
-            MemoryStatus.DELETED.value,
-        ]
-        clauses.append("status != ? AND (expires_at IS NULL OR expires_at > ?)")
-        values.extend([MemoryStatus.EXPIRED.value, _iso(utc_now())])
+    def search(self, query: str, *, limit: int = 100, case_id: str | None = None,
+               entity_key: str | None = None, eligible_only: bool = False) -> list[MemoryItem]:
+        """Bounded local lexical ranking with exact, scoped case/entity filters.
+
+        Partial matches remain useful for conversational queries. Titles and tags
+        carry more weight than summary matches; recency only breaks score ties.
+        Management searches may include disputed records; reasoning may not.
+        """
+        stop = {"the", "a", "an", "and", "or", "is", "was", "did", "what", "we", "i", "it", "my", "with", "for", "to", "of"}
+        terms = list(dict.fromkeys(t for t in re.findall(r"[\w.-]+", query[:2000].lower()) if t not in stop))[:24]
+        clauses = ["m.user_id=?", "m.device_id=?", "m.status NOT IN (?,?)",
+                   "(m.expires_at IS NULL OR m.expires_at>?)"]
+        values: list[Any] = [self.user_id, self.device_id, MemoryStatus.DELETED.value,
+                            MemoryStatus.EXPIRED.value, _iso(utc_now())]
+        if eligible_only:
+            clauses.append("m.status IN (?,?)")
+            values.extend([MemoryStatus.ACTIVE.value, MemoryStatus.USER_CORRECTED.value])
+        for field, value in (("case_id", case_id), ("entity_key", entity_key)):
+            if value is not None:
+                clauses.append(f"EXISTS(SELECT 1 FROM memory_context_links c WHERE c.memory_id=m.memory_id AND c.{field}=?)")
+                values.append(value)
+        scores, score_values = [], []
         for term in terms:
-            clauses.append(
-                "(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? "
-                "OR LOWER(category) LIKE ? OR LOWER(tags_json) LIKE ?)"
-            )
-            wildcard = f"%{term}%"
-            values.extend([wildcard, wildcard, wildcard, wildcard])
-        values.append(max(1, min(limit, 1000)))
-        query_sql = (
-            "SELECT * FROM memory_items WHERE "
-            + " AND ".join(clauses)
-            + " ORDER BY pinned DESC, updated_at DESC LIMIT ?"
-        )
+            pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            for field, weight in (("title", 4), ("tags_json", 3), ("summary", 1)):
+                scores.append(f"CASE WHEN LOWER(m.{field}) LIKE ? ESCAPE '\\' THEN {weight} ELSE 0 END")
+                score_values.append(pattern)
+        score = " + ".join(scores) or "0"
+        sql = f"SELECT * FROM (SELECT m.*, ({score}) AS relevance FROM memory_items m WHERE {' AND '.join(clauses)})"
+        if terms and case_id is None and entity_key is None:
+            sql += " WHERE relevance>0"
+        sql += " ORDER BY relevance DESC,pinned DESC,updated_at DESC,memory_id LIMIT ?"
         with self.database.connect() as connection:
-            rows = connection.execute(query_sql, values).fetchall()
+            rows = connection.execute(sql, [*score_values, *values, max(1, min(int(limit), 1000))]).fetchall()
         return [_memory_from_row(row) for row in rows]
+
+    def link_context(self, memory_id: str, *, case_id: str, entity_key: str = "",
+                     observation_id: str = "", action_id: str = "") -> None:
+        if not case_id.strip() or any(len(value) > 512 for value in (case_id, entity_key, observation_id, action_id)):
+            raise ValueError("A bounded investigation reference is required")
+        with self.database.transaction() as connection:
+            if not connection.execute("SELECT 1 FROM memory_items WHERE memory_id=? AND user_id=? AND device_id=?",
+                                      (memory_id, self.user_id, self.device_id)).fetchone():
+                raise KeyError("Memory is unavailable in this user/device scope")
+            connection.execute("INSERT OR IGNORE INTO memory_context_links VALUES (?,?,?,?,?)",
+                               (memory_id, case_id, entity_key, observation_id, action_id))
+
+    def remember_investigation(self, *, case_id: str, title: str, summary: str,
+                               entity_key: str = "", observation_id: str = "", action_id: str = "",
+                               outcome: str = "observed") -> MemoryItem:
+        item = self.add_memory(category="investigation.history", title=title, summary=summary,
+            facts={"case_id": case_id, "entity_key": entity_key, "observation_id": observation_id,
+                   "action_id": action_id, "outcome": outcome, "causal_success_verified": False},
+            confidence=0.5, confidence_basis=("Recorded investigation evidence; causal success is not established.",),
+            tags=("investigation", outcome), source="investigation")
+        self.link_context(item.memory_id, case_id=case_id, entity_key=entity_key,
+                          observation_id=observation_id, action_id=action_id)
+        return item
+
+    def supersede_memory(self, memory_id: str, *, replacement_id: str, reason: str) -> MemoryItem:
+        """Explicitly retire a conclusion while retaining its evidence and revisions."""
+        previous, replacement = self.get_memory(memory_id), self.get_memory(replacement_id)
+        if previous is None or replacement is None or memory_id == replacement_id:
+            raise ValueError("Two distinct memories in the current scope are required")
+        if not reason.strip() or not self.retrieval_eligible(replacement):
+            raise ValueError("A current replacement and an explanation are required")
+        return self.revise_memory(memory_id, status=MemoryStatus.SUPERSEDED,
+            facts={**previous.facts, "superseded_by": replacement_id}, reason=reason,
+            revised_by="investigation.review", user_correction=False, expected_updated_at=previous.updated_at)
 
     def revisions(self, memory_id: str) -> list[MemoryRevision]:
         """Returns newest-first revisions for a scoped memory item."""
