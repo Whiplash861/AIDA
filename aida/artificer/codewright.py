@@ -79,13 +79,19 @@ class Codewright:
 
     def inspect(self) -> list[ArtificerFinding]:
         findings: list[ArtificerFinding] = []
+        self.review_sources: dict[str, bytes] = {}
         python_files = self._python_files()
         versions: dict[str, str] = {}
 
         for path in python_files:
             relative = self._relative(path)
             try:
-                source = path.read_text(encoding="utf-8")
+                with path.open("rb") as stream:
+                    captured = stream.read(1024 * 1024 + 1)
+                if len(captured) > 1024 * 1024:
+                    raise OSError("Source exceeds the 1 MiB per-file review limit")
+                source = captured.decode("utf-8-sig")
+                self.review_sources[relative] = captured
             except (OSError, UnicodeError) as exc:
                 findings.append(
                     self._finding(

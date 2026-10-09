@@ -176,7 +176,7 @@ def main() -> int:
         parent=window,
         confirmations=confirmation_service,
     )
-    artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window)
+    artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window, task_manager=task_manager)
     artificer_qt_bridge = ArtificerQtBridge(artificer_engine, parent=app)
     artificer_qt_bridge.status_changed.connect(window.set_artificer_status)
     artificer_qt_bridge.status_changed.connect(overlay.set_artificer_status)

@@ -73,6 +73,17 @@ SCHEMA_SQL = r"""
                     created_at_utc TEXT NOT NULL, updated_at_utc TEXT NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT
                 );
+                CREATE TABLE IF NOT EXISTS source_reviews (
+                    review_id TEXT PRIMARY KEY, finding_id TEXT NOT NULL,
+                    path TEXT NOT NULL, source_sha256 TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL, payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_source_reviews_finding
+                    ON source_reviews(finding_id,created_at_utc DESC);
+                CREATE TABLE IF NOT EXISTS source_stages (
+                    stage_id TEXT PRIMARY KEY, review_id TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL, payload_json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS audit_chain (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     record_type TEXT NOT NULL, record_id TEXT NOT NULL,

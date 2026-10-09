@@ -39,6 +39,7 @@ def proposal_from_record(record: dict[str, Any]) -> UpgradeProposal:
         current_version=record["current_version"],
         proposed_version=record["proposed_version"],
         supporting_findings=tuple(record.get("supporting_findings", [])),
+        source_review_ids=tuple(record.get("source_review_ids", [])),
         rationale=record["rationale"],
         alternatives_considered=tuple(record.get("alternatives_considered", [])),
         expected_outcomes=tuple(record.get("expected_outcomes", [])),

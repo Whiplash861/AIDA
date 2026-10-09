@@ -145,6 +145,39 @@ class ArtificerFinding:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceReviewAnnotation:
+    review_id: str
+    finding_id: str
+    path: str
+    start_line: int
+    end_line: int
+    symbol: str
+    source_sha256: str
+    span_sha256: str
+    reviewed_code: str
+    proposed_change: str
+    rationale: str
+    evidence: str
+    expected_outcomes: tuple[str, ...]
+    validation_requirements: tuple[str, ...]
+    change_kind: str = "modify"
+    created_at_utc: datetime = field(default_factory=utc_now)
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["created_at_utc"] = self.created_at_utc.isoformat()
+        return record
+
+    @classmethod
+    def from_record(cls, record: dict[str, Any]) -> "SourceReviewAnnotation":
+        values = dict(record)
+        values["created_at_utc"] = datetime.fromisoformat(values["created_at_utc"])
+        for key in ("expected_outcomes", "validation_requirements"):
+            values[key] = tuple(values[key])
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
 class UpgradeProposal:
     proposal_id: str
     title: str
@@ -164,6 +197,7 @@ class UpgradeProposal:
     authority_required: str
     status: str = "pending"
     created_at_utc: datetime = field(default_factory=utc_now)
+    source_review_ids: tuple[str, ...] = ()
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -202,3 +236,4 @@ class ArtificerSnapshot:
     pending_proposals: tuple[UpgradeProposal, ...]
     dispatch_queue_depth: int
     telemetry_level: str
+    source_reviews: tuple[SourceReviewAnnotation, ...] = ()

@@ -10,7 +10,7 @@ from typing import Any
 from aida.artificer.ledger_schema import SCHEMA_SQL
 from aida.artificer.models import utc_now
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -33,6 +33,7 @@ _TABLE_KEYS = {
     "upgrade_proposals": "proposal_id", "modification_attempts": "attempt_id",
     "validation_results": "id", "dispatch_queue": "dispatch_id",
     "proposal_decisions": "id", "rollback_events": "id",
+    "source_reviews": "review_id", "source_stages": "stage_id",
 }
 _RECORD_TABLES = {
     "operational_event": "operational_events", "platform_profile": "platform_profiles",
@@ -42,6 +43,7 @@ _RECORD_TABLES = {
     "validation_result": "validation_results", "dispatch_queued": "dispatch_queue",
     "dispatch_status": "dispatch_queue", "dispatch_deleted_unsent": "dispatch_queue",
     "rollback_event": "rollback_events", "proposal_decision_record": "proposal_decisions",
+    "source_review": "source_reviews", "source_stage": "source_stages",
 }
 
 
@@ -84,7 +86,11 @@ class LedgerCore:
             for name in ("payload_json", "state_json"):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE audit_chain ADD COLUMN {name} TEXT")
-            if version < SCHEMA_VERSION:
+            if 2 <= version < SCHEMA_VERSION:
+                # Schema 2 already binds row content. A schema upgrade must not
+                # bless altered rows by checkpointing over their prior history.
+                self._verify_connection(connection)
+            if version < 2:
                 # Existing history has no content snapshots. Establish an explicit
                 # migration checkpoint, without claiming to validate its past.
                 for table, key in _TABLE_KEYS.items():

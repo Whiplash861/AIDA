@@ -36,6 +36,8 @@ DEFAULT_PROTECTED_PATHS = (
     "aida/artificer/ledger_findings.py",
     "aida/artificer/ledger_operations.py",
     "aida/artificer/ledger_records.py",
+    "aida/artificer/ledger_reviews.py",
+    "aida/artificer/source_review.py",
     "aida/artificer/manifests/protected_paths.json",
     "aida/artificer/manifests/source_expectations.json",
     ".env",

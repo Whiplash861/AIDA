@@ -75,6 +75,8 @@ Navigation checks hashes and metadata consistently, honors caller budgets, check
 
 ## Validation
 
+The subsequent source-review increment adds exact code annotations, stale-source guards, inert candidate exports, and bounded local resource observations. Its workflow, schema-3 migration, validation limits, and APIs are documented in [ARTIFICER_SOURCE_REVIEW.md](ARTIFICER_SOURCE_REVIEW.md). Candidate staging does not enable live Forge application or establish behavioral correctness.
+
 Focused tests use temporary files/databases and mocked providers, process identities, and transports. Run from the repository root:
 
 ```powershell

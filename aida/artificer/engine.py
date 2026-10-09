@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from dataclasses import replace
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,8 @@ from aida.artificer.scheduler import ArtificerScheduler
 from aida.artificer.validator import Validator
 from aida.artificer.warden import Warden
 from aida.artificer.watchtower import Watchtower
+from aida.artificer.source_review import SourceReviewService, StaleSourceReview, annotations_for_finding
+from aida.artificer.state_file import write_json
 from aida.platform.base import PlatformAdapter
 from aida.platform.detector import detect_platform_adapter
 
@@ -90,6 +93,8 @@ class ArtificerEngine:
         self.architect = Architect()
 
         self.policy = ArtificerPolicy(self.source_root)
+        self._resource_observer = None
+        self.source_reviews = SourceReviewService(self.source_root, self.ledger, policy=self.policy)
         self.warden = Warden(self.policy)
         self.validator = Validator()
         self.rollback = RollbackManager(data_dir / "rollback")
@@ -269,6 +274,10 @@ class ArtificerEngine:
                     for finding in findings
                 ]
 
+                for finding in stored[:len(source_findings)]:
+                    for annotation in annotations_for_finding(finding, self.codewright.review_sources):
+                        self.ledger.store_source_review(annotation)
+                self.codewright.review_sources.clear()
                 self._last_review_utc = utc_now().isoformat()
                 self.event_bus.publish(
                     make_event(
@@ -310,6 +319,8 @@ class ArtificerEngine:
                 )
                 self._set_status(ArtificerStatus.ERROR)
                 raise
+            finally:
+                getattr(self.codewright, "review_sources", {}).clear()
 
             return self.snapshot()
 
@@ -317,10 +328,18 @@ class ArtificerEngine:
         finding = self.ledger.get_finding(finding_id)
         if finding is None:
             raise KeyError(finding_id)
+        if finding.status != "open":
+            raise StaleSourceReview("This finding is no longer open; review it again")
         proposal = self.architect.propose(
             finding,
             current_version=self.version,
         )
+        reviews = self.ledger.list_source_reviews(finding_id=finding.finding_id, limit=1000)
+        current_reviews = tuple(review.review_id for review in reviews
+                                if self.source_reviews.inspect(review.review_id)["state"] == "current")
+        if reviews and not current_reviews:
+            raise StaleSourceReview("Source annotations are stale; run a fresh review before creating this proposal")
+        proposal = replace(proposal, source_review_ids=current_reviews)
         self.ledger.store_proposal(proposal)
         self._set_status(ArtificerStatus.PROPOSAL)
         return proposal
@@ -398,6 +417,7 @@ class ArtificerEngine:
             pending_proposals=proposals,
             dispatch_queue_depth=self.ledger.dispatch_queue_depth(),
             telemetry_level=self.consent.state.telemetry_level.value,
+            source_reviews=tuple(self.ledger.list_source_reviews()),
         )
 
     def subscribe(self, listener: SnapshotListener) -> None:
@@ -442,17 +462,39 @@ class ArtificerEngine:
                 proposal.to_record()
                 for proposal in snapshot.pending_proposals
             ],
+            "source_reviews": [annotation.to_record() for annotation in snapshot.source_reviews],
+            "source_reviews_are_captured_snapshots": True,
             "dispatch_queue_depth": snapshot.dispatch_queue_depth,
             "telemetry_level": snapshot.telemetry_level,
             "ledger_integrity": self.ledger.verify_integrity(),
         }
-        temporary = target.with_suffix(target.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        temporary.replace(target)
+        write_json(target, payload)
         return target
+
+    def inspect_source_review(self, review_id: str) -> dict:
+        return self.source_reviews.inspect(review_id)
+
+    def export_source_review(self, review_id: str, export_dir: str | Path) -> Path:
+        return self.source_reviews.export_review(review_id, export_dir)
+
+    def stage_source_candidate(self, review_id: str, replacement_text: str, *,
+                               expected_source_sha256: str, export_dir: str | Path) -> dict:
+        return self.source_reviews.stage(review_id, replacement_text,
+                                        expected_source_sha256=expected_source_sha256, export_dir=export_dir)
+
+    def measure_self_resources(self, *, window_seconds: float = 1.0, operation_id: str | None = None) -> dict:
+        if not self.enabled:
+            raise RuntimeError("Artificer is disabled; resource measurement was not started")
+        from aida.technomancer.self_resources import SelfResourceObserver
+        with self._lock:
+            if self._resource_observer is None:
+                self._resource_observer = SelfResourceObserver()
+            observer = self._resource_observer
+        record = observer.measure(window_seconds=window_seconds, operation_id=operation_id)
+        self.event_bus.publish(make_event(source="technomancer.self_resources",
+            event_type="aida_resource_observed", status=record["status"], aida_version=self.version,
+            operation_id=operation_id, duration_ms=record["elapsed_seconds"] * 1000, metadata=record))
+        return record
 
     def record_diagnostic_run(
         self,

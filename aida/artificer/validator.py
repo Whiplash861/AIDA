@@ -34,7 +34,7 @@ class Validator:
         candidate = Path(path)
         checks: list[ValidationCheck] = []
         try:
-            source = candidate.read_text(encoding="utf-8")
+            source = candidate.read_text(encoding="utf-8-sig")
             tree = ast.parse(source, filename=str(candidate))
             checks.append(ValidationCheck("ast_parse", True, "Python AST parsed successfully"))
         except (OSError, UnicodeError, SyntaxError) as exc:
