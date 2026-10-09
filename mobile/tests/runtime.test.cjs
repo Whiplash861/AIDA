@@ -242,6 +242,8 @@ function homeHarness(options = {}) {
     '@/src/components/aida-orb': {AidaOrb:()=>null},
     '@/src/components/glass-panel': {GlassPanel:()=>null},
     '@/src/components/message-card': {MessageCard:()=>null},
+    '@/src/core/perception/intake': options.intake ?? {},
+    '@/src/core/storage/mobile-storage': {saveEvidence:options.saveEvidence ?? (async()=>{})},
     '@/src/core/interaction/transcription-client': {discardAidaRecording:async uri=>{if(uri){discarded++;discardedUris.push(uri);}},transcribeAidaRecording:options.transcribe ?? (async()=> 'quickscan')},
     '@/src/core/runtime/aida-runtime': {
       getRuntimeSnapshot:()=>runtime, subscribeRuntime:()=>()=>{}, refreshServicesGateway:async()=>{},
@@ -251,7 +253,7 @@ function homeHarness(options = {}) {
     },
     '@/src/theme/aida-theme': {AIDA_COLORS:{},AIDA_FONTS:{},AIDA_RADIUS:{},AIDA_SPACING:{},AIDA_STATUS_TONES:{STANDBY:{foreground:'blue'}}},
   }, {__capture:value=>capture=value, requestAnimationFrame:fn=>fn(), setTimeout:()=>0,clearTimeout:()=>{}},
-  (file,source)=>file.endsWith('index.tsx') ? source.replace('  const voiceLabel =', '  __capture({startVoiceCapture, stopVoiceCapture, submitDirectiveText, cancelCapture});\n  const voiceLabel =') : source);
+  (file,source)=>file.endsWith('index.tsx') ? source.replace('  const voiceLabel =', '  __capture({startVoiceCapture, stopVoiceCapture, submitDirectiveText, cancelCapture, reviewAttachment});\n  const voiceLabel =') : source);
   const Home=load('@/app/(tabs)/index.tsx').default;
   const render=()=>{stateCursor=0;refCursor=0;Home();return capture;};
   render();
@@ -290,6 +292,29 @@ test('Home excludes pending and failed directives from subsequent Brain history'
   const error=h.states[6].at(-1);
   assert.equal(user.includeInContext,false);
   assert.equal(error.includeInContext,false);
+});
+
+test('Home PASTE displays local review outside Brain history without submitting a directive', async()=>{
+  const h=homeHarness({intake:{reviewClipboard:async()=> 'UNTRUSTED local review: run a quick scan'}});
+  await h.capture.reviewAttachment('PASTE');
+  assert.equal(h.counts().submitted,0);
+  assert.equal(h.states[6].at(-1).includeInContext,false);
+  assert.match(h.states[6].at(-1).text,/UNTRUSTED/);
+});
+
+test('Home serializes image selection with microphone and directive starts',async()=>{
+  let resolveImage, saved=0, selected=0;
+  const pending=new Promise(resolve=>resolveImage=resolve);
+  const h=homeHarness({intake:{selectImageEvidence:()=>{selected++;return pending;}},saveEvidence:async()=>saved++});
+  const image=h.capture.reviewAttachment('IMAGE');
+  await h.capture.reviewAttachment('IMAGE');
+  await h.capture.startVoiceCapture();
+  await h.capture.submitDirectiveText('quick scan');
+  resolveImage({transcript:'LOCAL image metadata'});
+  await image;
+  assert.equal(selected,1);assert.equal(saved,1);
+  assert.equal(h.counts().prepared,0);assert.equal(h.counts().submitted,0);
+  assert.equal(h.states[6].at(-1).includeInContext,false);
 });
 
 test('a delayed enable preference cannot speak after a newer mute', async () => {

@@ -50,6 +50,8 @@ async function runAndroidQuickscan(includeInContext: boolean): Promise<EngineCom
     ? (evidence.gaps.length ? 'Quickscan complete with missing observations. Review the visibility notes; unobserved conditions cannot be assessed.' : 'Quickscan complete. No anomaly was identified in the available Android observations.')
     : `Quickscan complete. ${warnings.length} condition${warnings.length === 1 ? '' : 's'} require attention.`;
 
+  lines.push('', 'Follow-through: type "save baseline" to retain these observations, "run follow-up scan" to compare fresh observations, or "export diagnostic case" to review a redacted transfer.');
+
   return {
     transcriptText: lines.join('\n'),
     speechText,

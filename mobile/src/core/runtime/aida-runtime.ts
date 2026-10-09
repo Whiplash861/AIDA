@@ -1,4 +1,5 @@
 import { MOBILE_AEGIS } from '@/src/core/engines/aegis/runtime';
+import { LocalReviewError } from '@/src/core/perception/local-review-error';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
@@ -320,6 +321,8 @@ export async function submitLocalDirective(
     if (response.mode === 'routed' && response.routedDirective) {
       const command = await executeMobileRoutedDirective(response.routedDirective, {
         platform: snapshot.platform,
+        instanceId: snapshot.identity_persistent ? snapshot.instance_id : undefined,
+        signal: lease.signal,
       });
       if (lease.signal.aborted) throw new Error('Operation cancelled.');
       if (command.evidence) await saveEvidence(command.evidence).catch(() => addActivity('STORAGE', 'Diagnostic evidence could not be saved.', 'warning', 'mobile.storage', false));
@@ -364,6 +367,10 @@ export async function submitLocalDirective(
       routeIntentId: '',
     };
   } catch (error) {
+    if (error instanceof LocalReviewError && !lease.signal.aborted) {
+      setAgentState('STANDBY', MOBILE_REASONING.isRemoteConfigured() ? 'IDLE' : 'STAGED', 'ready');
+      return {text: error.message, speechText: '', includeInContext: false, localOnly: true, routeIntentId: 'local.review.unavailable'};
+    }
     const message = lease.signal.aborted ? 'Operation cancelled.' : 'AIDA request could not complete. Check service availability and retry.';
     if (!lease.signal.aborted) setAgentState('STANDBY', 'ERROR', 'ready');
     await addActivity('BRAIN', `AIDA brain request failed: ${message}`, 'error', 'mobile.reasoning');
@@ -428,7 +435,7 @@ async function hydrateRuntime(): Promise<MobileRuntimeSnapshot> {
         status('memory', 'MEMORY', 'READY', 'ready'),
         status('artificer', 'ARTIFICER', 'STAGED', 'idle'),
         status('technomancer', 'TECHNOMANCER', 'STAGED', 'idle'),
-        status('perception', 'PERCEPTION', 'STAGED', 'idle'),
+        status('perception', 'PERCEPTION', 'LIMITED', 'idle'),
         status(
           'microphone',
           'MICROPHONE',
@@ -611,6 +618,18 @@ function buildCapabilities(
       label: 'Persistent mobile storage',
       state: 'supported',
       detail: 'AIDA has persistent local runtime storage; full semantic-memory parity remains staged.',
+    },
+    {
+      id: 'diagnostics.baseline', label: 'Local diagnostic follow-through', state: platform === 'Android' ? 'limited' : 'staged',
+      detail: 'Save a diagnostic baseline, compare observations, and run follow-up scans. Missing signals remain unknown; comparisons do not establish cause.',
+    },
+    {
+      id: 'perception.intake', label: 'Selected local evidence review', state: 'limited',
+      detail: 'IMAGE reviews selected image metadata; PASTE extracts literal text markers or reviews a case. Mobile OCR and semantic image analysis remain unavailable.',
+    },
+    {
+      id: 'cases.transfer', label: 'Reviewed case transfer', state: 'limited',
+      detail: 'Preview a redacted diagnostic export before copying it. Imported cases remain local references with no execution authority or baseline eligibility.',
     },
     {
       id: 'reasoning.gateway',

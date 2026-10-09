@@ -2,6 +2,11 @@
 
 React Native / Expo frontend and mobile runtime for **AIDA — Analytical Intelligent Diagnostic Agent**.
 
+Local investigation workflows now support diagnostic baselines/follow-up scans,
+IMAGE and PASTE evidence review, and deliberately reviewed case transfer. See the
+[workflow and device-validation guide](../docs/architecture/mobile-investigation-workflows.md)
+for commands, privacy boundaries, and native acceptance requirements.
+
 ## Development principle
 
 AIDA Mobile is a platform port of AIDA, not a separately designed assistant or remote frontend for Desktop AIDA.

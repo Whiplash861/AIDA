@@ -28,6 +28,7 @@ import {
   AidaOrbVisualState,
 } from '@/src/components/aida-orb';
 import { GlassPanel } from '@/src/components/glass-panel';
+import { LocalReviewError } from '@/src/core/perception/local-review-error';
 import {
   MessageCard,
   MobileMessage,
@@ -344,19 +345,27 @@ export default function HomeScreen() {
     ]);
   }
 
-  function stageAction(label: string) {
-    setMessages((current) => [
-      ...current.slice(-199),
-      {
-        id: `system-${label}-${Date.now()}`,
-        sender: 'system',
-        text:
-          `${label} is staged for the native ${runtime.platform} provider. ` +
-          'No unregistered device operation was executed.',
-        includeInContext: false,
-      },
-    ]);
+  async function reviewAttachment(label: string) {
+    if (!inputReady || submissionRef.current || voiceBusyRef.current) return;
+    submissionRef.current = true;
     setShowQuickActions(false);
+    try {
+      const intake = await import('@/src/core/perception/intake');
+      if (!mountedRef.current) return;
+      if (label === 'PASTE') {
+        const review = await intake.reviewClipboard();
+        if (mountedRef.current) appendSystemMessage(review);
+      } else {
+        const evidence = await intake.selectImageEvidence();
+        if (!evidence || !mountedRef.current) return;
+        const {saveEvidence} = await import('@/src/core/storage/mobile-storage');
+        let saved = true;
+        await saveEvidence(evidence).catch(() => { saved = false; });
+        if (mountedRef.current) appendSystemMessage(evidence.transcript + (saved ? '' : '\nMetadata could not be saved; this review is available only in the current conversation.'));
+      }
+    } catch (error) {
+      if (mountedRef.current) appendSystemMessage(error instanceof LocalReviewError ? error.message : 'Local evidence review could not complete. Check image or clipboard availability and retry. No content was sent to a service.');
+    } finally { submissionRef.current = false; }
   }
 
   const voiceLabel = voiceProcessing
@@ -474,7 +483,7 @@ export default function HomeScreen() {
                   key={label}
                   accessibilityRole="button"
                   disabled={!inputReady}
-                  onPress={() => stageAction(label)}
+                  onPress={() => void reviewAttachment(label)}
                   style={({ pressed }) => [
                     styles.quickActionButton,
                     !inputReady && styles.quickActionButtonDisabled,

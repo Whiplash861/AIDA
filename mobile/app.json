@@ -24,6 +24,11 @@
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "blockedPermissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
     },
     "web": {
@@ -32,6 +37,14 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": false,
+          "photosPermission": false,
+          "microphonePermission": "Allow AIDA to access the microphone for user-initiated voice directives."
+        }
+      ],
       [
         "expo-audio",
         {

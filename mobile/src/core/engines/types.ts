@@ -22,6 +22,8 @@ export type EngineSubprocessDefinition = {
 
 export type EngineCommandExecutionContext = {
   platform: string;
+  instanceId?: string;
+  signal?: AbortSignal;
 };
 
 export type EngineCommandResult = {

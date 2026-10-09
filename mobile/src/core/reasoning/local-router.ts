@@ -1,6 +1,14 @@
 import { RoutedDirective } from '@/src/core/reasoning/types';
 
 const LOCAL_ROUTES: { pattern: RegExp; command: string; intent: string }[] = [
+  { pattern: /^(?:save|set)\s+(?:diagnostic\s+)?baseline[.!]?$/i, command: 'SAVE_BASELINE', intent: 'diagnostics.baseline.save' },
+  { pattern: /^(?:compare|show\s+changes\s+(?:from|since))\s+(?:the\s+)?baseline[.!]?$/i, command: 'COMPARE_BASELINE', intent: 'diagnostics.baseline.compare' },
+  { pattern: /^(?:run\s+)?follow[- ]up\s+scan[.!]?$/i, command: 'FOLLOW_UP_SCAN', intent: 'diagnostics.followup' },
+  { pattern: /^export\s+(?:diagnostic\s+)?case[.!]?$/i, command: 'CASE_EXPORT', intent: 'case.export.review' },
+  { pattern: /^copy\s+reviewed\s+case[.!]?$/i, command: 'CASE_COPY', intent: 'case.export.copy' },
+  { pattern: /^import\s+reviewed\s+case[.!]?$/i, command: 'CASE_IMPORT', intent: 'case.import.accept' },
+  { pattern: /^discard\s+reviewed\s+case[.!]?$/i, command: 'CASE_DISCARD', intent: 'case.review.discard' },
+  { pattern: /^show\s+imported\s+case[.!]?$/i, command: 'CASE_SHOW', intent: 'case.import.show' },
   { pattern: /^(?:(?:run|perform|start)\s+)?(?:a\s+)?quick\s*scan[.!]?$/i, command: 'QUICKSCAN', intent: 'diagnostics.quickscan' },
   { pattern: /^(?:(?:run|perform|start)\s+)?(?:a\s+)?performance\s+scan[.!]?$/i, command: 'PERFORMANCE_SCAN', intent: 'diagnostics.performance' },
   { pattern: /^(?:(?:show|check)\s+)?(?:aegis\s+)?security\s+status[.!]?$/i, command: 'SECURITY_STATUS', intent: 'security.status' },

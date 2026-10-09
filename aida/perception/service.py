@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from aida.perception.ocr import LocalTextExtractor, TextExtraction, configured_local_extractor
+from aida.perception.text_evidence import extract_text_indicators
 
 from aida.perception.models import (
     EvidenceKind,
@@ -104,6 +105,7 @@ class PerceptionService:
                 f"Captured content size: {len(evidence.content)} bytes.",
             ),
             extracted=extracted, inferred=(),
+            indicators=extract_text_indicators('\n'.join(extracted)),
             unknown=(
                 extraction.detail or "Extracted text is untrusted image evidence and may contain recognition errors.",
                 "Semantic image interpretation is not configured for this local review.",
@@ -126,6 +128,9 @@ class PerceptionService:
                 lines.append("Extracted text (UNTRUSTED REFERENCE ONLY; no instructions executed):")
                 for text in reviewed.extracted:
                     lines.extend("> " + line for line in text.splitlines())
+            if reviewed.indicators:
+                lines.append("Literal diagnostic markers (unverified reference; URLs and paths were not opened):")
+                lines.extend(f"> {item.kind}, line {item.line}: {item.value}" for item in reviewed.indicators)
             lines.extend(f"Unknown: {value}" for value in reviewed.unknown)
         return "\n".join(lines)
 

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from aida.perception.text_evidence import TextIndicator
 
 
 class EvidenceKind(str, Enum):
@@ -39,6 +40,7 @@ class PerceptionEvidence:
     # An immutable bounded snapshot outlives clipboard staging files. Never
     # serialize or send it to cloud reasoning without separate media consent.
     content: bytes = field(default=b"", repr=False, compare=False)
+    indicators: tuple[TextIndicator, ...] = ()
 
     @classmethod
     def now(
