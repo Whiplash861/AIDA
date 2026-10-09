@@ -168,7 +168,7 @@ def test_monitor_resets_episode_after_activity_ends():
     hints = iter([True, False, True])
     waits = iter([False, False, False, True])
     current = assessment((session(),))
-    service = SimpleNamespace(activity_hint=lambda: next(hints), inspect=lambda: current)
+    service = SimpleNamespace(activity_hint=lambda: next(hints), inspect=lambda **kwargs: current)
     monitor = RemoteIntrusionMonitor(service=service, memory=None, bridge=None)
     monitor._stop = SimpleNamespace(is_set=lambda: False, wait=lambda _: next(waits))
     recorded = []

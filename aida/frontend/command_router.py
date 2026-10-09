@@ -14,6 +14,17 @@ from aida.intent.technomancer import register_technomancer_intents
 
 
 class CommandType(Enum):
+    INVESTIGATION_START = auto()
+    INVESTIGATION_PAUSE = auto()
+    INVESTIGATION_CONCLUDE = auto()
+    INVESTIGATION_RESUME = auto()
+    INVESTIGATION_SHOW = auto()
+    INVESTIGATION_LIST = auto()
+    INVESTIGATION_RESPONSE = auto()
+    INVESTIGATION_PLAN = auto()
+    INVESTIGATION_MEMORY = auto()
+    SECURITY_ALERTS = auto()
+    SECURITY_ALERT_ACKNOWLEDGE = auto()
     QUICKSCAN = auto()
     PERFORMANCE_SCAN = auto()
     SECURITY_STATUS = auto()
@@ -97,6 +108,7 @@ class CommandRouter:
             CommandType.AUTONOMY_DISABLE,
             CommandType.AUTONOMY_STATUS,
             CommandType.TASK_CENTER_SHOW,
+            CommandType.INVESTIGATION_PAUSE,
         }
     )
 
@@ -128,6 +140,11 @@ class CommandRouter:
         )
 
     def route(self, text: str, *, commit: bool = True) -> RoutedCommand | None:
+        # Explicit whole-input grammar keeps quoted evidence and explanations
+        # from becoming investigative actions through keyword scoring.
+        investigation = _investigation_command(text)
+        if investigation is not None:
+            return investigation
         if text.strip().lower() == "cancel action":
             return RoutedCommand(CommandType.COMMAND_CANCEL, text, local_only=True)
         if self._context.extra.get("clarification_candidates") and text.strip().lower() in {"cancel", "cancel that", "never mind", "nevermind", "forget it"}:
@@ -204,3 +221,25 @@ class CommandRouter:
 
     def is_control_command(self, command: RoutedCommand) -> bool:
         return command.command_type in self._CONTROL_COMMANDS
+
+
+def _investigation_command(text: str) -> RoutedCommand | None:
+    patterns = (
+        (r"investigate\s*:\s*(?P<objective>[^\r\n]{1,1000})", CommandType.INVESTIGATION_START),
+        (r"pause investigation", CommandType.INVESTIGATION_PAUSE),
+        (r"conclude investigation (?P<case_id>[A-Za-z0-9_-]{1,160}):\s*(?P<summary>[^\r\n]{1,1000})", CommandType.INVESTIGATION_CONCLUDE),
+        (r"show investigations", CommandType.INVESTIGATION_LIST),
+        (r"show security alerts", CommandType.SECURITY_ALERTS),
+        (r"acknowledge alert (?P<alert_id>[A-Za-z0-9_-]{1,160})", CommandType.SECURITY_ALERT_ACKNOWLEDGE),
+        (r"show investigation (?P<case_id>[A-Za-z0-9_-]{1,160})", CommandType.INVESTIGATION_SHOW),
+        (r"resume investigation (?P<case_id>[A-Za-z0-9_-]{1,160})", CommandType.INVESTIGATION_RESUME),
+        (r"prepare investigation response (?P<case_id>[A-Za-z0-9_-]{1,160})", CommandType.INVESTIGATION_RESPONSE),
+        (r"show investigation plan (?P<plan_id>[A-Za-z0-9_-]{1,160})", CommandType.INVESTIGATION_PLAN),
+        (r"show investigation memory (?P<case_id>[A-Za-z0-9_-]{1,160})", CommandType.INVESTIGATION_MEMORY),
+    )
+    for pattern, command_type in patterns:
+        match = re.fullmatch(pattern, text.strip(), re.I)
+        if match:
+            return RoutedCommand(command_type, text, local_only=True, slots=match.groupdict(),
+                                 requires_confirmation=command_type is CommandType.INVESTIGATION_CONCLUDE)
+    return None

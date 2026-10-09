@@ -20,6 +20,18 @@ from aida.memory.service import MemoryService
 from aida.security.models import ProviderDetection
 from aida.security.threat_analysis import ThreatAnalysisService
 from aida.security.windows.discovery import WindowsAntivirusDiscovery
+from aida.investigations import InvestigationService, InvestigationStore
+from aida.aegis.event_evidence import IncrementalEventCollector
+
+
+def build_investigation_service(config: AidaConfig, *, memory: MemoryService) -> InvestigationService:
+    """Open durable cases and alerts without starting or sampling any sensor."""
+    data_root = _aegis_data_root(config, memory)
+    data_root.mkdir(parents=True, exist_ok=True)
+    service = InvestigationService(InvestigationStore(data_root / "investigations.db"), instance_id=memory.device_id)
+    if (data_root / "aegis.db").exists():
+        service.sync_aegis_store(AegisStore(data_root / "aegis.db"))
+    return service
 
 
 def build_aegis_engine(
@@ -28,6 +40,7 @@ def build_aegis_engine(
     memory: MemoryService,
     threat_analysis: ThreatAnalysisService,
     detection_reader=None,
+    investigations: InvestigationService | None = None,
 ) -> AegisEngine:
     data_root = _aegis_data_root(config, memory)
     data_root.mkdir(parents=True, exist_ok=True)
@@ -47,6 +60,8 @@ def build_aegis_engine(
         ),
     )
     aegis_store = AegisStore(data_root / "aegis.db")
+    investigations = investigations or build_investigation_service(config, memory=memory)
+    event_collector = IncrementalEventCollector(investigations)
     bridge = AegisArtificerBridge()
     remote_store = RemoteSecurityStore(data_root / "remote-security.db")
     remote_store.mark_sentry_interrupted()
@@ -58,11 +73,14 @@ def build_aegis_engine(
         snapshot_reader=sensor.capture,
         detection_reader=unresolved_reader,
         learning=learning,
+        investigations=investigations,
+        event_collector=event_collector,
     )
     sentry = SentryAttackService(
         store=remote_store,
         snapshot_reader=sensor.capture,
     )
+    sentry.investigations = investigations
     remote_monitor = RemoteIntrusionMonitor(
         service=remote_intrusion,
         memory=memory,
@@ -88,6 +106,8 @@ def build_aegis_engine(
         sensor=sensor,
         learning=learning,
         bridge=bridge,
+        investigations=investigations,
+        event_collector=event_collector,
         observation_interval_seconds=_env_int(
             "AIDA_AEGIS_OBSERVATION_INTERVAL_SECONDS",
             900,

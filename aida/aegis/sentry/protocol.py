@@ -173,14 +173,29 @@ class SentryAttackService:
             raise RuntimeError("The Sentry Attack Protocol confirmation phrase did not match.")
         executing = _plan_from_record(self.store.claim_sentry_plan(plan.to_record(), now=utc_now()))
         try:
-            return self._execute_claimed(executing)
+            result = self._execute_claimed(executing)
         except Exception as exc:
             # Never make an interrupted/failed plan executable again. Individual
             # outcomes already recorded remain available for review.
             latest = self.load_plan(plan.plan_id) or executing
             self.store.store_sentry_plan(replace(latest, state=SentryAttackState.FAILED,
                 updated_at=utc_now(), limitations=latest.limitations + (f"Execution interrupted: {type(exc).__name__}",)).to_record())
+            investigations = getattr(self, "investigations", None)
+            if investigations is not None:
+                try:
+                    investigations.record_sentry_interruption(plan)
+                except Exception:
+                    pass  # The consumed plan and partial outcomes remain in the native ledger.
             raise
+        investigations = getattr(self, "investigations", None)
+        if investigations is not None:
+            try:
+                investigations.record_sentry(plan, result)
+            except Exception:
+                # The native outcome and consumed authorization remain in the
+                # authoritative Sentry ledger if the secondary journal fails.
+                result = replace(result, details=result.details + ("The investigation journal is unavailable; the Sentry result remains in its execution ledger.",))
+        return result
 
     def _execute_claimed(self, plan: SentryAttackPlan) -> SentryAttackResult:
         details: list[str] = []

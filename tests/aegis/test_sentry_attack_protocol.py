@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from aida.aegis.models import ProviderHealth, SecuritySnapshot
 from aida.aegis.remote.models import (
@@ -116,6 +117,38 @@ def test_sentry_requires_exact_fresh_phrase_and_verifies_session_removal(
     assert result.session_terminated == 1
     assert result.remaining_sessions == 0
     assert calls["logoff"] == 1
+
+
+def test_secondary_journal_failure_cannot_regress_completed_sentry_ledger(tmp_path, monkeypatch):
+    reads = iter([((_session(),), ()), ((_session(),), ()), ((), ())])
+    monkeypatch.setattr(sentry_module, "enumerate_remote_desktop_sessions", lambda: next(reads))
+    monkeypatch.setattr(sentry_module, "logoff_remote_desktop_session", lambda _: True)
+    service = SentryAttackService(store=RemoteSecurityStore(tmp_path / "remote.db"), snapshot_reader=_snapshot)
+    service.investigations = SimpleNamespace(record_sentry=lambda *args: (_ for _ in ()).throw(RuntimeError("journal full")))
+    plan = service.prepare(_assessment(confirmed=True))
+    result = service.execute(plan, confirmation_phrase=plan.required_phrase)
+    assert result.state is SentryAttackState.COMPLETED
+    assert service.load_plan(plan.plan_id).state is SentryAttackState.COMPLETED
+    assert any("journal is unavailable" in detail for detail in result.details)
+
+
+def test_interrupted_sentry_execution_records_unknown_outcome_without_reusable_authority(tmp_path, monkeypatch):
+    from aida.investigations import InvestigationService, InvestigationStore
+    assessment = _assessment(confirmed=True)
+    investigations = InvestigationService(InvestigationStore(tmp_path / "cases.db"))
+    case = investigations.record_remote(assessment)
+    monkeypatch.setattr(sentry_module, "enumerate_remote_desktop_sessions", lambda: ((_session(),), ()))
+    service = SentryAttackService(store=RemoteSecurityStore(tmp_path / "remote.db"), snapshot_reader=_snapshot)
+    service.investigations = investigations
+    plan = service.prepare(assessment)
+    monkeypatch.setattr(service, "_execute_claimed", lambda *args: (_ for _ in ()).throw(RuntimeError("worker interrupted")))
+    with pytest.raises(RuntimeError):
+        service.execute(plan, confirmation_phrase=plan.required_phrase)
+    row = investigations.timeline(case.case_id)[-1]
+    assert row.kind == "action_result" and row.status == "interrupted"
+    assert row.data["provider_verified"] is False
+    with pytest.raises(RuntimeError):
+        service.execute(plan, confirmation_phrase=plan.required_phrase)
 
 
 def test_sentry_plan_is_durable_and_loadable(tmp_path, monkeypatch) -> None:

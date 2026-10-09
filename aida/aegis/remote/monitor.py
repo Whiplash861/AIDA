@@ -75,15 +75,18 @@ class RemoteIntrusionMonitor:
             try:
                 if self.service.activity_hint():
                     started = time.monotonic()
-                    assessment = self.service.inspect()
-                    signature = _assessment_signature(assessment)
+                    assessment = self.service.inspect(cancel_check=self._stop.is_set)
                     if self._stop.is_set():
                         return
+                    signature = _assessment_signature(assessment)
                     if signature != self._last_signature:
                         self._record(assessment, (time.monotonic() - started) * 1000)
                         self._last_signature = signature
                 else:
                     self._last_signature = None
+                    # A cheap trigger returning false is not a verified end to
+                    # logon evidence. Only a complete quiet assessment ends the
+                    # durable episode, preserving acknowledgements across gaps.
             except Exception:
                 self.bridge.publish(
                     event_type="remote_intrusion_monitor_failed",

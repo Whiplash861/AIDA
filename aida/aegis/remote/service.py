@@ -51,6 +51,9 @@ class AegisRemoteIntrusionService:
         snapshot_reader: SnapshotReader,
         detection_reader: DetectionReader,
         learning: AegisLearningService,
+        investigations=None,
+        logon_reader=None,
+        event_collector=None,
     ) -> None:
         self.store = store
         self.aegis_store = aegis_store
@@ -58,6 +61,9 @@ class AegisRemoteIntrusionService:
         self.snapshot_reader = snapshot_reader
         self.detection_reader = detection_reader
         self.learning = learning
+        self.investigations = investigations
+        self.logon_reader = logon_reader
+        self.event_collector = event_collector
         self._last_periodic_probe = 0.0
 
     def activity_hint(self) -> bool:
@@ -104,6 +110,7 @@ class AegisRemoteIntrusionService:
         *,
         unexpected_claim: bool = False,
         user_confirmed_attacker: bool = False,
+        cancel_check=None,
     ) -> RemoteIntrusionAssessment:
         snapshot = self.snapshot_reader()
         baseline = self.aegis_store.load_baseline()
@@ -119,7 +126,8 @@ class AegisRemoteIntrusionService:
             detection_errors = ("provider_detections_unavailable",)
 
         sessions, session_errors = enumerate_remote_desktop_sessions()
-        logons, logon_errors = read_recent_remote_logons()
+        logons, logon_errors = (self.event_collector.recent_remote_logons(cancel_check=cancel_check)
+            if self.event_collector is not None else (self.logon_reader or read_recent_remote_logons)())
         tools = identify_remote_tools(snapshot)
         support_match = self.support.best_match(sessions=sessions, tools=tools)
 
@@ -347,7 +355,11 @@ class AegisRemoteIntrusionService:
             recommended_action=recommended,
             user_confirmed_attacker=effective_user_confirmation,
         )
+        if cancel_check and cancel_check():
+            return assessment
         self.store.store_assessment(assessment)
+        if self.investigations is not None:
+            self.investigations.record_remote(assessment)
         return assessment
 
 

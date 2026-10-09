@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
+    QFileDialog,
+    QInputDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -19,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from aida.navigation.service import EvidenceNavigationService
+from aida.frontend.review_palette import apply_review_palette
 from aida.security.stand_down import StandDownRecord, StandDownService
 from aida.security.threat_analysis import (
     ThreatAnalysisRecord,
@@ -38,13 +42,18 @@ class ThreatCenterDialog(QDialog):
         stand_down: StandDownService,
         navigation: EvidenceNavigationService,
         parent: QWidget | None = None,
+        *, task_manager=None,
     ) -> None:
         super().__init__(parent)
+        apply_review_palette(self)
         self.analysis = analysis
         self.stand_down = stand_down
         self.navigation = navigation
         self._analyses: dict[str, ThreatAnalysisRecord] = {}
         self._stand_downs: dict[str, StandDownRecord] = {}
+        self.investigations = None
+        self.task_manager = task_manager
+        self._disposed = False
 
         self.setWindowTitle("AIDA Threat Center")
         self.resize(1080, 680)
@@ -65,6 +74,12 @@ class ThreatCenterDialog(QDialog):
             self._build_tab(self.stand_down_list, self.stand_down_detail),
             "Stand Down",
         )
+        self.case_list, self.case_detail = QListWidget(), QTextEdit()
+        self.case_detail.setReadOnly(True)
+        self.alert_list, self.alert_detail = QListWidget(), QTextEdit()
+        self.alert_detail.setReadOnly(True)
+        self.tabs.addTab(self._build_investigation_tab(), "Investigations")
+        self.tabs.addTab(self._build_alert_tab(), "Security Alerts")
 
         self.refresh_button = QPushButton("Refresh")
         self.open_folder_button = QPushButton("Open Folder")
@@ -136,6 +151,179 @@ class ThreatCenterDialog(QDialog):
         self.tabs.currentChanged.connect(lambda _index: self._update_actions())
         self.refresh()
 
+    def set_investigations(self, service) -> None:
+        self.investigations = service
+
+    def dispose(self) -> None:
+        self._disposed = True
+
+    def _case_task(self, name, reader, callback) -> None:
+        def result(value):
+            if not self._disposed:
+                callback(value)
+        def failed(_error):
+            if not self._disposed:
+                self.case_detail.setPlainText("The case operation is unavailable. Existing evidence was retained; refresh and retry.")
+        if self._disposed:
+            return
+        if self.task_manager is None:
+            try:
+                result(reader())
+            except Exception as exc:
+                failed(exc)
+        elif not self.task_manager.run_task("THREAT_CENTER_" + name, reader, on_result=result, on_error=failed):
+            self.case_detail.setPlainText("This case operation is already running. Wait for its result before retrying.")
+
+    def _build_investigation_tab(self) -> QWidget:
+        widget, layout = QWidget(), QVBoxLayout()
+        widget.setLayout(layout)
+        layout.addWidget(self._build_tab(self.case_list, self.case_detail))
+        actions = QHBoxLayout()
+        for label, callback in (("Response Workflow", self._prepare_case_response),
+                                ("Resume Checks", self._resume_case),
+                                ("Review Conclusion", self._conclude_case),
+                                ("Export Case", self._export_case),
+                                ("Import Case", self._import_case)):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            actions.addWidget(button)
+        actions.addStretch()
+        layout.addLayout(actions)
+        self.case_list.currentItemChanged.connect(self._case_changed)
+        return widget
+
+    def _build_alert_tab(self) -> QWidget:
+        widget, layout = QWidget(), QVBoxLayout()
+        widget.setLayout(layout)
+        layout.addWidget(self._build_tab(self.alert_list, self.alert_detail))
+        actions = QHBoxLayout()
+        for label, callback in (("Inspect Case", self._inspect_alert), ("Acknowledge", self._acknowledge_alert)):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            actions.addWidget(button)
+        actions.addStretch()
+        layout.addLayout(actions)
+        self.alert_list.currentItemChanged.connect(self._alert_changed)
+        return widget
+
+    def _selected_case_id(self) -> str:
+        item = self.case_list.currentItem()
+        return str(item.data(Qt.ItemDataRole.UserRole)) if item else ""
+
+    def _case_changed(self, *_args) -> None:
+        if self.investigations is None or not self._selected_case_id():
+            self.case_detail.clear()
+            return
+        from aida.frontend.commands.investigations import render_case
+        case_id = self._selected_case_id()
+        self._case_task("READ_" + case_id, lambda: render_case(self.investigations, case_id),
+            lambda text: self.case_detail.setPlainText(text) if self._selected_case_id() == case_id else None)
+
+    def _alert_changed(self, *_args) -> None:
+        item = self.alert_list.currentItem()
+        alert = item.data(Qt.ItemDataRole.UserRole) if item else None
+        self.alert_detail.setPlainText("" if alert is None else
+            f"{alert.severity.upper()}\n{alert.message}\nObserved: {alert.created_at}\nCase: {alert.case_id}\n"
+            f"Acknowledged: {alert.acknowledged_at or 'no'}\nEpisode ended: {alert.ended_at or 'no'}\n"
+            "Acknowledgement records that you have seen an alert. It does not resolve its case.")
+
+    def _prepare_case_response(self) -> None:
+        case_id = self._selected_case_id()
+        if case_id:
+            self.command_requested.emit(f"prepare investigation response {case_id}")
+            self.hide()
+
+    def _resume_case(self) -> None:
+        case_id = self._selected_case_id()
+        if case_id:
+            self.command_requested.emit(f"resume investigation {case_id}")
+            self.hide()
+
+    def _conclude_case(self) -> None:
+        case_id = self._selected_case_id()
+        if not case_id or self.investigations is None:
+            return
+        summary, accepted = QInputDialog.getText(self, "Review investigation conclusion", "Your conclusion (does not establish a verified security or causal result):")
+        if accepted and summary.strip() and len(summary) <= 1000:
+            self.command_requested.emit(f"conclude investigation {case_id}: {summary.strip()}")
+            self.hide()
+
+    def _inspect_alert(self) -> None:
+        item = self.alert_list.currentItem()
+        if item:
+            alert = item.data(Qt.ItemDataRole.UserRole)
+            self.command_requested.emit(f"show investigation {alert.case_id}")
+            self.hide()
+
+    def _acknowledge_alert(self) -> None:
+        item = self.alert_list.currentItem()
+        if item and self.investigations:
+            alert_id = item.data(Qt.ItemDataRole.UserRole).alert_id
+            self._case_task("ACKNOWLEDGE", lambda: self.investigations.acknowledge_alert(alert_id), lambda _: self.refresh())
+
+    def _export_case(self) -> None:
+        if not self.investigations or not self._selected_case_id():
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export redacted case", "aida-case.json", "JSON (*.json)")
+        if not path:
+            return
+        case_id = self._selected_case_id()
+        self._case_task("EXPORT", lambda: self.investigations.export_case(case_id, path, redact=True),
+            lambda _: QMessageBox.information(self, "Case exported", "A redacted reference-only case was saved locally. Review it before sharing."))
+
+    def _import_case(self) -> None:
+        if self.investigations is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Review case bundle", "", "JSON (*.json)")
+        if not path:
+            return
+        def capture():
+            from aida.investigations.service import validate_import
+            with Path(path).open("rb") as source:
+                captured = source.read(1024 * 1024 + 1)
+            if len(captured) > 1024 * 1024:
+                raise ValueError("Case exceeds one MiB")
+            return validate_import(captured.decode("utf-8"))
+        def review(payload):
+            preview = QMessageBox(self)
+            preview.setWindowTitle("Review imported reference")
+            preview.setTextFormat(Qt.TextFormat.PlainText)
+            preview.setText(f"{payload['title']}\nSource: {payload['source']['platform']}\n"
+                            f"Evidence entries: {len(payload['evidence'])}\nImport as reference-only evidence?")
+            preview.setDetailedText(json.dumps(payload, indent=2, ensure_ascii=False))
+            preview.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            preview.setDefaultButton(QMessageBox.StandardButton.No)
+            if preview.exec() == QMessageBox.StandardButton.Yes:
+                self._case_task("IMPORT", lambda: self.investigations.import_case(payload, reviewed=True), lambda _: self.refresh())
+        self._case_task("IMPORT_PREVIEW", capture, review)
+
+    def _refresh_investigations(self) -> None:
+        if self.investigations is None:
+            self.case_detail.setPlainText("Open the Threat Center to review local investigation cases.")
+            return
+        self._case_task("REFRESH", lambda: (self.investigations.list_cases(), self.investigations.list_alerts(include_acknowledged=True)),
+                        self._apply_investigations)
+
+    def _apply_investigations(self, records) -> None:
+        cases, alerts = records
+        selected = self._selected_case_id()
+        self.case_list.clear()
+        for case in cases:
+            item = QListWidgetItem(f"{case.title}\n{case.status} · {case.case_id}")
+            item.setData(Qt.ItemDataRole.UserRole, case.case_id)
+            self.case_list.addItem(item)
+            if case.case_id == selected:
+                self.case_list.setCurrentItem(item)
+        if self.case_list.count() and self.case_list.currentItem() is None:
+            self.case_list.setCurrentRow(0)
+        self.alert_list.clear()
+        for alert in alerts:
+            item = QListWidgetItem(f"{alert.severity.upper()} · {alert.message}\n{alert.created_at}")
+            item.setData(Qt.ItemDataRole.UserRole, alert)
+            self.alert_list.addItem(item)
+        if self.alert_list.count():
+            self.alert_list.setCurrentRow(0)
+
     def _build_tab(self, listing: QListWidget, detail: QTextEdit) -> QWidget:
         widget = QWidget()
         layout = QHBoxLayout(widget)
@@ -146,6 +334,7 @@ class ThreatCenterDialog(QDialog):
 
     @Slot()
     def refresh(self) -> None:
+        self._refresh_investigations()
         selected_analysis = self._selected_analysis_id()
         selected_stand_down = self._selected_exception_id()
         self._analyses = {
@@ -248,6 +437,8 @@ class ThreatCenterDialog(QDialog):
         self.hide()
 
     def _selected_path(self) -> Path | None:
+        if self.tabs.currentIndex() >= 2:
+            return None
         if self.tabs.currentIndex() == 1:
             record = self._stand_downs.get(self._selected_exception_id())
             return None if record is None else record.path

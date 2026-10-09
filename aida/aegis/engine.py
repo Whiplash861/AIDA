@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import threading
 import time
 from datetime import datetime
@@ -39,6 +41,7 @@ from aida.aegis.store import AegisStore, case_revision, snapshot_revision, valid
 from aida.memory.models import ProcessOutcome
 from aida.memory.service import MemoryService
 from aida.security.models import ProviderDetection
+from aida.investigations import InvestigationService, InvestigationStore
 from aida.security.threat_analysis import (
     ThreatAnalysisRecord,
     ThreatAnalysisService,
@@ -71,6 +74,8 @@ class AegisEngine:
         observation_interval_seconds: int = 900,
         initial_observation_delay_seconds: float = 5.0,
         enabled: bool = True,
+        investigations: InvestigationService | None = None,
+        event_collector=None,
     ) -> None:
         self.store = store
         self.memory = memory
@@ -86,6 +91,8 @@ class AegisEngine:
             0.0, float(initial_observation_delay_seconds)
         )
         self.enabled = bool(enabled)
+        self.investigations = investigations or InvestigationService(InvestigationStore(store.path.with_name("investigations.db")))
+        self.event_collector = event_collector
 
         self._graph = EvidenceGraphBuilder()
         self._lock = threading.RLock()
@@ -185,7 +192,11 @@ class AegisEngine:
             return
         started = time.monotonic()
         try:
+            event_gaps = self._event_coverage_gaps(cancel_check=self._stop_event.is_set)
+            if self._stop_event.is_set():
+                return
             snapshot = self.sensor.capture()
+            snapshot = replace(snapshot, sensor_errors=tuple(dict.fromkeys(snapshot.sensor_errors + event_gaps)))
             if self._stop_event.is_set():
                 return
             detections = self._read_detections()
@@ -355,7 +366,9 @@ class AegisEngine:
             },
         )
         try:
+            event_gaps = self._event_coverage_gaps()
             snapshot = self.sensor.capture()
+            snapshot = replace(snapshot, sensor_errors=tuple(dict.fromkeys(snapshot.sensor_errors + event_gaps)))
             detections = self._read_detections()
             baseline = self.store.load_baseline()
             delta = compare_snapshots(baseline, snapshot)
@@ -441,6 +454,9 @@ class AegisEngine:
                 analysis_candidate_count=len(candidates),
             )
             case = self.store.store_case(case)
+            self.investigations.record_aegis_case(case)
+            for analysis in analyses:
+                self.investigations.record_analysis(case.case_id, analysis)
 
             baseline_established = False
             baseline_candidate_id = None
@@ -603,8 +619,16 @@ class AegisEngine:
         if (reviewed_snapshot is None or compare_snapshots(reviewed_snapshot, current).meaningful_change_count
                 or not self._can_establish_initial_baseline(baseline=None, snapshot=current, detections=self._read_detections(), risk_overall=0)):
             raise RuntimeError("Current evidence differs or is incomplete; case resolution was refused.")
-        return self.store.resolve_case(case_id, evidence_case_id=evidence_case_id,
+        resolved = self.store.resolve_case(case_id, evidence_case_id=evidence_case_id,
             expected_case_revision=expected_scope["case_revision"], expected_evidence_revision=expected_scope["evidence_revision"])
+        try:
+            self.investigations.record_verification(case_id, self.store.get_case(evidence_case_id))
+            self.investigations.record_aegis_case(resolved)
+        except Exception:
+            # The reviewed native resolution already committed. Reconciliation
+            # can recover its snapshot; never report that authority as unused.
+            self._degraded_reasons = tuple(dict.fromkeys(self._degraded_reasons + ("investigation_journal_unavailable",)))
+        return resolved
 
     def _analyze_candidates(
         self,
@@ -628,6 +652,13 @@ class AegisEngine:
 
     def _read_detections(self) -> tuple[ProviderDetection, ...]:
         return tuple(self.detection_reader())
+
+    def _event_coverage_gaps(self, *, cancel_check=None) -> tuple[str, ...]:
+        if self.event_collector is None:
+            return ()
+        result = self.event_collector.poll(cancel_check=cancel_check)
+        return tuple(f"event_evidence:{channel}:{gap}" for channel, gaps in result.items()
+            for gap in gaps if gap != "initial_backfill_window_limited")
 
     @staticmethod
     def _can_establish_initial_baseline(

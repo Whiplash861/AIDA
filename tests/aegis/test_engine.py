@@ -90,6 +90,17 @@ def test_clean_unverified_assessment_does_not_establish_baseline(tmp_path) -> No
     assert engine.store.open_case_count() == 0
 
 
+def test_event_coverage_gaps_prevent_trusted_background_learning(tmp_path):
+    engine = _engine(tmp_path)
+    engine.store.store_baseline(_clean_snapshot())
+    engine.event_collector = SimpleNamespace(poll=lambda **kwargs: {"Security": ("channel_access_unavailable",)})
+    eligible = []
+    engine.learning.learn_if_safe = lambda *args, **kwargs: eligible.append(kwargs["eligible"]) or False
+    engine.observe_once()
+    assert eligible == [False]
+    assert "event_evidence:Security:channel_access_unavailable" in engine._degraded_reasons
+
+
 def test_active_provider_detection_creates_confirmed_case(tmp_path) -> None:
     detection = ProviderDetection(
         detection_id="det-1",
@@ -176,6 +187,9 @@ def test_case_resolution_uses_frozen_revisions_and_current_provider_evidence(tmp
     engine.detection_reader = lambda: ()
     resolved = engine.resolve_case(opened.case_id, evidence_case_id=verified.case_id, user_authorized=True, review_scope=scope)
     assert resolved.status is AegisCaseStatus.RESOLVED
+    mirrored = engine.investigations.get_case(opened.case_id)
+    assert mirrored.status == "resolved"
+    assert any(row.kind == "verification" and row.status == "verified" for row in engine.investigations.timeline(opened.case_id))
     with pytest.raises(ValueError, match="Only an open"):
         engine.review_authorization_scope("resolve", {"case_id": opened.case_id, "verification_id": verified.case_id})
 
@@ -188,6 +202,39 @@ def test_changed_case_revision_cannot_inherit_prepared_resolution(tmp_path):
     with pytest.raises((ValueError, RuntimeError)):
         engine.resolve_case(opened.case_id, evidence_case_id=verified.case_id, user_authorized=True, review_scope=scope)
     assert engine.store.get_case(opened.case_id).status is AegisCaseStatus.THREAT_CONFIRMED
+
+
+def test_journal_updates_do_not_mask_newer_native_case_revision(tmp_path):
+    engine = _engine(tmp_path)
+    opened, _ = _open_then_verified(engine)
+    newer = replace(opened, updated_at=utc_now(), evidence_captured_at=utc_now(), summary="New native assessment")
+    engine.investigations.add_evidence(opened.case_id, "note", "Later journal insertion", "note:1")
+    mirrored = engine.investigations.record_aegis_case(newer)
+    assert mirrored.summary == "New native assessment"
+    assert engine.investigations.record_aegis_case(opened).summary == "New native assessment"
+
+
+def test_native_resolution_remains_successful_if_secondary_journal_is_unavailable(tmp_path, monkeypatch):
+    engine = _engine(tmp_path)
+    opened, verified = _open_then_verified(engine)
+    scope = engine.review_authorization_scope("resolve", {"case_id": opened.case_id, "verification_id": verified.case_id})
+    monkeypatch.setattr(engine.investigations, "record_verification", lambda *a: (_ for _ in ()).throw(RuntimeError("journal full")))
+    resolved = engine.resolve_case(opened.case_id, evidence_case_id=verified.case_id, user_authorized=True, review_scope=scope)
+    assert resolved.status is AegisCaseStatus.RESOLVED
+    engine.investigations.sync_aegis_store(engine.store)
+    assert engine.investigations.get_case(opened.case_id).status == "resolved"
+    assert "investigation_journal_unavailable" in engine._degraded_reasons
+
+
+def test_completed_resolution_retains_qualified_verification_in_response_workflow(tmp_path):
+    engine = _engine(tmp_path)
+    opened, verified = _open_then_verified(engine)
+    plan = engine.investigations.prepare_response(opened.case_id)
+    scope = engine.review_authorization_scope("resolve", {"case_id": opened.case_id, "verification_id": verified.case_id})
+    engine.resolve_case(opened.case_id, evidence_case_id=verified.case_id, user_authorized=True, review_scope=scope)
+    loaded = engine.investigations.get_plan(plan.plan_id)
+    assert loaded.state == "completed"
+    assert loaded.steps[2].state == "completed"
 
 
 def test_stale_concurrent_assessment_and_resolved_case_do_not_regress(tmp_path):

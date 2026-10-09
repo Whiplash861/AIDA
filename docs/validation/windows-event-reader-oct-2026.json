@@ -1,0 +1,35 @@
+{
+  "observed_date": "2026-10-09",
+  "qualification": "event-reader-only",
+  "native_mutations": false,
+  "persistent_writes": false,
+  "redacted": true,
+  "channels": [
+    {
+      "channel": "Security",
+      "first_count": 0,
+      "second_count": 0,
+      "first_event_ids": [],
+      "second_event_ids": [],
+      "first_gaps": ["channel_access_unavailable"],
+      "second_gaps": ["channel_access_unavailable"],
+      "checkpoint_available": false,
+      "checkpoint_preserved": false
+    },
+    {
+      "channel": "Microsoft-Windows-Windows Defender/Operational",
+      "first_count": 7,
+      "second_count": 0,
+      "first_event_ids": [1000, 1002, 5007],
+      "second_event_ids": [],
+      "first_gaps": ["initial_backfill_window_limited"],
+      "second_gaps": [],
+      "checkpoint_available": true,
+      "checkpoint_preserved": true
+    }
+  ],
+  "limitations": [
+    "Counts and query continuity do not validate event delivery latency or audit-policy coverage.",
+    "No scan, remediation, elevation, policy change, log clear or session action was attempted."
+  ]
+}

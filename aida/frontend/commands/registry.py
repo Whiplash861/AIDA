@@ -7,12 +7,14 @@ from dataclasses import replace
 
 from aida.applications.monitor import ApplicationHealthMonitor
 from aida.applications.models import RepairAction
-from aida.aegis.bootstrap import build_aegis_engine
+from aida.aegis.bootstrap import build_aegis_engine, build_investigation_service
 from aida.aegis.scan_modes import AegisScanStrategy
 from aida.frontend.commands.aegis import AegisSecurityScanExecutor, AegisSecurityStatusExecutor
 from aida.frontend.commands.aegis_review import AegisReviewExecutor
 from aida.frontend.commands.remote_security import AegisRemoteSecurityExecutor, RemoteSecurityOperation
 from aida.frontend.commands.technomancer import TechnomancerCommandExecutor
+from aida.frontend.commands.investigations import InvestigationCommandExecutor
+from aida.engines.investigation_runner import InvestigationRunner
 from aida.technomancer.engine import TechnomancerEngine
 from aida.applications.repair import ApplicationRepairPlanner
 from aida.assistance.planner import GuidedResponsePlanner
@@ -88,6 +90,8 @@ class CommandRegistry:
         self.config = config
         self._aegis = aegis_engine
         self._technomancer = technomancer_engine
+        self._investigation_runner = None
+        self._investigations = None
         if memory_service is None:
             database = MemoryDatabase(config.memory_db_path)
             self.memory = MemoryService(database)
@@ -208,18 +212,21 @@ class CommandRegistry:
                 str(command.slots.get("application_name") or ""),
                 RepairAction.APP_REPAIR,
                 memory=self.memory,
+                monitor=self.application_monitor,
             ),
             CommandType.APPLICATION_CACHE_PLAN: lambda command: ApplicationRecoveryPlanExecutor(
                 self.application_repair_planner,
                 str(command.slots.get("application_name") or ""),
                 RepairAction.CACHE_CLEAR,
                 memory=self.memory,
+                monitor=self.application_monitor,
             ),
             CommandType.APPLICATION_RESTART_PLAN: lambda command: ApplicationRecoveryPlanExecutor(
                 self.application_repair_planner,
                 str(command.slots.get("application_name") or ""),
                 RepairAction.GRACEFUL_RESTART,
                 memory=self.memory,
+                monitor=self.application_monitor,
             ),
             CommandType.THREAT_ANALYZE: lambda command: self._threat_assistance(
                 ThreatAssistanceOperation.ANALYZE, command
@@ -265,8 +272,16 @@ class CommandRegistry:
         with self._engine_lock:
             if self._aegis is None:
                 self._aegis = build_aegis_engine(self.config, memory=self.memory, threat_analysis=self.threat_analysis,
-                                               detection_reader=self._detection_reader)
+                                               detection_reader=self._detection_reader, investigations=self.investigations)
             return self._aegis
+
+    @property
+    def investigations(self):
+        with self._engine_lock:
+            if self._investigations is None:
+                self._investigations = (getattr(self._aegis, "investigations", None)
+                    or build_investigation_service(self.config, memory=self.memory))
+            return self._investigations
 
     @property
     def technomancer(self):
@@ -277,6 +292,16 @@ class CommandRegistry:
 
     def _register_engines(self) -> None:
         self._engine_lock = RLock()
+        for command_type, operation in {
+            CommandType.INVESTIGATION_START: "start", CommandType.INVESTIGATION_RESUME: "resume",
+            CommandType.INVESTIGATION_SHOW: "show", CommandType.INVESTIGATION_LIST: "list",
+            CommandType.INVESTIGATION_RESPONSE: "response", CommandType.INVESTIGATION_PLAN: "plan",
+            CommandType.INVESTIGATION_MEMORY: "memory", CommandType.SECURITY_ALERTS: "alerts",
+            CommandType.SECURITY_ALERT_ACKNOWLEDGE: "acknowledge",
+            CommandType.INVESTIGATION_CONCLUDE: "conclude",
+        }.items():
+            self._factories[command_type] = lambda command, operation=operation: InvestigationCommandExecutor(
+                self, operation, command.slots, authorized=command.user_initiated and not command.requires_confirmation)
         for command_type, operation in {
             CommandType.AEGIS_BASELINE_REVIEW: "baseline", CommandType.AEGIS_BASELINE_ACCEPT: "accept",
             CommandType.AEGIS_CASES: "cases", CommandType.AEGIS_CASE_RESOLVE: "resolve",
@@ -314,6 +339,16 @@ class CommandRegistry:
             self._factories[command_type] = lambda command, mode=mode: TechnomancerCommandExecutor(
                 self.technomancer, mode, autonomy_enabled=lambda: self.autonomy.settings.enabled and not self.autonomy.settings.kill_switch_engaged,
             )
+
+    @property
+    def investigation_runner(self):
+        with self._engine_lock:
+            if self._investigation_runner is None:
+                self._investigation_runner = InvestigationRunner(self.investigations, self.memory, {
+                    "aegis": lambda: AegisSecurityStatusExecutor(self.aegis).execute().transcript_text,
+                    "technomancer": lambda: self.technomancer.health_report(),
+                })
+            return self._investigation_runner
 
     def _security_scan(
         self, mode: SecurityScanMode, command: RoutedCommand
@@ -368,6 +403,7 @@ class CommandRegistry:
             detection_reader=self._detection_reader,
             target_path=command.target_path,
             original_text=command.original_text,
+            investigations=lambda: self.investigations,
         )
 
     def resolve(self, command: RoutedCommand) -> CommandExecutor | None:
@@ -375,6 +411,11 @@ class CommandRegistry:
         return None if factory is None else factory(command)
 
     def prepare_authorization(self, command: RoutedCommand) -> RoutedCommand:
+        if command.command_type is CommandType.INVESTIGATION_CONCLUDE:
+            case = self.investigations.get_case(str(command.slots["case_id"]))
+            if case is None or case.authority != "local-evidence" or case.source_kind not in {"aida.investigation", "manual"}:
+                raise ValueError("Only a local general investigation can receive this reviewed conclusion")
+            return replace(command, slots={**command.slots, "expected_revision": case.revision})
         operation = {
             CommandType.AEGIS_BASELINE_ACCEPT: "accept", CommandType.AEGIS_CASE_RESOLVE: "resolve",
         }.get(command.command_type)

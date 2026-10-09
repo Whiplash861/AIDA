@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from aida.aegis.bootstrap import build_aegis_engine
+from aida.aegis.bootstrap import build_aegis_engine, build_investigation_service
 from aida.memory.database import MemoryDatabase
 from aida.memory.service import MemoryService
 from aida.security.models import ProviderDetection, SecuritySeverity
@@ -42,3 +42,14 @@ def test_runtime_reader_excludes_provider_confirmed_resolved_history(
     filtered = tuple(engine.detection_reader())
 
     assert {item.detection_id for item in filtered} == {"active", "ambiguous"}
+
+
+def test_persistent_inbox_opens_without_constructing_or_reading_sensors(tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDA_AEGIS_DATA_DIR", str(tmp_path / "aegis"))
+    monkeypatch.setattr("aida.aegis.bootstrap.AegisSystemSensor", lambda **kwargs: (_ for _ in ()).throw(AssertionError("No sensor expected")))
+    memory = MemoryService(MemoryDatabase(tmp_path / "memory" / "aida.db"))
+    config = SimpleNamespace(memory_db_path=str(memory.database.path))
+    first = build_investigation_service(config, memory=memory)
+    case = first.create_case("Persistent review")
+    restarted = build_investigation_service(config, memory=memory)
+    assert restarted.get_case(case.case_id).title == "Persistent review"

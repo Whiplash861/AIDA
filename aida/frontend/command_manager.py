@@ -93,6 +93,9 @@ class CommandManager(QObject):
         return self._active_executor is not None
 
     def can_execute_during_active(self, command: RoutedCommand) -> bool:
+        if command.command_type is CommandType.INVESTIGATION_PAUSE:
+            from aida.frontend.commands.investigations import InvestigationCommandExecutor
+            return isinstance(self._active_executor, InvestigationCommandExecutor)
         try:
             executor = self._registry.resolve(command)
         except Exception as exc:
@@ -105,6 +108,15 @@ class CommandManager(QObject):
         )
 
     def execute(self, command: RoutedCommand) -> bool:
+        if command.command_type is CommandType.INVESTIGATION_PAUSE:
+            from aida.frontend.commands.investigations import InvestigationCommandExecutor
+            if isinstance(self._active_executor, InvestigationCommandExecutor):
+                self._active_executor.shutdown()
+                text = "The investigation will pause after the current read-only check returns. Its recorded evidence will remain available."
+            else:
+                text = "No general investigation is currently running."
+            self._history.add_system(text, include_in_context=False)
+            return True
         if command.command_type is CommandType.COMMAND_CANCEL:
             pending = self._confirmations.pending_for_action("frontend.execute")
             if pending is not None:

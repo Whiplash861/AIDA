@@ -83,11 +83,13 @@ class ApplicationRecoveryPlanExecutor(CommandExecutor):
         application_name: str,
         action: RepairAction,
         memory: MemoryService | None = None,
+        monitor: ApplicationHealthMonitor | None = None,
     ) -> None:
         self.planner = planner
         self.application_name = application_name
         self.action = action
         self.memory = memory
+        self.monitor = monitor
 
     @property
     def task_name(self) -> str:
@@ -117,6 +119,8 @@ class ApplicationRecoveryPlanExecutor(CommandExecutor):
             evidence=("Direct user request for a recovery plan.",),
             recommendations=(),
         )
+        if self.monitor is not None:
+            assessment = self.monitor.inspect(self.application_name)
         plan = self.planner.propose(
             assessment,
             requested_action=self.action,
@@ -139,7 +143,7 @@ class ApplicationRecoveryPlanExecutor(CommandExecutor):
                 promote=True,
             )
         return CommandResult(
-            transcript_text=render_repair_plan(plan),
+            transcript_text=render_application_health(assessment) + "\n\n" + render_repair_plan(plan),
             speech_text=(
                 f"The {plan.action.value.replace('_', ' ')} plan is ready. "
                 "No repair action was executed."

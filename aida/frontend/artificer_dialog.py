@@ -22,6 +22,7 @@ from aida.artificer.engine import ArtificerEngine
 from aida.artificer.models import ArtificerFinding, ArtificerSnapshot, UpgradeProposal
 from aida.artificer.source_review import render_annotation, MAX_REPLACEMENT_BYTES
 from aida.technomancer.self_resources import render_self_resources
+from aida.frontend.review_palette import apply_review_palette
 
 
 class ArtificerCenterDialog(QDialog):
@@ -37,6 +38,7 @@ class ArtificerCenterDialog(QDialog):
         *, task_manager=None,
     ) -> None:
         super().__init__(parent)
+        apply_review_palette(self)
         self.engine = engine
         self.task_manager = task_manager
         self._source_busy = False

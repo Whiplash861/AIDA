@@ -7,6 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QPalette
 
 from aida.artificer.models import ArtificerSnapshot, SourceReviewAnnotation
 from aida.artificer.source_review import render_annotation
@@ -79,7 +80,10 @@ def test_source_actions_wait_for_background_identity_check(surface):
     assert "PROPOSED ADDITION OR CHANGE" in text
     assert "RATIONALE" in text
     assert "EXPECTED OUTCOMES (not yet verified)" in text
-    assert dialog.styleSheet() == ""  # Inherit the existing application theme.
+    dialog.source_review_text.ensurePolished()
+    palette = dialog.source_review_text.palette()
+    assert palette.color(QPalette.ColorRole.Base).lightness() < 80
+    assert palette.color(QPalette.ColorRole.Text).lightness() > 180
 
 
 def test_stale_source_can_be_exported_but_not_staged_or_proposed(surface):

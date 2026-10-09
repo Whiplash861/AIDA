@@ -35,6 +35,7 @@ from aida.frontend.task_center_dialog import TaskCenterDialog
 from aida.frontend.task_manager import TaskManager
 from aida.frontend.theme import apply_theme
 from aida.frontend.threat_center_dialog import ThreatCenterDialog
+from aida.frontend.security_alert_bridge import SecurityAlertBridge
 from aida.frontend.window import AIDAWindow
 from aida.memory.database import MemoryDatabase
 from aida.memory.models import ProcessOutcome
@@ -174,6 +175,7 @@ def main() -> int:
     task_center_dialog = TaskCenterDialog(
         assistance_task_store,
         parent=window,
+        task_manager=task_manager,
         confirmations=confirmation_service,
     )
     artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window, task_manager=task_manager)
@@ -279,7 +281,15 @@ def main() -> int:
         bug_report_dialog.activateWindow()
 
     def show_threat_center() -> None:
-        threat_center_dialog.refresh()
+        def ready(service):
+            if threat_center_dialog._disposed:
+                return
+            threat_center_dialog.set_investigations(service)
+            threat_center_dialog.refresh()
+        task_manager.run_task("THREAT_CENTER_OPEN", lambda: command_registry.investigations,
+            on_result=ready,
+            on_error=lambda _: threat_center_dialog.case_detail.setPlainText("The local case journal is unavailable; no evidence was reset.")
+                if not threat_center_dialog._disposed else None)
         threat_center_dialog.show()
         threat_center_dialog.raise_()
         threat_center_dialog.activateWindow()
@@ -339,6 +349,10 @@ def main() -> int:
         memory_service=memory_service,
     )
     observation_runtime = ObservationRuntime(lambda: command_registry.aegis)
+    alert_bridge = SecurityAlertBridge(
+        lambda: command_registry.investigations, history, parent=app,
+    )
+    alert_bridge.start()
     autonomy_controller.subscribe(observation_runtime.apply)
     engine_lifecycle_timer = QTimer(app)
     engine_lifecycle_timer.setInterval(1000)
@@ -532,6 +546,8 @@ def main() -> int:
         task_manager.run_task("engine_initialization", lambda: observation_runtime.apply(autonomy_controller.settings))
         return app.exec()
     finally:
+        alert_bridge.close()
+        threat_center_dialog.dispose()
         recovery_closed[0] = True
         command_manager.command_finished.disconnect(retry_recovery_when_idle)
         engine_lifecycle_timer.stop()

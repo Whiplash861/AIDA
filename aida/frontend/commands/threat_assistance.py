@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import getpass
+import logging
+import hashlib
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Iterable
@@ -71,6 +73,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
         detection_reader: DetectionReader,
         target_path: str | None = None,
         original_text: str = "",
+        investigations: Callable | None = None,
     ) -> None:
         self.operation = operation
         self.analysis = analysis
@@ -85,6 +88,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
         self.detection_reader = detection_reader
         self.target_path = target_path
         self.original_text = original_text
+        self.investigations = investigations
 
     @property
     def task_name(self) -> str:
@@ -197,8 +201,9 @@ class ThreatAssistanceExecutor(CommandExecutor):
                 ),
                 metadata_update={"analysis_id": record.analysis_id},
             )
+            case_id = self._record_analysis(record)
             return CommandResult(
-                transcript_text=render_threat_analysis(record),
+                transcript_text=render_threat_analysis(record) + (f"\nInvestigation: {case_id}" if case_id else ""),
                 speech_text=(
                     "Threat analysis complete. Review the local evidence and confidence limits."
                 ),
@@ -352,6 +357,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
             target,
             expected_sha256=analysis.sha256,
         )
+        case_id = self._record_analysis(analysis)
         task = self.tasks.create(
             kind=AssistanceTaskKind.DEFENDER_REMEDIATION,
             title=f"Defender remediation for {target.name}",
@@ -382,6 +388,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
                 "target_path": str(candidate.path),
                 "sha256": candidate.sha256,
                 "active_threat_count": candidate.active_threat_count,
+                "investigation_case_id": case_id,
             },
             requested_by=_user(),
             required_phrase="confirm defender remediation",
@@ -452,6 +459,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
             self.tasks.transition(task_id,
                 AssistanceTaskState.CANCELLED if self.tasks.cancellation_requested(task_id) else AssistanceTaskState.FAILED,
                 error_detail=str(exc))
+            self._record_investigation_action(scope, task_id, "failed", "The guarded response failed before a verified result was available.")
             raise
         final_state = (
             AssistanceTaskState.COMPLETED
@@ -470,6 +478,8 @@ class ThreatAssistanceExecutor(CommandExecutor):
                 "exit_code": result.exit_code,
             },
         )
+        self._record_investigation_action(scope, task_id, "succeeded" if result.provider_verified else "failed",
+                                          result.detail, provider_verified=result.provider_verified)
         event_type = (
             "THREAT_NEUTRALIZED"
             if result.provider_verified
@@ -576,6 +586,37 @@ class ThreatAssistanceExecutor(CommandExecutor):
             ]
         )
         return CommandResult("\n".join(lines), "Task Center summary ready.")
+
+    def _record_analysis(self, analysis) -> str:
+        if self.investigations is None:
+            return ""
+        try:
+            service = self.investigations()
+            reference = hashlib.sha256((str(analysis.path).casefold() + ":" + (analysis.sha256 or analysis.analysis_id)).encode()).hexdigest()
+            case = service.case_for_source("file_analysis", analysis.analysis_id) or service.case_for_source("file", reference)
+            if case is None:
+                case = service.create_case(f"File investigation: {analysis.path.name}",
+                    objective="Review the file evidence and verify any response.", source_kind="file", source_reference=reference)
+            entry = service.record_analysis(case.case_id, analysis)
+            self.memory.remember_investigation(case_id=case.case_id, title=case.title,
+                summary=analysis.summary, entity_key=reference, observation_id=entry.event_id)
+            return case.case_id
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Investigation linking unavailable: %s", type(exc).__name__)
+            return ""
+
+    def _record_investigation_action(self, scope, task_id, outcome, detail, *, provider_verified=False):
+        case_id = scope.get("investigation_case_id")
+        if not case_id or self.investigations is None:
+            return
+        try:
+            self.investigations().record_action(case_id, "defender_remediation", outcome,
+                source_reference=task_id, evidence_refs=(str(scope.get("analysis_id", "")),),
+                detail=detail[:4000], provider_verified=provider_verified)
+            self.memory.remember_investigation(case_id=case_id, title="Guarded Defender response",
+                summary=detail, action_id=task_id, outcome=outcome)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Response history unavailable: %s", type(exc).__name__)
 
     def _required_target(self) -> Path:
         if not self.target_path:
