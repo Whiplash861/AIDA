@@ -85,10 +85,10 @@ Python case adapters live in `aida/investigations/service.py`.
 
 ## Verification and remaining acceptance
 
-Behavior checks: `node --test mobile/tests/investigation.test.cjs mobile/tests/runtime.test.cjs`.
+Behavior checks: `node --test mobile/tests/investigation.test.cjs mobile/tests/runtime.test.cjs mobile/tests/report-language.test.cjs`.
 Perception checks: `.venv/Scripts/python.exe -B -m pytest -q -p no:cacheprovider tests/test_perception_foundation.py tests/test_perception_indicators.py tests/frontend/test_multimodal_hardening.py`.
 
-This implementation passed 39 mobile behavior tests and 15 perception/frontend
+This implementation passed 46 mobile behavior tests and 15 perception/frontend
 tests. Full `tsc --noEmit --incremental false` passed against an isolated copy of
 the complete TypeScript source tree and the same package lock, installed with
 `npm ci --ignore-scripts` outside OneDrive. The original checkout compiler stalled
@@ -109,3 +109,20 @@ Primary API references checked before edits:
 - [Expo SDK 54](https://docs.expo.dev/versions/v54.0.0/)
 - [SDK 54 ImagePicker](https://docs.expo.dev/versions/v54.0.0/sdk/imagepicker/)
 - [SDK 54 Clipboard](https://docs.expo.dev/versions/v54.0.0/sdk/clipboard/)
+
+## Reading diagnostic messages
+
+Mobile reports separate observations from checks that could not complete. The
+displayed messages use sentence-case descriptions instead of raw INFO, WARNING,
+or HIGH prefixes, and explain what was observed, what it can mean, and a practical
+next step. Technical gap details remain in saved evidence; the readable report
+explains missing results without calling them detected threats. Internal severity
+values, coverage calculations, engine states, and permissions are unchanged.
+
+For example, an unavailable root check says that AIDA could not check for
+unrestricted system access and suggests retrying or reviewing device settings.
+A positive experimental root result still needs review, but it does not establish
+that malware is present. Low battery is described as a charging reminder;
+connectivity failures explain how to check Wi-Fi or mobile data. The percentage
+of checks with results describes how much information was available, not a device
+risk score. A limited scan cannot certify that the device is secure.
