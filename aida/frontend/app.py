@@ -171,11 +171,11 @@ def main() -> int:
         stand_down_service,
         navigation_service,
         parent=window,
+        task_manager=task_manager,
     )
     task_center_dialog = TaskCenterDialog(
         assistance_task_store,
         parent=window,
-        task_manager=task_manager,
         confirmations=confirmation_service,
     )
     artificer_dialog = ArtificerCenterDialog(artificer_engine, parent=window, task_manager=task_manager)
