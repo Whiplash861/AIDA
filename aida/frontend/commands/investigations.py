@@ -3,19 +3,32 @@ from __future__ import annotations
 from threading import Event
 
 from aida.frontend.commands.base import CommandCategory, CommandExecutor, CommandResult
+from aida.investigations.presentation import explain_event, load_alert_context, readable_time, render_alert, render_explanation
 
 
 def render_case(service, case_id: str) -> str:
     case = service.get_case(case_id)
     if case is None:
         return "Investigation not found."
-    lines = [f"INVESTIGATION {case.case_id}", case.title,
-             f"State: {case.status} | Authority: {case.authority}", case.summary, "", "TIMELINE"]
+    states = {"action_pending": "Response needs review", "monitoring": "Follow-up in progress",
+        "threat_confirmed": "Threat recorded; review the evidence", "review_required": "Ready for your review",
+        "failed": "Some checks could not finish", "resolved": "Closed after verification"}
+    lines = [case.title, "Status: " + states.get(case.status, case.status.replace("_", " ").capitalize()),
+             "Case: " + case.case_id, "", "Recorded observations"]
+    if case.source_kind not in {"aegis", "remote", "event_channel"} and case.summary:
+        lines[3:3] = [case.summary]
     for event in service.timeline(case_id):
-        lines.extend([f"{event.occurred_at} | {event.kind} | {event.status}",
-                      f"Source: {event.source_reference}", event.summary, ""])
+        lines.append(readable_time(event.occurred_at))
+        if event.kind in {"aegis_assessment", "coverage_gap", "remote_assessment", "windows_event"}:
+            lines.append(render_explanation(explain_event(event)))
+        else:
+            lines.extend([event.kind.replace("_", " ").capitalize(), event.summary or "No explanation was recorded."])
+        lines.append("")
     if case.unresolved_questions:
-        lines.extend(["UNRESOLVED", *case.unresolved_questions])
+        from aida.aegis.explanations import explain_sensor_limitations
+        lines.extend(["What still needs checking", *explain_sensor_limitations(case.unresolved_questions)])
+    if case.authority == "reference-only":
+        lines.append("This case was imported for reference. It cannot authorize actions on this computer.")
     lines.append(f"Review response options: prepare investigation response {case_id}")
     return "\n".join(lines)
 
@@ -61,12 +74,12 @@ class InvestigationCommandExecutor(CommandExecutor):
                 + "\n\nStart read-only checks: investigate: <describe the problem>")
         if self.operation == "alerts":
             alerts = service.list_alerts()
-            return CommandResult("SECURITY ALERTS\n" + ("\n\n".join(
-                f"{a.alert_id} | {a.severity} | {a.created_at}\n{a.message}\nCase: {a.case_id}"
-                f"\nAcknowledge: acknowledge alert {a.alert_id}" for a in alerts) or "No unacknowledged alerts."))
+            return CommandResult("Security notices\n\n" + ("\n\n".join(
+                render_alert(a, load_alert_context(service, a)) + f"\nView case: show investigation {a.case_id}"
+                f"\nMark as read: acknowledge alert {a.alert_id}" for a in alerts) or "No unread notices. This is not a complete security check."))
         if self.operation == "acknowledge":
             alert = service.acknowledge_alert(str(self.slots["alert_id"]))
-            return CommandResult(f"Alert {alert.alert_id} acknowledged. Its evidence remains in case {alert.case_id}; acknowledgement does not resolve the case.")
+            return CommandResult(f"Notice marked as read. Its evidence remains in case {alert.case_id}. Marking it as read does not fix a problem or close the investigation.")
         if self.operation in {"response", "plan"}:
             plan = service.prepare_response(case_id) if self.operation == "response" else service.get_plan(str(self.slots["plan_id"]))
             if plan is None:

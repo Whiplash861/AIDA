@@ -6,6 +6,7 @@ import json
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFileDialog,
     QInputDialog,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from aida.navigation.service import EvidenceNavigationService
 from aida.frontend.review_palette import apply_review_palette
+from aida.investigations.presentation import alert_explanation, load_alert_context, readable_time, render_alert
 from aida.security.stand_down import StandDownRecord, StandDownService
 from aida.security.threat_analysis import (
     ThreatAnalysisRecord,
@@ -52,6 +54,7 @@ class ThreatCenterDialog(QDialog):
         self._analyses: dict[str, ThreatAnalysisRecord] = {}
         self._stand_downs: dict[str, StandDownRecord] = {}
         self.investigations = None
+        self._alert_contexts = {}
         self.task_manager = task_manager
         self._disposed = False
 
@@ -195,13 +198,19 @@ class ThreatCenterDialog(QDialog):
     def _build_alert_tab(self) -> QWidget:
         widget, layout = QWidget(), QVBoxLayout()
         widget.setLayout(layout)
+        explanation = QLabel("Security findings and checks AIDA could not complete. Select a notice to see what happened and what you can do.")
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
         layout.addWidget(self._build_tab(self.alert_list, self.alert_detail))
         actions = QHBoxLayout()
-        for label, callback in (("Inspect Case", self._inspect_alert), ("Acknowledge", self._acknowledge_alert)):
+        for label, callback in (("View Case", self._inspect_alert), ("Mark as Read", self._acknowledge_alert)):
             button = QPushButton(label)
             button.clicked.connect(callback)
             actions.addWidget(button)
         actions.addStretch()
+        self.alert_technical_details = QCheckBox("Show technical details")
+        self.alert_technical_details.toggled.connect(self._alert_changed)
+        actions.addWidget(self.alert_technical_details)
         layout.addLayout(actions)
         self.alert_list.currentItemChanged.connect(self._alert_changed)
         return widget
@@ -223,9 +232,7 @@ class ThreatCenterDialog(QDialog):
         item = self.alert_list.currentItem()
         alert = item.data(Qt.ItemDataRole.UserRole) if item else None
         self.alert_detail.setPlainText("" if alert is None else
-            f"{alert.severity.upper()}\n{alert.message}\nObserved: {alert.created_at}\nCase: {alert.case_id}\n"
-            f"Acknowledged: {alert.acknowledged_at or 'no'}\nEpisode ended: {alert.ended_at or 'no'}\n"
-            "Acknowledgement records that you have seen an alert. It does not resolve its case.")
+            render_alert(alert, self._alert_contexts.get(alert.alert_id), technical=self.alert_technical_details.isChecked()))
 
     def _prepare_case_response(self) -> None:
         case_id = self._selected_case_id()
@@ -301,11 +308,15 @@ class ThreatCenterDialog(QDialog):
         if self.investigations is None:
             self.case_detail.setPlainText("Open the Threat Center to review local investigation cases.")
             return
-        self._case_task("REFRESH", lambda: (self.investigations.list_cases(), self.investigations.list_alerts(include_acknowledged=True)),
-                        self._apply_investigations)
+        def read():
+            cases = self.investigations.list_cases()
+            alerts = self.investigations.list_alerts(include_acknowledged=True)
+            contexts = {alert.alert_id: load_alert_context(self.investigations, alert) for alert in alerts}
+            return cases, alerts, contexts
+        self._case_task("REFRESH", read, self._apply_investigations)
 
     def _apply_investigations(self, records) -> None:
-        cases, alerts = records
+        cases, alerts, self._alert_contexts = records
         selected = self._selected_case_id()
         self.case_list.clear()
         for case in cases:
@@ -316,13 +327,21 @@ class ThreatCenterDialog(QDialog):
                 self.case_list.setCurrentItem(item)
         if self.case_list.count() and self.case_list.currentItem() is None:
             self.case_list.setCurrentRow(0)
+        current_alert = self.alert_list.currentItem()
+        selected_alert_id = current_alert.data(Qt.ItemDataRole.UserRole).alert_id if current_alert else None
         self.alert_list.clear()
         for alert in alerts:
-            item = QListWidgetItem(f"{alert.severity.upper()} · {alert.message}\n{alert.created_at}")
+            explanation = alert_explanation(alert, self._alert_contexts.get(alert.alert_id))
+            item = QListWidgetItem(f"{explanation.title}\n{readable_time(alert.created_at)}")
+            item.setToolTip(explanation.observations[0])
             item.setData(Qt.ItemDataRole.UserRole, alert)
             self.alert_list.addItem(item)
-        if self.alert_list.count():
+            if alert.alert_id == selected_alert_id:
+                self.alert_list.setCurrentItem(item)
+        if self.alert_list.count() and self.alert_list.currentItem() is None:
             self.alert_list.setCurrentRow(0)
+        elif not self.alert_list.count():
+            self.alert_detail.setPlainText("No security notices have been recorded. This list is a history of notices, not a complete security check.")
 
     def _build_tab(self, listing: QListWidget, detail: QTextEdit) -> QWidget:
         widget = QWidget()

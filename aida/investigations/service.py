@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from .models import InvestigationCase, ResponseStep, ResponseWorkflow, SecurityAlert, TimelineEntry, utc_now
+from .models import AlertContext, InvestigationCase, ResponseStep, ResponseWorkflow, SecurityAlert, TimelineEntry, utc_now
 from .store import InvestigationStore, encode
 
 
@@ -139,7 +139,7 @@ class InvestigationService:
                 return existing
             _save_case(connection, candidate)
             _link(connection, "aegis", source_case.case_id, candidate.case_id)
-            _append(connection, candidate.case_id, "aegis_assessment", candidate.summary, source_reference,
+            evidence = _append(connection, candidate.case_id, "aegis_assessment", candidate.summary, source_reference,
                 candidate.status, record, source_case.updated_at)
             alert = None
             if candidate.status in {"threat_confirmed", "action_pending", "monitoring"}:
@@ -147,7 +147,8 @@ class InvestigationService:
                 signature = _digest({"status": candidate.status, "nodes": sorted(node.node_id for node in source_case.evidence_nodes),
                     "coverage": source_case.coverage.to_record() if hasattr(source_case.coverage, "to_record") else record["coverage"]})
                 alert = _alert(connection, "case:" + candidate.case_id, candidate.case_id, signature,
-                    "critical" if candidate.status == "threat_confirmed" else "warning", candidate.summary)
+                    "critical" if candidate.status == "threat_confirmed" else "warning", candidate.summary,
+                    evidence_event_id=evidence.event_id)
             elif candidate.status == "resolved":
                 _end_episode(connection, "case:" + candidate.case_id)
             candidate = _require_case(connection, candidate.case_id)
@@ -196,12 +197,14 @@ class InvestigationService:
             previous_record = connection.execute("SELECT payload FROM investigation_timeline WHERE case_id=? AND kind='remote_assessment' ORDER BY rowid DESC LIMIT 1", (case_id,)).fetchone()
             content = assessment.to_record()
             previous_content = json.loads(previous_record[0])["data"] if previous_record else {}
+            evidence = TimelineEntry(**json.loads(previous_record[0])) if previous_record else None
             if _remote_content_signature(content) != _remote_content_signature(previous_content):
-                _append(connection, case_id, "remote_assessment", case.summary, assessment.assessment_id,
+                evidence = _append(connection, case_id, "remote_assessment", case.summary, assessment.assessment_id,
                     classification, content, assessment.created_at)
             severity = "critical" if classification in {"confirmed_intrusion", "likely_intrusion"} else "warning"
             alert = _alert(connection, "remote", case_id, signature, severity, case.summary,
-                notify=classification in _ALERT_CLASSES)
+                notify=classification in _ALERT_CLASSES,
+                evidence_event_id=evidence.event_id if evidence else None)
             case = _require_case(connection, case_id)
         self._notify(alert)
         return case
@@ -222,6 +225,24 @@ class InvestigationService:
             if row is None:
                 raise KeyError("Unknown security alert.")
         return _alert_record(row)
+
+    def get_alert_context(self, alert_id: str) -> AlertContext:
+        """Read immutable triggering evidence, with conservative legacy recovery.
+
+        A missing or ambiguous historical match stays unavailable. In particular,
+        acknowledgement and repeated observations cannot move the evidence cutoff.
+        """
+        with self.store.connect() as connection:
+            alert = connection.execute("SELECT * FROM security_alerts WHERE alert_id=?", (alert_id,)).fetchone()
+            if alert is None:
+                raise KeyError("Unknown security alert.")
+            context = connection.execute("SELECT event_id,channel FROM security_alert_context WHERE alert_id=?", (alert_id,)).fetchone()
+            if context is not None:
+                row = connection.execute("SELECT payload FROM investigation_timeline WHERE event_id=? AND case_id=?",
+                    (context["event_id"], alert["case_id"])).fetchone()
+                event = _context_event(row[0], alert) if row else None
+                return AlertContext(event, context["channel"], "exact" if event else "unavailable")
+            return _legacy_alert_context(connection, alert)
 
     def record_action(self, case_id: str, action_type: str, outcome: str, *, evidence_refs=(),
                       source_reference: str | None = None, detail: str = "", provider_verified: bool = False) -> TimelineEntry:
@@ -512,7 +533,81 @@ def _append(connection, case_id, kind, summary, reference, status, data, occurre
     return record
 
 
-def _alert(connection, channel, case_id, signature, severity, message, *, notify=True):
+def _context_event(payload, alert):
+    try:
+        event = TimelineEntry(**json.loads(payload))
+        recorded = datetime.fromisoformat(_iso(event.recorded_at))
+        created = datetime.fromisoformat(_iso(alert["created_at"]))
+        if event.case_id == alert["case_id"] and isinstance(event.data, dict) and recorded <= created:
+            return event
+    except (TypeError, ValueError, KeyError):
+        pass
+    return None
+
+
+def _legacy_alert_context(connection, alert):
+    # A bounded historical recovery is deliberately less authoritative than a
+    # persisted link. Never substitute current case text or a newer observation.
+    rows = connection.execute("""SELECT payload FROM investigation_timeline
+        WHERE case_id=? AND kind IN ('aegis_assessment','remote_assessment','windows_event','coverage_gap')
+        AND julianday(json_extract(payload,'$.recorded_at'))<=julianday(?)
+        ORDER BY rowid DESC LIMIT 501""", (alert["case_id"], alert["created_at"]))
+    match = None
+    for index, row in enumerate(rows):
+        if index == 500:
+            return AlertContext(None, "", "unavailable")
+        event = _context_event(row[0], alert)
+        channel = _legacy_alert_channel(event, alert) if event else None
+        if channel is not None:
+            if match is not None:
+                return AlertContext(None, "", "unavailable")
+            match = AlertContext(event, channel, "legacy")
+    return match or AlertContext(None, "", "unavailable")
+
+
+def _legacy_alert_channel(event, alert):
+    """Match only known historical signatures; ambiguity is handled by caller."""
+    data, signature = event.data, alert["signature"]
+    try:
+        if event.kind == "aegis_assessment" and event.summary == alert["message"]:
+            expected = _digest({"status": data["status"],
+                "nodes": sorted(node["node_id"] for node in data["evidence_nodes"]), "coverage": data["coverage"]})
+            if signature == expected:
+                return "case:" + event.case_id
+        elif event.kind == "remote_assessment" and event.summary == alert["message"]:
+            # Mirrors the monitor's stable identity, including session/process
+            # lifetimes. The full stored payload remains the display evidence.
+            sessions = []
+            for item in data["active_sessions"]:
+                user, domain = item["username"], item["domain"]
+                account = domain + "\\" + user if domain and user else user or domain
+                sessions.append((item["session_id"], item["logon_time"] or 0,
+                    account, item["client_address"], item["state"]))
+            tools = [(item["pid"], item["create_time"] or 0, item["executable"],
+                tuple(item["child_pids"]), tuple(item["remote_endpoints"])) for item in data["remote_tools"]]
+            expected = _digest((data["classification"], tuple(sorted(sessions)), tuple(sorted(tools)), tuple(sorted(data["degraded_reasons"]))))
+            if signature == expected:
+                return "remote"
+        elif event.kind == "windows_event" and event.source_reference == signature:
+            channel = data["channel"]
+            if isinstance(channel, str) and event.source_reference.startswith(channel + ":"):
+                return "event:" + channel
+        elif event.kind == "coverage_gap":
+            gaps = data["gaps"]
+            if not isinstance(gaps, list) or not gaps or not all(isinstance(gap, str) for gap in gaps):
+                return None
+            variants = {"|".join(gaps), "|".join(sorted(gaps)),
+                "|".join(sorted(gap for gap in gaps if gap not in {"initial_backfill_window_limited", "backfill_page_pending"})) or "bounded_backfill"}
+            parts = event.source_reference.rsplit(":", 2)
+            if signature in variants and len(parts) == 3 and parts[0].startswith("gap:") and parts[0][4:]:
+                return "coverage:" + parts[0][4:]
+    except (TypeError, ValueError, KeyError):
+        # Old or incomplete payloads are not repaired into invented evidence.
+        pass
+    return None
+
+
+def _alert(connection, channel, case_id, signature, severity, message, *, notify=True, evidence_event_id=None):
     now = utc_now().isoformat()
     episode = connection.execute("SELECT * FROM security_episodes WHERE channel=? AND active=1", (channel,)).fetchone()
     episode_id = episode["episode_id"] if episode else uuid4().hex
@@ -526,12 +621,19 @@ def _alert(connection, channel, case_id, signature, severity, message, *, notify
     if existing and existing["ended_at"] is None:
         connection.execute("UPDATE security_alerts SET updated_at=? WHERE alert_id=?", (now, existing["alert_id"]))
         return None
+    if evidence_event_id is not None:
+        evidence = connection.execute("SELECT payload FROM investigation_timeline WHERE event_id=? AND case_id=?",
+            (evidence_event_id, case_id)).fetchone()
+        if evidence is None or _context_event(evidence[0], {"case_id": case_id, "created_at": now}) is None:
+            raise ValueError("Alert evidence must be an existing historical event in the same investigation.")
     # A signature that recurs after a different state is a new alert episode.
     if existing:
         episode_id = uuid4().hex
         connection.execute("UPDATE security_episodes SET episode_id=? WHERE channel=?", (episode_id, channel))
     alert_id = "ALERT-" + uuid4().hex
     connection.execute("INSERT INTO security_alerts VALUES(?,?,?,?,?,?,NULL,NULL,?,?)", (alert_id, case_id, episode_id, signature, now, now, severity, _text(message)))
+    connection.execute("INSERT INTO security_alert_context(alert_id,event_id,channel) VALUES(?,?,?)",
+        (alert_id, evidence_event_id, _text(channel)))
     return _alert_record(connection.execute("SELECT * FROM security_alerts WHERE alert_id=?", (alert_id,)).fetchone())
 
 

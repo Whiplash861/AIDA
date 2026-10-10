@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 
+from aida.aegis.explanations import baseline_observations, explain_sensor_limitations
+
 from aida.aegis.learning.models import LearningAssessment
 from aida.aegis.models import (
     AegisCaseStatus,
@@ -188,7 +190,8 @@ def build_hypotheses(
         hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
-                title="Active provider-confirmed threat",
+                title=("Antivirus reports an active threat" if any(item.metadata.get("is_active") is True for item in active)
+                    else "Antivirus threat finding has unresolved status"),
                 category="malicious",
                 confidence=max(
                     0.92,
@@ -198,11 +201,12 @@ def build_hypotheses(
                     ),
                 ),
                 evidence_for=tuple(
-                    f"{item.source} reports {item.name} ({item.severity.name})."
+                    f"{item.source} reports {item.name} ({item.severity.name.lower()} severity); "
+                    + ("the provider marks it active." if item.metadata.get("is_active") is True else "its current activity is not confirmed in this record.")
                     for item in active[:5]
                 ),
                 unresolved_questions=(
-                    "Whether related persistence, child processes, or secondary payloads remain outside the provider record.",
+                    "Whether other affected files, programs or automatic-start entries remain outside this antivirus finding.",
                 ),
             )
         )
@@ -220,7 +224,7 @@ def build_hypotheses(
         hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
-                title="Suspicious local activity without active provider confirmation",
+                title="File checks need further security review",
                 category="malicious_candidate",
                 confidence=max(item.confidence for item in suspicious),
                 evidence_for=tuple(
@@ -228,10 +232,10 @@ def build_hypotheses(
                     for item in suspicious[:5]
                 ),
                 evidence_against=(
-                    "The current provider snapshot does not report an active matching threat.",
+                    "These file assessments are separate from a confirmed current antivirus finding; review their recorded facts and uncertainties.",
                 ),
                 unresolved_questions=(
-                    "Whether a targeted provider scan would confirm or reject the local assessment.",
+                    "Whether a current antivirus scan of the affected file supports the local assessment.",
                 ),
             )
         )
@@ -245,22 +249,22 @@ def build_hypotheses(
         hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
-                title="Legitimate signed software change",
+                title="Signed files with low-concern assessments",
                 category="benign_candidate",
                 confidence=min(0.92, 0.60 + len(signed_low) * 0.06),
                 evidence_for=tuple(
-                    f"{item.path.name} has a valid signer and low-concern local assessment."
+                    f"{item.path.name} has a valid digital signature and a low-concern local assessment."
                     for item in signed_low[:5]
                 ),
                 evidence_against=(
                     (
-                        f"{len(delta.new_persistence)} new persistence item(s) remain to be explained."
+                        f"{len(delta.new_persistence)} automatic-start entry or entries differ from the saved comparison and still need explanation."
                     ),
                 )
                 if delta.new_persistence
                 else (),
                 unresolved_questions=(
-                    "Whether the observed change aligns with a recent installation or update event.",
+                    "A valid digital signature does not prove that a file is safe; any observed change still needs to be compared with expected software activity.",
                 ),
             )
         )
@@ -274,17 +278,17 @@ def build_hypotheses(
         hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
-                title="Behavior deviates from Aegis learned machine baseline",
+                title="Activity differs from AIDA's learned pattern",
                 category="learned_anomaly",
                 confidence=_clamp(
                     learning.anomaly_score * max(0.45, learning.confidence)
                 ),
                 evidence_for=learning.reasons[:4],
                 evidence_against=(
-                    "Learned anomaly is not proof of malware and has no execution authority.",
+                    "A difference from a learned pattern does not establish malware or authorize any action.",
                 ),
                 unresolved_questions=(
-                    "Whether deterministic provider, file, persistence, or timeline evidence explains the learned anomaly.",
+                    "Whether the antivirus findings, file checks or activity history explain the difference.",
                 ),
             )
         )
@@ -293,16 +297,14 @@ def build_hypotheses(
         hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
-                title="Unexplained baseline drift",
+                title="Changes from the approved saved comparison need review",
                 category="unknown",
                 confidence=min(
                     0.70, 0.30 + delta.meaningful_change_count * 0.03
                 ),
-                evidence_for=(
-                    f"{delta.meaningful_change_count} security-relevant baseline change(s) were observed.",
-                ),
+                evidence_for=baseline_observations(delta),
                 evidence_against=(
-                    "No strong malicious evidence has been correlated yet.",
+                    "A difference from a saved comparison does not by itself establish malicious activity.",
                 ),
                 unresolved_questions=(
                     "Whether the changes are explained by expected software or operating-system activity.",
@@ -313,14 +315,14 @@ def build_hypotheses(
         hypotheses.append(
             AegisHypothesis(
                 hypothesis_id=uuid4().hex,
-                title="No active compromise identified",
+                title="No threat conclusion established from these inputs",
                 category="benign_current_state",
                 confidence=0.82,
                 evidence_for=(
-                    "No active provider detection or high-confidence local malicious assessment was correlated.",
+                    "The supplied findings did not establish a current antivirus threat or a suspicious file assessment.",
                 ),
                 unresolved_questions=(
-                    "Read-only observation cannot prove the absence of behavior that was not observable during this snapshot.",
+                    "This does not establish that every check completed or that the computer is free of threats; review the check limitations separately.",
                 ),
             )
         )
@@ -361,17 +363,23 @@ def remaining_uncertainty(
     snapshot: SecuritySnapshot,
     coverage: CoverageVector,
     analyses: tuple[ThreatAnalysisRecord, ...],
+    candidate_count: int | None = None,
 ) -> tuple[str, ...]:
     notes: list[str] = []
-    if snapshot.sensor_errors:
-        notes.append(
-            "One or more read-only security sensors returned incomplete coverage: "
-            + ", ".join(snapshot.sensor_errors)
-        )
+    notes.extend(explain_sensor_limitations(snapshot.sensor_errors))
     if coverage.baseline < 0.5:
-        notes.append(
-            "No established Aegis machine baseline was available for drift comparison."
-        )
+        notes.extend(baseline_observations({"baseline_available": False}))
+    if coverage.provider < 1:
+        if snapshot.provider_health.active is False:
+            notes.append("The antivirus provider reports that it is not active. This is a protection-status finding, not a malware detection.")
+        elif snapshot.provider_health.healthy is False:
+            notes.append("The antivirus provider reports a problem with its protection status; the cause and effect still need review.")
+        else:
+            notes.append("The antivirus protection status was not fully verified in this check.")
+    if candidate_count is not None and candidate_count > len(analyses):
+        notes.append(f"AIDA selected {candidate_count} file(s) for review, but {candidate_count - len(analyses)} did not produce a completed analysis.")
+    elif 0 < coverage.file_analysis < 1:
+        notes.append("Some selected files could not be fully analyzed, so the file review is incomplete.")
     for analysis in analyses:
         notes.extend(analysis.remaining_uncertainty)
     if not notes:
@@ -387,18 +395,57 @@ def build_case_summary(
     coverage: CoverageVector,
     detection_count: int,
     delta: BaselineDelta,
+    snapshot: SecuritySnapshot | None = None,
+    analyses: tuple[ThreatAnalysisRecord, ...] = (),
+    detections: tuple[ProviderDetection, ...] | None = None,
+    learning: LearningAssessment | None = None,
 ) -> str:
+    observations: list[str] = []
     if detection_count:
-        return f"Aegis correlated {detection_count} provider detection(s) with local machine evidence."
-    if risk.overall >= 0.50:
-        return "Aegis identified elevated security risk from correlated local evidence and baseline drift."
-    if delta.meaningful_change_count:
-        return (
-            f"Aegis reviewed {delta.meaningful_change_count} security-relevant baseline change(s) without confirming an active compromise."
-        )
-    return (
-        f"Aegis found no active compromise in the observable evidence set; coverage confidence is {round(coverage.overall * 100)}%."
-    )
+        active_count = sum(item.metadata.get("is_active") is True for item in detections or ())
+        if active_count:
+            observations.append(f"The antivirus provider reports {active_count} active threat finding(s).")
+        remaining = max(0, detection_count - active_count)
+        if remaining:
+            observations.append(f"This assessment also contains {remaining} antivirus threat finding(s) whose current activity needs review." if active_count
+                else f"This assessment contains {remaining} antivirus threat finding(s); their current activity needs review.")
+        observations.append("Review the affected items and current antivirus status before choosing a response.")
+    else:
+        flagged = sum(item.assessment in {ThreatAssessmentLevel.SUSPICIOUS, ThreatAssessmentLevel.LIKELY_MALICIOUS,
+            ThreatAssessmentLevel.PROVIDER_CONFIRMED_MALICIOUS} for item in analyses)
+        if flagged:
+            observations.append(f"The file checks marked {flagged} reviewed file(s) for security review. This summary does not establish a current active antivirus threat.")
+        elif risk.overall >= 0.50:
+            observations.append("AIDA recommends reviewing the recorded activity; this recommendation alone does not establish a threat.")
+        else:
+            observations.append("This assessment has not established a confirmed threat. Check the recorded observations and any incomplete checks before drawing a conclusion.")
+        associations = []
+        for count, label in (
+            (sum(bool(item.process_observations) for item in analyses), "with a running program"),
+            (sum(any(process.network_endpoints for process in item.process_observations) for item in analyses), "with network connections"),
+            (sum(bool(item.persistence_observations) for item in analyses), "with automatic-start entries"),
+        ):
+            if count:
+                associations.append(f"{count} {label}")
+        if associations:
+            observations.append("Among the reviewed files, AIDA recorded " + ", ".join(associations) + ". Running, connecting to a network and starting automatically can all be normal software behavior.")
+        if analyses and not flagged:
+            observations.append("These file checks did not classify a reviewed file as suspicious or malicious; that is not a guarantee that it is safe.")
+        if risk.overall >= .50 and not associations and not flagged and not (delta.baseline_available and delta.meaningful_change_count):
+            observations.append("The risk score alone does not explain which observation caused the recommendation; the underlying records need review.")
+    if snapshot is not None and snapshot.provider_health.active is False:
+        observations.append("The antivirus provider reports that it is not active.")
+    if delta.baseline_available and delta.meaningful_change_count:
+        observations.extend(baseline_observations(delta))
+    elif not delta.baseline_available:
+        observations.extend(baseline_observations(delta))
+    if learning is not None and not learning.warmup and learning.confidence >= .35 and learning.anomaly_score >= .55:
+        observations.append("The learned activity pattern also differs from prior observations. That comparison does not establish malware.")
+    if snapshot is not None and snapshot.sensor_errors:
+        observations.append("Some checks did not complete or have incomplete history; see the recorded check limitations.")
+    elif coverage.provider < 1 or coverage.processes < 1 or coverage.network < .95 or coverage.persistence < .75:
+        observations.append("Some protection, program, network or automatic-start checks were incomplete or could not be verified.")
+    return " ".join(observations)
 
 
 def _append_path(output: list[Path], path: Path) -> None:

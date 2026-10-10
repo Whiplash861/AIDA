@@ -20,6 +20,7 @@ from aida.investigations.models import InvestigationCase, utc_now
 from aida.investigations.store import encode
 from aida.aegis.remote.windows_sessions import _parse_event_stream, _child, _local_name
 from aida.aegis.remote.models import RemoteLogonEvent
+from aida.aegis.explanations import explain_event_gaps, explain_windows_event
 
 
 CHANNELS = {"Security": (4624, 4625, 1102), "Microsoft-Windows-Windows Defender/Operational": (1000, 1001, 1002, 1116, 1117, 5007)}
@@ -161,11 +162,12 @@ class IncrementalEventCollector:
                 inserted = connection.execute("INSERT OR IGNORE INTO collected_events VALUES(?,?,?,?,?,?)",
                     (channel, epoch, event.record_id, event.occurred_at, event.event_id, encode(event.to_record()))).rowcount
                 if inserted:
-                    _append(connection, case_id, "windows_event", f"Windows event {event.event_id} observed in {channel}.", reference,
+                    event_summary = explain_windows_event(event.event_id, event.data) if event.event_id in {1116, 1102} else f"Windows event {event.event_id} observed in {channel}."
+                    evidence_entry = _append(connection, case_id, "windows_event", event_summary, reference,
                         "observed", event.to_record(), event.occurred_at)
                 if inserted and event.event_id in {1116, 1102}:
                     alert = _alert(connection, "event:" + channel, case_id, reference, "warning",
-                        "Provider threat evidence was recorded; review current findings." if event.event_id == 1116 else "The Windows security log was cleared; review the evidence gap.")
+                        explain_windows_event(event.event_id, event.data), evidence_event_id=evidence_entry.event_id)
                     if alert:
                         alerts.append(alert)
             irreversible = tuple(gap for gap in page.gaps if gap in {"initial_backfill_truncated", "bookmark_reset_or_log_wrap"})
@@ -182,11 +184,13 @@ class IncrementalEventCollector:
             if gaps:
                 signature = "|".join(sorted(gap for gap in gaps if gap not in {"initial_backfill_window_limited", "backfill_page_pending"})) or "bounded_backfill"
                 episode = connection.execute("SELECT signature FROM security_episodes WHERE channel=? AND active=1", ("coverage:" + channel,)).fetchone()
+                evidence_entry = None
                 if episode is None or episode[0] != signature:
-                    _append(connection, case_id, "coverage_gap", "Event coverage: " + ", ".join(gaps),
-                        f"gap:{channel}:{epoch}:" + hashlib.sha256((signature + now).encode()).hexdigest()[:16], "incomplete", {"gaps": list(gaps)})
-                alert = _alert(connection, "coverage:" + channel, case_id, signature, "warning", "Event evidence is incomplete: " + ", ".join(gaps),
-                    notify=any(gap not in {"initial_backfill_window_limited", "backfill_page_pending"} for gap in gaps))
+                    evidence_entry = _append(connection, case_id, "coverage_gap", explain_event_gaps(channel, gaps),
+                        f"gap:{channel}:{epoch}:" + hashlib.sha256((signature + now).encode()).hexdigest()[:16], "incomplete", {"gaps": list(gaps), "channel": channel})
+                alert = _alert(connection, "coverage:" + channel, case_id, signature, "warning", explain_event_gaps(channel, gaps),
+                    notify=any(gap not in {"initial_backfill_window_limited", "backfill_page_pending"} for gap in gaps),
+                    evidence_event_id=evidence_entry.event_id if evidence_entry else None)
                 if alert:
                     alerts.append(alert)
             else:

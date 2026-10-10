@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS security_alerts (
  signature TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  acknowledged_at TEXT, ended_at TEXT, severity TEXT NOT NULL, message TEXT NOT NULL,
  UNIQUE(episode_id,signature));
+CREATE TABLE IF NOT EXISTS security_alert_context (
+ alert_id TEXT PRIMARY KEY, event_id TEXT, channel TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS investigation_plans (
  plan_id TEXT PRIMARY KEY, case_id TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS investigation_links (
@@ -50,10 +52,10 @@ class InvestigationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect(write=True) as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version > 1:
+            if version > 2:
                 raise RuntimeError("The investigation database requires a newer AIDA version.")
             connection.executescript(SCHEMA)
-            connection.execute("PRAGMA user_version=1")
+            connection.execute("PRAGMA user_version=2")
 
     @contextmanager
     def connect(self, *, write: bool = False):

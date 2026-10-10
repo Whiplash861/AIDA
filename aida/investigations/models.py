@@ -75,6 +75,15 @@ class SecurityAlert:
 
 
 @dataclass(frozen=True, slots=True)
+class AlertContext:
+    """Original alert evidence, never the case's latest assessment."""
+
+    event: TimelineEntry | None
+    channel: str
+    provenance: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResponseStep:
     step_id: str
     kind: str

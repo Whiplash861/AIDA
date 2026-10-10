@@ -14,6 +14,12 @@ These additions build on the October reliability checkpoint. AIDA owns the conve
 
 The existing Threat Center also contains Investigations and Security Alerts tabs. File operations are disabled when a case or alert is selected. Case transfer uses a bounded JSON reference format. Export is redacted by default; import displays the captured contents for review and preserves reference-only authority. Importing does not execute any embedded text or enable operation of another device.
 
+Security notices use everyday descriptions such as **Check incomplete**, **File findings need review**, and **Antivirus findings need review**. The dialog and local notifications explain what AIDA observed, what it means, what the user can do, and what remains unknown. High-priority notices keep an **Urgent review** heading. An unavailable check is never described as a passed check, a zero result, or a malware detection. A missing baseline is explained as a missing saved comparison, rather than a change that AIDA observed.
+
+**Mark as Read** records that the notice was seen; it does not resolve the case. **Show technical details** reveals the original message, priority, evidence reference and recorded data. Human-readable timestamps distinguish the observation time from the time AIDA recorded the notice. The dialog retains the existing dark theme.
+
+New alerts link directly to their original evidence. Later assessments cannot replace that explanation. Older notices use saved historical evidence only when a single matching record can be identified; otherwise AIDA explicitly says the supporting details are unavailable. The original records are retained. The wording changes do not alter detection scores, thresholds, approvals or system actions. In particular, the existing score can still request a review based on normal running programs, automatic-start entries and network use; the explanation distinguishes those associations from an identified malicious file.
+
 The main window, stylesheet, dashboard and orb components remain unchanged. Threat Center and Artificer review dialogs use the existing dark palette explicitly so native Qt controls do not render the application's light text on white backgrounds. Their new tabs and actions retain AIDA's colors and typography. An offscreen visual check confirms readable contrast and unclipped controls; native rendering remains part of desktop acceptance.
 
 ## Response and evidence continuity
@@ -59,3 +65,9 @@ Native Windows provider/UAC/WTS tests, physical-device mobile acceptance, and ex
 - A read-only native Windows probe retrieved seven Defender events, followed by zero new records with its checkpoint preserved. Security log access was unavailable and remained explicitly unknown. See the [sanitized probe result](validation/windows-event-reader-oct-2026.json) and [remaining native qualification matrix](INVESTIGATIONS_SECURITY_BACKEND.md#native-qualification-still-required).
 
 Detailed feature boundaries are documented in the [Artificer source review guide](ARTIFICER_SOURCE_REVIEW.md), [investigation backend guide](INVESTIGATIONS_SECURITY_BACKEND.md), and [mobile workflow guide](architecture/mobile-investigation-workflows.md).
+
+### Notice explanation update — October 10, 2026
+
+The complete Python suite passed **617 tests**, with the same upstream Starlette/httpx deprecation warning. Mobile passed **46 behavior tests** and full TypeScript checking with the same dependency lock in the isolated validation copy. Python compilation and Git whitespace checks passed.
+
+Regression coverage includes unavailable and null results, high-priority findings, old alert migration, immutable evidence references, acknowledgement, alert deduplication, and shared dialog/notification wording. An isolated copy of the two reported notices produced **Security review needs context** and **Check incomplete**, without modifying the original records. Offscreen visual review used the theme's existing Segoe UI fallback because the offscreen platform does not discover Windows fonts automatically. Native device acceptance remains separate; no security operation or mobile release was deployed for these wording checks.

@@ -53,6 +53,39 @@ def test_access_failure_never_advances_bookmark_and_gap_alert_dedupes(tmp_path):
     assert len(read.investigations.list_alerts()) == 1
 
 
+def test_gap_alert_explains_incomplete_check_and_preserves_exact_machine_evidence(tmp_path):
+    read = collector(tmp_path, Source(EventPage((), None, ("channel_access_unavailable",))))
+    read.poll(channels=("Security",))
+    alert = read.investigations.list_alerts()[0]
+    assert alert.severity == "warning"
+    assert "could not read Windows sign-in and security history" in alert.message
+    assert "does not establish why" in alert.message
+    assert "channel_access_unavailable" not in alert.message
+    context = read.investigations.get_alert_context(alert.alert_id)
+    assert context.provenance == "exact"
+    assert context.event.kind == "coverage_gap"
+    assert context.event.data["gaps"] == ["channel_access_unavailable"]
+    assert context.event.data["channel"] == "Security"
+    read.poll(channels=("Security",))
+    assert read.investigations.get_alert_context(alert.alert_id).event.event_id == context.event.event_id
+
+
+@pytest.mark.parametrize("event_id, channel, expected", [
+    (1116, "Microsoft-Windows-Windows Defender/Operational", "recorded a threat detection"),
+    (1102, "Security", "Security event log was cleared"),
+])
+def test_native_event_alert_preserves_finding_and_original_event_context(tmp_path, event_id, channel, expected):
+    item = NativeEvent(channel, 1, event_id, utc_now().isoformat(), "Windows", {"Threat Name": "Test threat"})
+    read = collector(tmp_path, Source(EventPage((item,), item)))
+    read.poll(channels=(channel,))
+    alert = read.investigations.list_alerts()[0]
+    assert alert.severity == "warning"
+    assert expected in alert.message
+    context = read.investigations.get_alert_context(alert.alert_id)
+    assert context.provenance == "exact"
+    assert context.event.data["event_id"] == event_id
+
+
 def test_reset_reuses_record_number_in_new_epoch_and_retains_gap(tmp_path):
     item = event()
     source = Source(EventPage((item,), item))
