@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 import re
 
 from dataclasses import dataclass
@@ -171,78 +173,51 @@ class ThreatIntelligenceBuilder:
 
 
 def render_threat_report(report: ThreatIntelligenceReport) -> str:
-    lines = [
-        "THREAT INTELLIGENCE REPORT",
-        "Threat Detection Analysis v2",
-        "",
-        f"Threat: {report.threat_name}",
+    from aida.aegis.explanations import explain_sensor_limitations
+
+    found = [
+        f"Antivirus finding: {report.threat_name}",
+        f"Priority reported by the antivirus: {report.severity.name.replace('_', ' ').lower()}.",
+        f"Antivirus-reported state: {report.current_state}",
+        f"Local activity recorded at this check: {report.current_activity}",
+        *report.observed_facts,
+    ]
+    if report.observed_resource:
+        found.append(f"Affected file or resource: {report.observed_resource}")
+    for endpoint in report.observed_endpoints:
+        address = endpoint.address + (f":{endpoint.port}" if endpoint.port is not None else "")
+        found.append(f"Recorded network address: {address} (reported by {endpoint.observed_by}).")
+    unknown = [
+        *explain_sensor_limitations(report.remaining_uncertainty),
+        *report.inference_notes,
+        "The detection name and network addresses alone do not identify the person responsible or their physical location.",
+    ]
+    if not report.observed_resource:
+        unknown.append("The affected file or resource was not supplied with this finding.")
+    details = [
         f"Provider classification: {report.provider_classification or report.threat_name}",
         f"AIDA assessment: {report.aida_assessment}",
-        f"Severity: {report.severity.name.title()}",
-        f"Current provider state: {report.current_state}",
-        f"Current local activity: {report.current_activity}",
-        (
-            f"Observed resource: {report.observed_resource}"
-            if report.observed_resource
-            else "Observed resource: Not available"
-        ),
-        "",
-        f"Likely purpose: {report.likely_purpose}",
-        (
-            "Classification confidence: "
-            f"{round(report.classification_confidence * 100)} percent"
-        ),
+        f"Classification confidence: {round(report.classification_confidence * 100)} percent",
+        *report.file_identity,
+        f"Threat actor assessment: {report.threat_actor}; attribution confidence: {report.actor_confidence.value}",
+        f"Physical actor location assessment: {report.actor_location}",
+        *report.actor_evidence,
     ]
-    if report.analysis_confidence is not None:
-        lines.append(
-            f"Local analysis confidence: {round(report.analysis_confidence * 100)} percent"
-        )
     if report.analysis_id:
-        lines.append(f"Analysis ID: {report.analysis_id}")
-    if report.file_identity:
-        lines.extend(["", "File identity:"])
-        lines.extend(f"- {item}" for item in report.file_identity)
-    if report.observed_facts:
-        lines.extend(["", "Observed facts:"])
-        lines.extend(f"- {item}" for item in report.observed_facts)
-    lines.extend(
-        [
-            "",
-            f"Threat actor: {report.threat_actor}",
-            (
-                "Attribution confidence: "
-                f"{report.actor_confidence.value.replace('_', ' ').title()}"
-            ),
-            f"Physical actor location: {report.actor_location}",
-        ]
-    )
-    if report.actor_evidence:
-        lines.append("Attribution evidence:")
-        lines.extend(f"- {item}" for item in report.actor_evidence)
-    if report.observed_endpoints:
-        lines.extend(["", "Observed network endpoints:"])
-        for endpoint in report.observed_endpoints:
-            address = endpoint.address
-            if endpoint.port is not None:
-                address += f":{endpoint.port}"
-            detail = []
-            if endpoint.registration_region:
-                detail.append(f"registration region: {endpoint.registration_region}")
-            if endpoint.autonomous_system:
-                detail.append(f"network: {endpoint.autonomous_system}")
-            detail.append(f"observed by: {endpoint.observed_by}")
-            lines.append(f"- {address} ({'; '.join(detail)})")
+        details.append(f"Analysis ID: {report.analysis_id}")
+    if report.analysis_confidence is not None:
+        details.append(f"Local analysis confidence: {round(report.analysis_confidence * 100)} percent (assessment score, not proof)")
+    for endpoint in report.observed_endpoints:
+        if endpoint.registration_region or endpoint.autonomous_system:
+            details.append(f"Address registration for {endpoint.address}: region {endpoint.registration_region or 'unknown'}; network {endpoint.autonomous_system or 'unknown'}. Registration does not establish the operator's location.")
+    interpretation = f"Possible purpose suggested by this finding: {report.likely_purpose}"
     if report.possible_impacts:
-        lines.extend(["", "Potential damage or disruption:"])
-        lines.extend(f"- {impact}" for impact in report.possible_impacts)
-    lines.extend(["", f"Recommended response: {report.recommended_response}"])
-    if report.remaining_uncertainty:
-        lines.extend(["", "Remaining uncertainty:"])
-        lines.extend(f"- {note}" for note in report.remaining_uncertainty)
-    if report.inference_notes:
-        lines.extend(["", "Assessment limits:"])
-        lines.extend(f"- {note}" for note in report.inference_notes)
-    return "\n".join(lines)
+        interpretation += "\nPossible effects if the suspected threat is present: " + "; ".join(report.possible_impacts)
+    priority = report.severity.name.lower() in {"high", "critical", "severe"}
+    return render_report("Priority antivirus finding" if priority else "Antivirus finding review",
+                         found=found, unknown=unknown,
+                         next_steps=(report.recommended_response or "Review the finding in Windows Security before choosing a response.",),
+                         interpretation=interpretation, details=details)
 
 
 def _identity_lines(analysis: ThreatAnalysisRecord) -> tuple[str, ...]:

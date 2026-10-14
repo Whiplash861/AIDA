@@ -146,8 +146,8 @@ def test_scan_separates_existing_unresolved_detection_from_new_findings(tmp_path
 
     result = executor.execute()
 
-    assert "New or reactivated detections in this scan window: 0" in result.transcript_text
-    assert "Pre-existing unresolved detections still reported: 1" in result.transcript_text
+    assert "New or reactivated antivirus findings during this scan window: 0" in result.transcript_text
+    assert "Earlier findings still unresolved: 1" in result.transcript_text
     assert "No new detections were attributed" in result.speech_text
 
 

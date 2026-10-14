@@ -86,5 +86,5 @@ def test_all_security_scan_strategies_receive_aegis_intelligence(strategy) -> No
 
     assert engine.strategies == [strategy.value]
     assert "Provider scan complete." in result.transcript_text
-    assert "AEGIS" in result.transcript_text
+    assert "Aegis" in result.transcript_text
     assert strategy.value.title() in result.transcript_text

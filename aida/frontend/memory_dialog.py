@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTabWidget,
     QTextEdit,
@@ -19,8 +20,10 @@ from PySide6.QtWidgets import (
 )
 
 from aida.memory.models import JournalEvent, MemoryItem
-from aida.memory.renderer import render_event, render_memory
+from aida.memory.renderer import render_event, render_memory, memory_status_text
+from aida.reporting import render_report
 from aida.memory.service import MemoryService
+from aida.frontend.review_palette import apply_review_palette
 
 
 class MemoryBankDialog(QDialog):
@@ -32,6 +35,7 @@ class MemoryBankDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        apply_review_palette(self)
         self.service = service
         self._items_by_id: dict[str, MemoryItem] = {}
         self._selected_memory_id: str | None = None
@@ -66,6 +70,7 @@ class MemoryBankDialog(QDialog):
             "Select a memory to view its current plain-language record."
         )
         self.detail_label.setWordWrap(True)
+        self.detail_label.setTextFormat(Qt.TextFormat.PlainText)
         self.detail_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -75,6 +80,7 @@ class MemoryBankDialog(QDialog):
             "Select an event to read its plain-language operational record."
         )
         self.event_detail.setWordWrap(True)
+        self.event_detail.setTextFormat(Qt.TextFormat.PlainText)
         self.event_detail.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -103,7 +109,11 @@ class MemoryBankDialog(QDialog):
         editor_layout.addWidget(QLabel("Plain-language memory"))
         editor_layout.addWidget(self.summary_box, 1)
         editor_layout.addWidget(QLabel("Current record"))
-        editor_layout.addWidget(self.detail_label)
+        current_record = QScrollArea()
+        current_record.setWidgetResizable(True)
+        current_record.setWidget(self.detail_label)
+        current_record.setMinimumHeight(100)
+        editor_layout.addWidget(current_record, 1)
 
         action_layout = QHBoxLayout()
         action_layout.addWidget(self.new_button)
@@ -123,7 +133,10 @@ class MemoryBankDialog(QDialog):
         timeline = QWidget()
         timeline_layout = QHBoxLayout(timeline)
         timeline_layout.addWidget(self.event_list, 1)
-        timeline_layout.addWidget(self.event_detail, 2)
+        event_record = QScrollArea()
+        event_record.setWidgetResizable(True)
+        event_record.setWidget(self.event_detail)
+        timeline_layout.addWidget(event_record, 2)
 
         tabs = QTabWidget()
         tabs.addTab(splitter, "Memories")
@@ -240,11 +253,18 @@ class MemoryBankDialog(QDialog):
     def _populate(self, items: list[MemoryItem]) -> None:
         self.memory_list.clear()
         self._items_by_id = {item.memory_id: item for item in items}
+        self._selected_memory_id = None
+        self.title_box.clear()
+        self.category_box.clear()
+        self.summary_box.clear()
+        self.detail_label.setText("Select a saved memory to review its source, age and current use." if items else render_report(
+            "Memory Bank", found=("No matching memories are shown.",),
+            unknown=("This does not prove that an event never happened or that no older record exists.",),
+            next_steps=("Try a shorter search, choose Recent, or use New to save information you want AIDA to remember.",)))
         for item in items:
-            confidence = round(item.confidence * 100)
             label = (
                 f"{item.title}\n"
-                f"{item.category.replace('_', ' ')} · {confidence}% confidence"
+                f"{memory_status_text(item.status)}"
             )
             list_item = QListWidgetItem(label)
             list_item.setData(
@@ -276,6 +296,8 @@ class MemoryBankDialog(QDialog):
     def _populate_events(self, events: list[JournalEvent]) -> None:
         self.event_list.clear()
         self._events_by_id = {event.event_id: event for event in events}
+        self.event_detail.setText("Select an event to review what was recorded and whether a completion result exists." if events else
+            "No saved timeline events are shown. This is not evidence that no activity occurred.")
         for event in events:
             label = (
                 f"{event.created_at.astimezone().strftime('%b %d %I:%M %p')} — "

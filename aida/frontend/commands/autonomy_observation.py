@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 from collections.abc import Callable
 from pathlib import Path
 
@@ -102,11 +104,11 @@ class SecurityObservationExecutor(CommandExecutor):
                 promote=True,
             )
             return CommandResult(
-                transcript_text=(
-                    "OBSERVATION MODE CHECK FAILED\n\n"
-                    f"Reason: {message}\n\n"
-                    "No operational action was taken."
-                ),
+                transcript_text=render_report("Automatic security check could not finish",
+                    found=("AIDA could not read the antivirus status. No operational action was taken.",),
+                    unknown=("Protection status and threat findings could not be established by this check.",),
+                    next_steps=("Review Windows Security and the error below. Request another status check once the source is available.",),
+                    details=(f"Reason: {message}",)),
                 speech_text=(
                     "Observation check failed. No operational action was taken."
                     if self._announce
@@ -196,13 +198,13 @@ class SecurityObservationExecutor(CommandExecutor):
             promote=True,
         )
         note_text = (
-            "\n\nEvidence collection notes:\n"
+            "\n\nChecks that could not finish:\n"
             + "\n".join(f"- {note}" for note in collection_notes)
             if collection_notes
             else ""
         )
         analysis_text = (
-            "\n\nRead-only threat analysis:\n"
+            "\n\nSaved file reviews:\n"
             + "\n".join(f"- {item}" for item in analysis_summaries)
             if analysis_summaries
             else ""
@@ -210,7 +212,7 @@ class SecurityObservationExecutor(CommandExecutor):
         should_speak = self._announce or outcome.user_action_required
         return CommandResult(
             transcript_text=(
-                "OBSERVATION MODE SECURITY CHECK\n\n"
+                "Automatic security observation\n\n"
                 f"{outcome.summary}\n\n"
                 f"{report_text}"
                 f"{analysis_text}"

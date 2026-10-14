@@ -1,6 +1,8 @@
 """Bounded resource evidence for the AIDA process family, not a host diagnosis."""
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 import math
 import os
 import time
@@ -140,17 +142,28 @@ class SelfResourceObserver:
 
 def render_self_resources(record: dict) -> str:
     def number(key, unit="%", divisor=1):
-        value = record.get(key)
+        value = _number(record.get(key))
         return "unavailable" if value is None else f"{value / divisor:.2f}{unit}"
-    return "\n".join((
-        "AIDA RESOURCE OBSERVATION", f"Measurement: {record['measurement_id']}",
-        f"Observed: {record['observed_at_utc']} | Window: {record['elapsed_seconds']:.2f} seconds | Status: {record['status']}",
-        f"AIDA CPU, one-core basis: {number('aida_cpu_core_percent')} (can exceed 100% across cores)",
-        f"AIDA CPU, machine-capacity basis: {number('aida_cpu_machine_percent')}",
-        f"Host CPU during the same window: {number('host_cpu_percent_same_window')}",
-        f"AIDA summed resident memory: {number('aida_rss_sum_bytes', ' MiB', 1024 ** 2)}",
-        f"Host memory utilization: {number('host_memory_percent')}",
-        f"AIDA observed read/write I/O: {number('aida_io_read_bytes_delta', ' KiB', 1024)} / {number('aida_io_write_bytes_delta', ' KiB', 1024)}",
-        f"Processes compared: {record['processes_compared']} | Unavailable reads: {record['processes_unavailable']}",
-        "", "INTERPRETATION LIMITS", *["- " + line for line in record["limitations"]],
-    ))
+    found, unknown = [], [
+        "One window describes concurrent activity; it does not establish the cause of a slowdown.",
+        "Memory totals can count shared memory more than once. Read and write counters do not necessarily represent physical disk activity.",
+        "Short-lived processes may be missed, and taking the measurement uses some resources itself.",
+    ]
+    fields = (("AIDA processor use, share of whole computer", "aida_cpu_machine_percent", "%", 1),
+              ("Whole computer processor use during the same window", "host_cpu_percent_same_window", "%", 1),
+              ("AIDA process memory total", "aida_rss_sum_bytes", " MiB", 1024 ** 2),
+              ("Whole computer memory use", "host_memory_percent", "%", 1),
+              ("AIDA data read during the window", "aida_io_read_bytes_delta", " KiB", 1024),
+              ("AIDA data written during the window", "aida_io_write_bytes_delta", " KiB", 1024))
+    for label, key, unit, divisor in fields:
+        value = number(key, unit, divisor)
+        (unknown if value == "unavailable" else found).append(f"{label}: {value}.")
+    if record.get("status") != "observed":
+        unknown.append("Some measurements or process comparisons were incomplete; the displayed values may cover only part of AIDA's activity.")
+    return render_report("AIDA resource observation", found=found, unknown=unknown,
+        next_steps=["Repeat the measurement while the slowdown occurs, then compare it with an idle period before deciding that AIDA is the cause."],
+        details=[f"Measurement: {record.get('measurement_id') or 'unavailable'}",
+                 f"Observed: {record.get('observed_at_utc') or 'unavailable'}; window: {number('elapsed_seconds', ' seconds')}; recorded status: {record.get('status') or 'unavailable'}",
+                 f"AIDA CPU, one-core basis: {number('aida_cpu_core_percent')} (can exceed 100% across cores)",
+                 f"Processes compared: {record.get('processes_compared', 'unavailable')}; unavailable reads: {record.get('processes_unavailable', 'unavailable')}",
+                 *(record.get("limitations") or [])])

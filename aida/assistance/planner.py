@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aida.assistance.models import ResponsePlan
+from aida.reporting import render_report
 from aida.security.threat_analysis import (
     ThreatAnalysisRecord,
     ThreatAssessmentLevel,
@@ -105,26 +106,21 @@ class GuidedResponsePlanner:
 
 
 def render_response_plan(plan: ResponsePlan) -> str:
-    lines = [
-        "GUIDED THREAT RESPONSE PLAN",
-        "",
-        f"Analysis ID: {plan.analysis_id}",
-        f"Target: {plan.target_path}",
-        f"Assessment: {plan.assessment.replace('_', ' ').title()}",
-        f"Confidence: {round(plan.confidence * 100)} percent",
-        f"Recommended action: {plan.recommended_action}",
-        "",
-        "Decision basis:",
-    ]
-    lines.extend(f"- {item}" for item in plan.rationale)
-    lines.extend(["", "Ordered safeguards:"])
-    lines.extend(
-        f"{index}. {item}"
-        for index, item in enumerate(plan.ordered_steps, start=1)
-    )
-    lines.extend(["", "Available Early Alpha actions:"])
-    lines.extend(f"- {item}" for item in plan.available_actions)
-    lines.extend(["", "Blocked Early Alpha actions:"])
-    lines.extend(f"- {item}" for item in plan.blocked_actions)
-    lines.extend(["", f"Remaining risk: {plan.remaining_risk}"])
-    return "\n".join(lines)
+    urgent = plan.assessment == "provider_confirmed_malicious"
+    found = [f"Target: {plan.target_path}",
+             f"{'Urgent review: ' if urgent else 'Recorded assessment: '}{plan.assessment.replace('_', ' ')}.",
+             "This is a response plan. It does not confirm that a scan or cleanup has been performed."]
+    unknown = [plan.remaining_risk, "The file and antivirus status may have changed since this analysis. They must be checked again before a response."]
+    if plan.reversible is None:
+        unknown.append("Whether the proposed response can be undone is not established.")
+    elif not plan.reversible:
+        unknown.append("The proposed response is recorded as irreversible; review its impact carefully.")
+    steps = [plan.recommended_action]
+    if plan.requires_authorization:
+        steps.append("A fresh confirmation for the exact target is required before the guarded action can proceed.")
+    details = [f"Analysis ID: {plan.analysis_id}", f"Internal confidence estimate: {plan.confidence:.0%}; this is not a measured probability of harm."]
+    details.extend("Decision basis: " + item.replace("File currently running: no", "No running process was linked in this analysis").replace("File currently running: yes", "A running process was linked when this analysis was recorded") for item in plan.rationale)
+    details.extend(f"Safeguard {index}: {item}" for index, item in enumerate(plan.ordered_steps, 1))
+    details.extend("Available action: " + item for item in plan.available_actions)
+    details.extend("Blocked action: " + item for item in plan.blocked_actions)
+    return render_report("Guided threat response plan", found=found, unknown=unknown, next_steps=steps, details=details)

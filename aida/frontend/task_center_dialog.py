@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from aida.assistance.models import AssistanceTaskRecord
+from aida.reporting import render_report
 from aida.assistance.store import AssistanceTaskStore
 from aida.authorization.confirmation import ConfirmationService
 
@@ -146,29 +147,39 @@ class TaskCenterDialog(QDialog):
 
 
 def _render_task(record: AssistanceTaskRecord) -> str:
-    lines = [
-        record.title,
-        "=" * len(record.title),
-        "",
-        f"Task ID: {record.task_id}",
-        f"Kind: {record.kind.value.replace('_', ' ').title()}",
-        f"State: {record.state.value.replace('_', ' ').title()}",
-        f"Risk: {record.risk.value.title()}",
-        f"Target: {record.target or 'Not applicable'}",
-        f"Authorization required: {'yes' if record.authorization_required else 'no'}",
-        f"Authorization ID: {record.authorization_id or 'none'}",
-        f"Reversible: {'unknown' if record.reversible is None else 'yes' if record.reversible else 'no'}",
-        f"Created: {record.created_at.astimezone().isoformat()}",
-        f"Updated: {record.updated_at.astimezone().isoformat()}",
-    ]
-    if record.progress_detail:
-        lines.extend(["", "Progress", "--------", record.progress_detail])
-    if record.result_summary:
-        lines.extend(["", "Result", "------", record.result_summary])
+    state = record.state.value
+    states = {
+        "planned": "A plan has been prepared; it has not run.",
+        "awaiting_authorization": "Waiting for your confirmation.",
+        "queued": "Waiting to start.", "running": "Work is in progress.",
+        "verifying": "Checking whether the action had the expected result.",
+        "cancellation_requested": "A stop was requested; it has not yet been confirmed.",
+        "completed": "The task has finished. Review its recorded result below.",
+        "failed": "The task could not finish successfully.",
+        "cancelled": "The task was stopped.",
+        "interrupted": "The task was interrupted before a final result was confirmed.",
+        "recovering": "AIDA is checking the state of an interrupted task.",
+    }
+    found = [states.get(state, "The task's progress is not recognized."),
+             f"Target: {record.target or 'No target recorded'}", record.progress_detail, record.result_summary]
+    unknown = ["A finished task does not by itself prove that the underlying problem is resolved; use the recorded verification result."]
+    if not record.result_summary:
+        unknown.append("No final result has been recorded.")
     if record.error_detail:
-        lines.extend(["", "Error", "-----", record.error_detail])
-    if record.metadata:
-        lines.extend(["", "Recorded context", "----------------"])
-        for key, value in sorted(record.metadata.items()):
-            lines.append(f"{key}: {value}")
-    return "\n".join(lines)
+        unknown.append("The task reported an error; its intended outcome is not confirmed.")
+    if record.reversible is None:
+        unknown.append("Whether any action can be undone is not recorded.")
+    steps = {
+        "awaiting_authorization": "Review the exact target and impact in the existing confirmation prompt before approving. If the prompt is no longer open, prepare the action again for a fresh confirmation.",
+        "planned": "Review the plan and its proposed action before continuing.",
+        "completed": "Read the result and verification details; if the problem remains, request another check.",
+        "failed": "Read the error details and recheck the current state before deciding whether to retry.",
+        "cancelled": "Review any partial result before starting another task; stopping work does not undo earlier actions.",
+        "interrupted": "Recheck the current state before retrying; the interrupted action may have partly completed.",
+    }.get(state, "Wait for a final result before treating this task as complete.")
+    return render_report(record.title, found=found, unknown=unknown, next_steps=[steps], details=[
+        f"Task ID: {record.task_id}; kind: {record.kind.value}; state: {state}; risk: {record.risk.value}.",
+        f"Authorization required: {'yes' if record.authorization_required else 'no'}; authorization ID: {record.authorization_id or 'none'}.",
+        f"Reversible: {'unknown' if record.reversible is None else 'yes' if record.reversible else 'no'}.",
+        f"Created: {record.created_at.astimezone().isoformat()}; updated: {record.updated_at.astimezone().isoformat()}.",
+        record.error_detail, *[f"{key}: {value}" for key, value in sorted(record.metadata.items())]])

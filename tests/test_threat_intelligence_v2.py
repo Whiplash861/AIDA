@@ -24,5 +24,5 @@ def test_report_keeps_actor_location_unknown_without_evidence(tmp_path):
 
     assert report.actor_confidence is AttributionConfidence.UNKNOWN
     assert report.actor_location == "Unknown"
-    assert "Threat Detection Analysis v2" in rendered
-    assert "Physical actor location: Unknown" in rendered
+    assert "What AIDA found" in rendered
+    assert "Physical actor location assessment: Unknown" in rendered

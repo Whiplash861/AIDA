@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 from collections.abc import Callable, Iterable
 
 import psutil
@@ -364,45 +366,76 @@ class AegisRemoteIntrusionService:
 
 
 def render_remote_intrusion_assessment(assessment: RemoteIntrusionAssessment) -> str:
-    lines = [
-        "AEGIS REMOTE INTRUSION ASSESSMENT",
-        "",
-        f"Assessment: {assessment.assessment_id}",
-        f"Classification: {assessment.classification.value.replace('_', ' ').title()}",
-        f"Intrusion likelihood: {round(assessment.intrusion_likelihood * 100)}%",
-        f"Evidence confidence: {round(assessment.confidence * 100)}%",
-        f"Urgency: {round(assessment.urgency * 100)}%",
-        f"Active RDP sessions: {len(assessment.active_sessions)}",
-        f"Remote-control tool processes: {len(assessment.remote_tools)}",
-        f"Provider detections: {assessment.provider_detection_count}",
-        f"Baseline changes: {assessment.baseline_change_count}",
-        f"Learned anomaly: {round(assessment.learning_anomaly_score * 100)}%",
+    from aida.aegis.explanations import explain_sensor_limitations
+
+    classification = assessment.classification
+    interpretations = {
+        RemoteAccessClassification.NO_REMOTE_ACTIVITY: "AIDA did not identify an active Remote Desktop session or a recognized remote-control program in the information it could read. This does not rule out every kind of remote access.",
+        RemoteAccessClassification.AUTHORIZED_SUPPORT: "Recorded activity matches the details of a support session you authorized. A match is context for review, not proof that every action is safe.",
+        RemoteAccessClassification.SUPPORT_SESSION_ANOMALOUS: "There is a support authorization, but other security evidence needs attention before treating the activity as expected support.",
+        RemoteAccessClassification.REMOTE_ACCESS_OBSERVED: "Remote-access activity or repeated sign-in attempts were recorded. This alone does not establish unauthorized control.",
+        RemoteAccessClassification.UNAUTHORIZED_SUSPECTED: "Recorded remote-access activity needs your review because AIDA could not sufficiently explain it as expected access.",
+        RemoteAccessClassification.LIKELY_INTRUSION: "The combination of recorded activity and security indicators warrants urgent review. The assessment alone does not identify an attacker.",
+        RemoteAccessClassification.CONFIRMED_INTRUSION: "You reported that the recorded remote access is unauthorized. AIDA also identified a current session or remote-control program that can be reviewed for containment.",
+        RemoteAccessClassification.DEGRADED: "Some checks could not be completed. AIDA cannot give a complete account of remote access from this check.",
+    }
+    found = [
+        f"Active Remote Desktop sessions recorded: {len(assessment.active_sessions)}.",
+        f"Recognized remote-control programs recorded: {len(assessment.remote_tools)}.",
+        f"Antivirus findings included in this check: {assessment.provider_detection_count}.",
+        *(_plain_remote_evidence(item) for item in assessment.evidence[:12]),
     ]
     if assessment.support_match is not None:
-        lines.extend(
-            [
-                "",
-                f"Authorized support context: {assessment.support_match.vendor_label}",
-                f"Support-match confidence: {round(assessment.support_match.confidence * 100)}%",
-            ]
-        )
-    if assessment.evidence:
-        lines.extend(["", "Evidence:"])
-        lines.extend(f"- {item}" for item in assessment.evidence[:12])
-    if assessment.counter_evidence:
-        lines.extend(["", "Context / counter-evidence:"])
-        lines.extend(f"- {item}" for item in assessment.counter_evidence[:8])
-    if assessment.degraded_reasons:
-        lines.extend(["", "Visibility limitations:"])
-        lines.extend(f"- {item}" for item in assessment.degraded_reasons[:8])
-    lines.extend(
-        [
-            "",
-            f"Recommended action: {assessment.recommended_action.replace('_', ' ')}",
-            "Aegis has not terminated a session, process, network adapter, or security control during this assessment.",
-        ]
-    )
-    return "\n".join(lines)
+        found.append(f"Support authorization considered: {assessment.support_match.vendor_label}.")
+    found.append("This check did not end sessions, stop programs, or change network or antivirus settings.")
+    unknown = [
+        *explain_sensor_limitations(assessment.degraded_reasons),
+        "A session or program name does not establish who is operating it or whether every action is authorized.",
+    ]
+    actions = {
+        "prepare_sentry_attack_protocol": "Review the exact sessions and programs in the Sentry containment plan. Nothing is stopped until you give its fresh, exact confirmation.",
+        "confirm_attacker_and_prepare_sentry": "Check whether you recognize the remote access. If you know it is unauthorized, tell AIDA so it can prepare a specific containment plan for your review.",
+        "interrupt_and_verify_support_session": "Verify the session with the support company using a contact method you already trust. If you know the access is unauthorized, request a containment plan.",
+        "monitor_authorized_support": "Check that the support session is still expected. Revoke its authorization when the work is finished; revoking the authorization does not disconnect it.",
+        "ask_user_to_verify_remote_access": "Confirm whether you recognize the recorded remote access before deciding on a response.",
+        "verify_remote_access_context": "Check whether the recorded activity matches support or remote access you requested.",
+        "monitor_remote_logon_attempts": "Review whether you expected the sign-in attempts. Repeat this check if attempts continue or new access appears.",
+        "restore_remote_intrusion_visibility": "Review the checks that could not finish. Check Windows Security and repeat the remote-access check when those sources are available.",
+        "preserve_evidence_and_run_aegis_scan": "Keep this report and request an Aegis security scan. A current session or program must be identified before Sentry can prepare containment.",
+        "observe": "If you still see unexpected remote activity, run another remote-access check while it is happening and review Windows Security.",
+    }
+    details = [
+        f"Assessment: {assessment.assessment_id}; recorded at: {assessment.created_at.isoformat()}",
+        f"Classification code: {classification.value}",
+        f"Intrusion indicator: {round(assessment.intrusion_likelihood * 100)}%; evidence confidence: {round(assessment.confidence * 100)}%; urgency: {round(assessment.urgency * 100)}%. These scores are not calibrated probabilities.",
+        f"Changes against saved comparison: {assessment.baseline_change_count}; learned anomaly: {round(assessment.learning_anomaly_score * 100)}%",
+        *(f"Session {item.session_id}: {item.account}; client {item.client_address or 'unknown'}; logon identity {item.logon_time}" for item in assessment.active_sessions),
+        *(f"Process {item.pid}: {item.display_name}; {item.executable}; created {item.create_time}" for item in assessment.remote_tools),
+        *assessment.counter_evidence,
+        *assessment.degraded_reasons,
+    ]
+    urgent = classification in {RemoteAccessClassification.LIKELY_INTRUSION, RemoteAccessClassification.CONFIRMED_INTRUSION, RemoteAccessClassification.SUPPORT_SESSION_ANOMALOUS}
+    return render_report("Urgent remote-access review" if urgent else "Remote-access review",
+                         found=found, unknown=unknown,
+                         next_steps=(actions.get(assessment.recommended_action, "Review the recorded activity before choosing another check or a response."),),
+                         interpretation=interpretations[classification], details=details)
+
+
+def _plain_remote_evidence(value: str) -> str:
+    if value.startswith("Current machine behavior is anomalous relative to Aegis's learned baseline"):
+        return "The behavior comparison flagged activity for review against earlier observations. This does not by itself establish harmful behavior."
+    return (value.replace("active RDP/Remote Desktop session(s) are present", "active Remote Desktop session(s) were recorded")
+        .replace("remote-interactive logon", "Remote Desktop sign-in")
+        .replace("Windows network logon event(s)", "Windows network sign-in event(s)")
+        .replace("these are weaker evidence than RemoteInteractive sessions", "these do not by themselves show that someone controlled the desktop")
+        .replace("remote-support/control process instance(s) are present", "remote-support or remote-control program(s) were running")
+        .replace("Remote-control tooling has spawned security-sensitive child process(es)", "Remote-control software started programs that can change important system settings")
+        .replace("new persistence item(s) differ from the established Aegis baseline", "new ways for programs to start automatically differ from the saved comparison of this computer")
+        .replace("new listening endpoint(s) differ from baseline", "new network addresses where programs accept connections differ from the saved comparison")
+        .replace("unresolved antivirus-provider detection(s) are active in the same assessment window", "unresolved antivirus finding(s) were reported during this check")
+        .replace("Endpoint protection", "Antivirus protection")
+        .replace("currently observable remote access", "remote access recorded in this check")
+        .replace("currently active RDP session or recognized remote-control process target", "active Remote Desktop session or recognized remote-control program"))
 
 
 def _confidence(

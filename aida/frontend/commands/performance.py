@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from aida.diagnostics.base import Finding
+from aida.diagnostics.renderer import render_findings, findings_speech
 from aida.diagnostics.performance_scan import (
     run_performance_diagnostics,
 )
@@ -48,96 +49,9 @@ class PerformanceScanExecutor(CommandExecutor):
         )
 
     @staticmethod
-    def _format_findings(
-        findings: Iterable[Finding],
-    ) -> str:
-        finding_list = list(findings)
-
-        if not finding_list:
-            return (
-                "Performance scan complete.\n\n"
-                "No performance findings were returned."
-            )
-
-        lines = [
-            "Performance scan complete.",
-            "",
-        ]
-
-        for finding in finding_list:
-            lines.append(finding.title)
-
-            lines.append(
-                f"Severity: {finding.severity.upper()}"
-            )
-
-            if finding.detail:
-                lines.append(
-                    f"Finding: {finding.detail}"
-                )
-
-            if finding.evidence:
-                lines.append("Evidence:")
-
-                for evidence_line in (
-                    finding.evidence.splitlines()
-                ):
-                    lines.append(
-                        f"  {evidence_line}"
-                    )
-
-            if finding.recommended_next:
-                lines.append(
-                    "Recommended next action: "
-                    f"{finding.recommended_next}"
-                )
-
-            lines.append("")
-
-        return "\n".join(lines).strip()
+    def _format_findings(findings: Iterable[Finding]) -> str:
+        return render_findings(findings, title="Performance scan report")
 
     @staticmethod
-    def _build_speech_summary(
-        findings: Iterable[Finding],
-    ) -> str:
-        finding_list = list(findings)
-
-        high_count = sum(
-            finding.severity.lower() == "high"
-            for finding in finding_list
-        )
-
-        medium_count = sum(
-            finding.severity.lower() == "medium"
-            for finding in finding_list
-        )
-
-        if high_count:
-            return (
-                "Performance scan complete. "
-                f"{high_count} high-priority "
-                "performance finding detected."
-                if high_count == 1
-                else
-                "Performance scan complete. "
-                f"{high_count} high-priority "
-                "performance findings detected."
-            )
-
-        if medium_count:
-            return (
-                "Performance scan complete. "
-                f"{medium_count} elevated "
-                "performance finding detected."
-                if medium_count == 1
-                else
-                "Performance scan complete. "
-                f"{medium_count} elevated "
-                "performance findings detected."
-            )
-
-        return (
-            "Performance scan complete. "
-            "System resources are operating "
-            "within normal parameters."
-        )
+    def _build_speech_summary(findings: Iterable[Finding]) -> str:
+        return findings_speech(findings, title="Performance scan report")

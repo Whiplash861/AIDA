@@ -9,5 +9,5 @@ def test_attribution_stays_conservative():
     assert report.threat_actor.startswith("Unknown")
     assert report.actor_location=="Unknown"
     text=render_threat_report(report)
-    assert "Observed network endpoints" in text
-    assert "Physical actor location: Unknown" in text
+    assert "Recorded network address" in text
+    assert "Physical actor location assessment: Unknown" in text

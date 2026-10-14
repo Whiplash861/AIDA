@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from aida.autonomy.models import ActionProposal, PolicyDecision
+from aida.reporting import render_report
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,9 +40,7 @@ def render_decision_report(report: AutonomousDecisionReport) -> str:
         if report.autonomy_enabled
         else "Manual control"
     )
-    lines = [
-        "AUTONOMOUS DECISION REPORT",
-        "",
+    details = [
         f"Report ID: {report.report_id}",
         f"Decision ID: {report.decision.decision_id}",
         f"Created: {report.created_at.astimezone().isoformat()}",
@@ -53,35 +52,21 @@ def render_decision_report(report: AutonomousDecisionReport) -> str:
         f"Authorization source: {report.authorization_source}",
         f"Decision: {report.decision.disposition.value.replace('_', ' ').title()}",
         f"Reason: {report.decision.reason}",
-        "",
-        "Threat assessment:",
         f"- Severity: {proposal.threat_severity or 'Not applicable'}",
         f"- Predicted classification: {proposal.predicted_threat or 'Not available'}",
         f"- Prediction confidence: {confidence}",
         f"- Action risk: {proposal.risk.name.replace('_', ' ').title()}",
     ]
-    if report.observed_evidence:
-        lines.extend(["", "Observed evidence:"])
-        lines.extend(f"- {item}" for item in report.observed_evidence)
-    if proposal.potential_impacts:
-        lines.extend(["", "Possible damage or disruption:"])
-        lines.extend(f"- {item}" for item in proposal.potential_impacts)
-    lines.extend(
-        [
-            "",
-            f"Action considered: {proposal.action_kind.value.replace('_', ' ').title()}",
-            f"Action taken: {report.action_taken}",
-            f"Provider result: {report.provider_result}",
-            f"Remaining risk: {report.remaining_risk}",
-        ]
+    return render_report(
+        "Automatic monitoring: decision review",
+        found=(*report.observed_evidence,
+               f"Action taken: {report.action_taken}.",
+               f"Antivirus response: {report.provider_result}.",
+               f"Permission decision: {report.decision.reason}"),
+        unknown=(report.remaining_risk,
+                 "A predicted threat or possible impact is an assessment, not a confirmed event or proof of who is responsible."),
+        next_steps=(report.recommended_follow_up or "Review the observations before choosing a response.",),
+        interpretation=(f"Action considered: {proposal.action_kind.value.replace('_', ' ')}. "
+                        + (f"Possible effects if the suspected threat is present: {'; '.join(proposal.potential_impacts)}" if proposal.potential_impacts else "")),
+        details=details,
     )
-    if report.recommended_follow_up:
-        lines.append(f"Recommended follow-up: {report.recommended_follow_up}")
-    lines.extend(
-        [
-            "",
-            "Observed facts and predicted conclusions are intentionally separated. "
-            "A prediction is not proof of identity, authorship, or physical location.",
-        ]
-    )
-    return "\n".join(lines)

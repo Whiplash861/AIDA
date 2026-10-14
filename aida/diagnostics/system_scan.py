@@ -17,7 +17,7 @@ def run_full_diagnostics(config) -> list[Finding]:
         # ----------------------------
         os_name = platform.system()
         os_version = platform.version()
-        cpu_count = psutil.cpu_count(logical=True) or 0
+        cpu_count = psutil.cpu_count(logical=True)
         total_ram_gb = round(psutil.virtual_memory().total / (1024**3), 2)
 
         # ----------------------------
@@ -70,16 +70,18 @@ def run_full_diagnostics(config) -> list[Finding]:
                 mem_mb = round(mem / (1024**2), 1)
                 findings.append(Finding(
                     id="perf.top_process",
-                    title="High memory process",
+                    title="One of the largest observed memory users",
                     severity="info",
                     detail=f"{name} using {mem_mb} MB RAM",
                 ))
 
         except Exception as exc:
             log.warning("Process memory scan failed: %s", exc)
+            findings.append(Finding(id="perf.processes_unavailable", title="Application memory use",
+                detail="AIDA could not read the application memory list. This does not establish a problem with those applications."))
 
         findings.append(Finding(id="sys.os", title="Operating system", severity="info", detail=f"{os_name} ({os_version})"))
-        findings.append(Finding(id="sys.cpu_cores", title="CPU logical cores", severity="info", detail=str(cpu_count)))
+        findings.append(Finding(id="sys.cpu_cores", title="CPU logical cores", severity="info", detail=str(cpu_count) if cpu_count is not None else "unavailable"))
         findings.append(Finding(id="sys.ram_total", title="Installed memory", severity="info", detail=f"{total_ram_gb} GB"))
     
         # ----------------------------
@@ -108,7 +110,7 @@ def run_full_diagnostics(config) -> list[Finding]:
                         title="Process running from a user-writable location",
                         severity="info",
                         detail=f"{name} ({exe_path}); location alone is not evidence of malicious behavior.",
-                        recommended_next="Correlate signer, behavior and provider evidence if investigation is warranted.",
+                        recommended_next="If you do not recognize this application, review its publisher and run an antivirus scan of the exact file before deciding whether it needs action.",
                     ))
 
                     if suspicious_count >= 5:
@@ -128,13 +130,15 @@ def run_full_diagnostics(config) -> list[Finding]:
                     if item.suffix.lower() in {".exe", ".lnk"}:
                         findings.append(Finding(
                             id="startup.entry",
-                            title="Startup entry detected",
+                            title="Application set to start when you sign in",
                             severity="info",
                             detail=str(item),
                         ))
 
         except Exception as exc:
             log.warning("Startup check failed: %s", exc)
+            findings.append(Finding(id="startup.entries_unavailable", title="Startup applications",
+                detail="AIDA could not read this startup folder. Other startup locations are not covered by this check."))
 
         log.info("Enhanced system diagnostics complete.")
 
@@ -184,7 +188,7 @@ def run_quickscan(config) -> list[Finding]:
     try:
         os_name = platform.system()
         os_version = platform.version()
-        cpu_count = psutil.cpu_count(logical=True) or 0
+        cpu_count = psutil.cpu_count(logical=True)
 
         vm = psutil.virtual_memory()
         total_ram_gb = round(vm.total / (1024**3), 2)
@@ -201,7 +205,7 @@ def run_quickscan(config) -> list[Finding]:
             id="sys.cpu",
             title="CPU logical cores",
             severity="info",
-            detail=str(cpu_count),
+            detail=str(cpu_count) if cpu_count is not None else "unavailable",
         ))
 
         findings.append(Finding(
@@ -222,7 +226,8 @@ def run_quickscan(config) -> list[Finding]:
             id="sys.quickscan_error",
             title="Quickscan error",
             severity="high",
-            detail=str(exc),
+            detail="The quickscan could not finish. Current system conditions remain unknown.",
+            evidence=type(exc).__name__,
         ))
 
     return findings

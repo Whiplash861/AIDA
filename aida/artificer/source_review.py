@@ -111,8 +111,15 @@ def annotations_for_finding(finding, captures: dict[str, bytes]) -> tuple[Source
 
 
 def render_annotation(annotation: SourceReviewAnnotation, *, state: str = "not_rechecked") -> str:
+    from aida.reporting import render_report
     code = "\n".join(f"{annotation.start_line + index:>5}: {line}" for index, line in enumerate(annotation.reviewed_code.splitlines())) or "(empty code span)"
-    return "\n".join((
+    source_state = {
+        "current": "The source still matches the captured review, and the finding is open.",
+        "stale_source": "The source changed after this review. The captured code is historical and cannot be used to stage a current change.",
+        "source_unavailable": "The current source could not be read, so this review cannot be checked against it.",
+        "finding_not_open": "The source finding is no longer open; this review cannot authorize a new candidate.",
+    }.get(state, "The source has not been rechecked for this display; the captured review may be out of date.")
+    details = (
         f"SOURCE REVIEW {annotation.review_id}", f"Finding: {annotation.finding_id}",
         f"Reviewed code: {annotation.path}:{annotation.start_line}-{annotation.end_line}",
         f"Symbol: {annotation.symbol}", f"Source state: {state}", f"Source SHA-256: {annotation.source_sha256}",
@@ -122,7 +129,17 @@ def render_annotation(annotation: SourceReviewAnnotation, *, state: str = "not_r
         *["- " + value for value in annotation.expected_outcomes], "", "REQUIRED VALIDATION",
         *["- " + value for value in annotation.validation_requirements], "",
         "This annotation is a review record. It has not changed the source file.",
-    ))
+    )
+    return render_report("Artificer source code review",
+        found=(f"Reviewed {annotation.path}, lines {annotation.start_line}–{annotation.end_line}, in {annotation.symbol}.",
+               "Recorded evidence: " + annotation.evidence, source_state),
+        interpretation="Proposed addition or change: " + annotation.proposed_change + "\nWhy: " + annotation.rationale,
+        unknown=("Expected outcomes have not been verified: " + ("; ".join(annotation.expected_outcomes) or "No expected outcome was recorded."),
+                 "This review has not changed the source or demonstrated the candidate's behavior."),
+        next_steps=(("Review the captured code below, then stage an isolated candidate if you want to evaluate the proposal." if state == "current" else
+                     "Run a fresh review and wait for the current source check before staging a candidate."),
+                    "Required validation: " + ("; ".join(annotation.validation_requirements) or "Define the missing validation requirements before proceeding.")),
+        details=details)
 
 
 class SourceReviewService:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 import base64
 import hashlib
 import json
@@ -481,71 +483,59 @@ class ThreatAnalysisService:
 
 
 def render_threat_analysis(record: ThreatAnalysisRecord) -> str:
+    from aida.aegis.explanations import explain_sensor_limitations
+
     identity = record.identity
-    lines = [
-        "THREAT DETECTION ANALYSIS",
-        "",
+    found = [
+        f"File reviewed: {identity.path}",
+        f"Activity recorded at the time of this check: {record.current_activity}",
+        *record.observed_facts,
+        *(item.description for item in record.indicators if item.observed),
+    ]
+    if record.provider_detection_id:
+        found.append(f"This review was linked to an antivirus detection from {record.provider_name or 'the antivirus provider'}.")
+    for process in record.process_observations:
+        found.append(f"The file was associated with running program {process.name} (process {process.pid}) at this check."
+                     + (f" Recorded network connections: {', '.join(process.network_endpoints)}." if process.network_endpoints else ""))
+    if record.persistence_observations:
+        found.append("Recorded ways the program may start or remain running: " + "; ".join(record.persistence_observations))
+    found.append("AIDA inspected the file without running it.")
+    labels = {
+        "insufficient_evidence": "There is not enough information to assess this file.",
+        "unknown": "The file's safety could not be determined.",
+        "low_concern": "The available checks found little cause for concern; this is not proof that the file is safe.",
+        "suspicious": "Some recorded features need investigation before this file should be trusted.",
+        "likely_malicious": "The recorded features suggest the file may be harmful. Review the evidence and antivirus findings.",
+        "provider_confirmed_malicious": "The antivirus provider identified this file as a threat.",
+    }
+    unknown = list(explain_sensor_limitations(record.remaining_uncertainty))
+    unknown.append("A file review cannot establish everything a program does when it runs.")
+    if not record.provider_detection_id:
+        unknown.append("This review was not matched to an antivirus detection; that does not establish that the file is safe.")
+    details = [
         f"Analysis ID: {record.analysis_id}",
-        f"Target: {identity.path}",
+        f"Recorded at: {record.created_at.isoformat()}",
         f"SHA-256: {identity.sha256 or 'not calculated'}",
         f"File size: {identity.file_size} bytes",
-        f"Detected file type: {identity.detected_type}",
-        f"Extension: {identity.extension or '(none)'}",
-        f"Signature: {identity.signature_state.value.replace('_', ' ').title()}",
+        f"Detected file type: {identity.detected_type}; extension: {identity.extension or '(none)'}",
+        f"Signature: {identity.signature_state.value.replace('_', ' ')}",
+        f"Signer: {identity.signer_subject or 'not recorded'}",
+        f"Signer thumbprint: {identity.signer_thumbprint or 'not recorded'}",
+        f"Publisher: {identity.publisher or 'not recorded'}; file version: {identity.file_version or 'not recorded'}",
+        f"Assessment code: {record.assessment.value}",
+        f"Analysis evidence score: {round(record.confidence * 100)} percent (heuristic; not a probability of harm)",
+        *(f"Indicator {item.code}: {item.description}; observed: {item.observed}" for item in record.indicators),
+        *record.inference_notes,
     ]
-    if identity.signer_subject:
-        lines.append(f"Signer: {identity.signer_subject}")
-    if identity.signer_thumbprint:
-        lines.append(f"Signer thumbprint: {identity.signer_thumbprint}")
-    if identity.publisher:
-        lines.append(f"Publisher: {identity.publisher}")
-    if identity.file_version:
-        lines.append(f"File version: {identity.file_version}")
-    lines.extend(
-        [
-            "",
-            f"Provider classification: {record.provider_name or 'No provider classification linked'}",
-            f"AIDA assessment: {record.assessment.value.replace('_', ' ').title()}",
-            f"Analysis evidence score: {round(record.confidence * 100)} percent (heuristic; not a calibrated probability)",
-            f"Current activity: {record.current_activity}",
-        ]
-    )
-    if record.observed_facts:
-        lines.extend(["", "Observed facts:"])
-        lines.extend(f"- {item}" for item in record.observed_facts)
-    if record.indicators:
-        lines.extend(["", "Static and contextual indicators:"])
-        lines.extend(
-            f"- {item.description} ({item.code})" for item in record.indicators
-        )
-    if record.process_observations:
-        lines.extend(["", "Observed processes:"])
-        for process in record.process_observations:
-            lines.append(
-                f"- PID {process.pid} {process.name}; parent PID {process.parent_pid or 'unknown'}"
-            )
-            if process.network_endpoints:
-                lines.append(
-                    "  Network endpoints: " + ", ".join(process.network_endpoints)
-                )
-    if record.persistence_observations:
-        lines.extend(["", "Persistence observations:"])
-        lines.extend(f"- {item}" for item in record.persistence_observations)
+    interpretation = labels.get(record.assessment.value, "Review the recorded observations before deciding whether to trust the file.")
     if record.possible_impacts:
-        lines.extend(["", "Potential damage or disruption:"])
-        lines.extend(f"- {item}" for item in record.possible_impacts)
-    if record.remaining_uncertainty:
-        lines.extend(["", "Remaining uncertainty:"])
-        lines.extend(f"- {item}" for item in record.remaining_uncertainty)
-    lines.extend(
-        [
-            "",
-            f"Recommended next step: {record.recommended_next_step}",
-            "",
-            "The analyzed file was not executed, imported, or dynamically loaded by AIDA.",
-        ]
-    )
-    return "\n".join(lines)
+        interpretation += " Possible effects if the suspected threat is present: " + "; ".join(record.possible_impacts)
+    title = "File security review"
+    if record.assessment.value in {"provider_confirmed_malicious", "likely_malicious"}:
+        title = "Priority security review: file may be harmful"
+    return render_report(title, found=found, unknown=unknown,
+                         next_steps=(record.recommended_next_step or "Review the antivirus findings and choose the next check before taking action.",),
+                         interpretation=interpretation, details=details)
 
 
 def _record_payload(record: ThreatAnalysisRecord) -> dict[str, Any]:

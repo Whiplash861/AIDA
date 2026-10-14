@@ -157,7 +157,7 @@ def test_confirmed_cancel_closes_durable_scan_record(tmp_path):
         original_text="confirm scan cancellation",
     ).execute()
 
-    assert "Provider-confirmed cancellation: yes" in result.transcript_text
+    assert "Microsoft Defender confirmed that the scan was cancelled." in result.transcript_text
     assert ledger.open_tasks() == []
 
 
@@ -196,7 +196,7 @@ def test_unconfirmed_cancel_keeps_durable_scan_active(tmp_path):
         original_text="confirm scan cancellation",
     ).execute()
 
-    assert "Provider-confirmed cancellation: no" in result.transcript_text
+    assert "Microsoft Defender did not confirm cancellation." in result.transcript_text
     assert len(ledger.open_tasks()) == 1
 
 

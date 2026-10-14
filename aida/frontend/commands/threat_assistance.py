@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 import getpass
 import logging
 import hashlib
@@ -401,17 +403,15 @@ class ThreatAssistanceExecutor(CommandExecutor):
             authorization_id=request.confirmation_id,
         )
         return CommandResult(
-            transcript_text=(
-                "GUARDED DEFENDER REMEDIATION\n\n"
-                f"Target: {candidate.path}\n"
-                f"Threat: {candidate.threat_name}\n"
-                f"Provider Threat ID: {candidate.threat_id}\n"
-                f"SHA-256: {candidate.sha256}\n"
-                "Active Defender threats: exactly 1\n\n"
-                "Remove-MpThreat acts on active Defender threats. AIDA will recheck that this remains the sole active threat and that the exact identity is unchanged before requesting elevation. Raw file deletion, exclusions, and Allow-on-device actions remain disabled.\n\n"
-                'Say "confirm defender remediation" within two minutes to proceed.\n'
-                f"Confirmation ID: {request.confirmation_id}"
-            ),
+            transcript_text=render_report("Review the Defender response before approval",
+                found=(f"File: {candidate.path}", f"Antivirus finding: {candidate.threat_name}.",
+                       "Microsoft Defender reports exactly one active threat. AIDA prepared a response request but has not executed it."),
+                unknown=("Preparing the request does not establish that the threat has been handled. Defender's response and the follow-up check are still pending.",),
+                next_steps=("Review the exact file and finding. AIDA will recheck that this is still the only active threat and that its identity has not changed before requesting Windows administrator approval.",
+                            'To proceed, say "confirm defender remediation" within two minutes.'),
+                details=(f"Provider Threat ID: {candidate.threat_id}", f"SHA-256: {candidate.sha256}",
+                         f"Confirmation ID: {request.confirmation_id}",
+                         "The guarded command is Remove-MpThreat. AIDA does not directly delete the file, add an exclusion, or use Allow on device.")),
             speech_text=(
                 "Guarded Defender remediation is ready. Say confirm defender remediation to proceed."
             ),
@@ -509,17 +509,18 @@ class ThreatAssistanceExecutor(CommandExecutor):
             promote=True,
         )
         return CommandResult(
-            transcript_text=(
-                "DEFENDER REMEDIATION RESULT\n\n"
-                f"Target: {candidate.path}\n"
-                f"Threat ID: {candidate.threat_id}\n"
-                f"SHA-256: {candidate.sha256}\n"
-                f"Command attempted: {'yes' if result.attempted else 'no'}\n"
-                f"Identity and sole-threat guard passed: {'yes' if result.guard_passed else 'no'}\n"
-                f"Provider-verified inactive: {'yes' if result.provider_verified else 'no'}\n"
-                f"Detail: {result.detail}\n\n"
-                "No raw filesystem deletion, Defender exclusion, or Allow-on-device action was performed."
-            ),
+            transcript_text=render_report("Defender response result",
+                found=(f"File: {candidate.path}",
+                       "The response command was attempted." if result.attempted else "The response command was not attempted.",
+                       "The follow-up antivirus check no longer reports this threat as active." if result.provider_verified
+                       else "The follow-up antivirus check did not verify that the threat is inactive."),
+                unknown=("This result concerns the named finding. It does not establish that every threat on the computer is absent." if result.provider_verified
+                         else "Do not assume the threat has been handled. Read the individual response details below.",),
+                next_steps=("Review the finding in Windows Security and request a follow-up scan to check for remaining evidence.",),
+                details=(f"Threat ID: {candidate.threat_id}", f"SHA-256: {candidate.sha256}",
+                         f"Identity and sole-threat guard passed: {result.guard_passed}",
+                         f"Provider-verified inactive: {result.provider_verified}", result.detail,
+                         "AIDA did not directly delete the file, add a Defender exclusion, or use Allow on device.")),
             speech_text=(
                 "Microsoft Defender no longer reports the threat as active."
                 if result.provider_verified
@@ -531,7 +532,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
         target = self.target_path or "the requested item"
         return CommandResult(
             transcript_text=(
-                "PERMANENT FILE DELETION BLOCKED\n\n"
+                "Permanent file deletion is unavailable\n\n"
                 f"Target: {target}\n\n"
                 "Early Alpha policy does not permit AIDA to permanently delete a suspicious file. Raw deletion is irreversible, may race with a changed file identity, and bypasses provider recovery and verification.\n\n"
                 "Available alternatives: analyze the exact file, locate it, run an explicit Defender scan, review Stand Down, or prepare guarded Defender remediation when the item is the sole active Defender threat."
@@ -544,12 +545,7 @@ class ThreatAssistanceExecutor(CommandExecutor):
     def _threat_center_summary(self) -> CommandResult:
         analyses = self.analysis.list_recent(limit=10)
         stand_downs = self.stand_down.list_active()
-        lines = [
-            "THREAT CENTER SUMMARY",
-            "",
-            f"Recent analyses: {len(analyses)}",
-            f"Active Stand Down exceptions: {len(stand_downs)}",
-        ]
+        lines = []
         if analyses:
             lines.extend(["", "Recent analyses:"])
             for item in analyses:
@@ -568,7 +564,11 @@ class ThreatAssistanceExecutor(CommandExecutor):
                 "Use the THREAT CENTER button for evidence navigation and response actions.",
             ]
         )
-        return CommandResult("\n".join(lines), "Threat Center summary ready.")
+        return CommandResult(render_report("File security review history",
+            found=(f"Showing {len(analyses)} saved file reviews (up to the latest 10).", f"Active Stand Down exceptions: {len(stand_downs)}."),
+            unknown=("A saved review describes the file at that time. Its assessment score is not a probability that the file is harmful. A Stand Down exception records your trust, not verified safety.",),
+            next_steps=("Use the Threat Center button to inspect the file evidence and choose a response. Recheck a file if it has changed since its saved review.",),
+            details=lines), "Threat Center summary ready.")
 
     def _task_center_summary(self) -> CommandResult:
         records = self.tasks.list_recent(limit=20)
@@ -585,7 +585,11 @@ class ThreatAssistanceExecutor(CommandExecutor):
                 "Use the TASK CENTER button to review details and request cooperative cancellation where available.",
             ]
         )
-        return CommandResult("\n".join(lines), "Task Center summary ready.")
+        return CommandResult(render_report("Assistance task history",
+            found=(f"Showing {len(records)} saved assistance tasks (up to the latest 20).",),
+            unknown=("A task status alone does not verify the outcome of a security response. Open its result to see what was checked.",),
+            next_steps=("Use the Task Center button to review details or request cancellation where available. A cancellation request is not proof that an action has stopped.",),
+            details=lines[2:]), "Task Center summary ready.")
 
     def _record_analysis(self, analysis) -> str:
         if self.investigations is None:

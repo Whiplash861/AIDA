@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 from enum import StrEnum
 
 from aida.aegis.engine import AegisEngine
@@ -105,7 +107,7 @@ class AegisRemoteSecurityExecutor(CommandExecutor):
         text = render_remote_intrusion_assessment(assessment)
         if assessment.classification is RemoteAccessClassification.AUTHORIZED_SUPPORT:
             speech = (
-                "Aegis found remote-access activity consistent with an active authorized support window. Monitoring remains active, and the authorization will not suppress stronger security evidence."
+                "Aegis found remote-access activity that matches an active support authorization. This does not prove every action is safe; stronger security evidence still needs review."
             )
         elif assessment.classification in {
             RemoteAccessClassification.SUPPORT_SESSION_ANOMALOUS,
@@ -119,7 +121,7 @@ class AegisRemoteSecurityExecutor(CommandExecutor):
                 "Aegis found remote-access evidence that does not currently have a sufficient authorized explanation. Verify whether you recognize the session."
             )
         elif assessment.classification is RemoteAccessClassification.NO_REMOTE_ACTIVITY:
-            speech = "Aegis did not identify a currently active remote-access containment target in the observable evidence set."
+            speech = "Aegis did not identify an active Remote Desktop session or recognized remote-control program in the information it could read. Review any incomplete checks."
         else:
             speech = "Aegis remote-access assessment complete. Review the local evidence and visibility notes."
         return CommandResult(transcript_text=text, speech_text=speech)
@@ -149,29 +151,22 @@ class AegisRemoteSecurityExecutor(CommandExecutor):
             if authorization.expected_tools
             else "not specified"
         )
-        transcript = "\n".join(
-            [
-                "AEGIS REMOTE SUPPORT AUTHORIZATION",
-                "",
-                f"Vendor / support label: {authorization.vendor_label}",
-                f"Authorization ID: {authorization.authorization_id}",
-                f"Starts: {authorization.starts_at.isoformat()}",
-                f"Expires: {authorization.expires_at.isoformat()}",
-                f"Expected remote tool(s): {tools}",
-                f"Expected accounts: {', '.join(authorization.expected_accounts) or 'not specified'}",
-                f"Expected client addresses: {', '.join(authorization.expected_source_addresses) or 'not specified'}",
-                "",
-                "This authorization gives Aegis context for distinguishing expected support from unexplained remote access.",
-                "It does not create an antivirus exclusion, allow rule, firewall exception, or permanent trust decision.",
-                "Strong malicious evidence can override the support context and produce an anomalous-support or intrusion alert.",
-                "Support authorization is not used as machine-learning ground truth.",
-                "A generic window or a matching tool name does not verify a particular remote session or operator.",
-            ]
-        )
+        transcript = render_report("Remote support authorization recorded",
+            found=(f"Support label: {authorization.vendor_label}.",
+                   f"Starts: {authorization.starts_at.isoformat()}; expires: {authorization.expires_at.isoformat()}.",
+                   f"Expected programs: {tools}.",
+                   f"Expected accounts: {', '.join(authorization.expected_accounts) or 'not specified'}.",
+                   f"Expected client addresses: {', '.join(authorization.expected_source_addresses) or 'not specified'}."),
+            unknown=("The authorization records what you expect. A company label or matching program name does not verify a particular session or operator.",
+                     "Recording this authorization does not establish whether background monitoring is currently running."),
+            next_steps=("Check that these details match the support you requested. Revoke the authorization when the work ends.",
+                        "Use a remote-access check to review current activity. Stronger security evidence can still raise an alert during authorized support."),
+            details=(f"Authorization ID: {authorization.authorization_id}",
+                     "No antivirus exclusion, firewall exception, permanent trust decision, or training label was created."))
         return CommandResult(
             transcript_text=transcript,
             speech_text=(
-                f"Remote support for {authorization.vendor_label} is authorized for {duration} minutes. Aegis will keep monitoring the session normally."
+                f"Remote support for {authorization.vendor_label} is recorded as expected for {duration} minutes. This does not verify the operator or disable security checks."
             ),
         )
 
@@ -196,7 +191,11 @@ class AegisRemoteSecurityExecutor(CommandExecutor):
                 ]
             )
         return CommandResult(
-            transcript_text="\n".join(lines),
+            transcript_text=render_report("Active remote support authorizations",
+                found=(f"{len(active)} support authorization window(s) are active.",),
+                unknown=("An authorization records your expectation; it does not prove that an observed session belongs to the intended operator.",),
+                next_steps=("Review the labels and expiry times below. Revoke a window when support finishes; revoking it does not disconnect the session.",),
+                details=lines[2:]),
             speech_text=f"Aegis has {len(active)} active remote support authorization window{'s' if len(active) != 1 else ''}.",
         )
 
@@ -270,7 +269,7 @@ class AegisRemoteSecurityExecutor(CommandExecutor):
         return CommandResult(
             transcript_text=assessment_text + "\n\n" + render_sentry_plan(plan),
             speech_text=(
-                "Aegis has confirmed your attacker declaration against current remote-access evidence and prepared Sentry containment. Review the plan and use the exact confirmation phrase only if you want Sentry to execute it."
+                "You reported unauthorized remote access, and Aegis identified current targets for a Sentry plan. Review the exact targets and confirmation phrase before approving containment."
             ),
         )
 
@@ -366,7 +365,10 @@ def _sentry_scope(plan) -> dict[str, object]:
 
 def _unavailable() -> CommandResult:
     return CommandResult(
-        transcript_text="Aegis Remote Intrusion Intelligence is not available in the current runtime.",
+        transcript_text=render_report("Remote-access check unavailable",
+            found=("AIDA could not use its remote-access checking service in this session.",),
+            unknown=("Current remote activity was not checked by this request.",),
+            next_steps=("Review Windows Security and any remote-support programs you recognize. Restart AIDA and retry the check if the service should be available.",)),
         speech_text="Remote intrusion intelligence is not available in the current runtime.",
     )
 

@@ -10,6 +10,7 @@ from aida.frontend.commands.base import (
 )
 from aida.memory.renderer import render_memory
 from aida.memory.service import MemoryService
+from aida.reporting import render_report
 
 
 class MemoryOperation(StrEnum):
@@ -92,9 +93,7 @@ class MemoryCommandExecutor(CommandExecutor):
             )
             return CommandResult(
                 transcript_text=(
-                    "Memory added.\n\n"
-                    f"Memory ID: {item.memory_id}\n"
-                    f"{item.summary}"
+                    "Memory added.\n\n" + render_memory(item)
                 ),
                 speech_text="The memory was added to your local Memory Bank.",
             )
@@ -138,26 +137,30 @@ class MemoryCommandExecutor(CommandExecutor):
         )
         return CommandResult(
             transcript_text=(
-                "Memory revised.\n\n"
-                f"Memory ID: {item.memory_id}\n"
-                f"Current summary: {item.summary}"
-                + ("\nThis correction conflicts with stored facts and is excluded from factual retrieval until reconciled."
-                   if item.status.value == "disputed" else "")
+                "Memory revised.\n\n" + render_memory(item)
             ),
-            speech_text="The selected memory was revised.",
+            speech_text=("The wording was revised, but the saved facts still need review before this memory can be used as fact."
+                         if item.status.value == "disputed" else "The selected memory was revised."),
         )
 
 
 def _list_result(items: list[object], heading: str) -> CommandResult:
     if not items:
         return CommandResult(
-            transcript_text=f"{heading}\n\nNo matching memories were found.",
+            transcript_text=render_report(heading,
+                found=("No matching memories were found.",),
+                unknown=("This result does not establish that the event never happened; it may not have been saved, may be excluded from current recall, or may use different wording.",),
+                next_steps=("Try the application name, symptom, or a shorter search phrase. Open Memory and choose Recent to browse saved records.",)),
             speech_text="No matching memories were found.",
         )
     rendered = []
     for item in items:
         rendered.append(render_memory(item))
     return CommandResult(
-        transcript_text=heading + "\n\n" + "\n\n---\n\n".join(rendered),
+        transcript_text=render_report(heading,
+            found=(f"{len(items)} saved record(s) are shown below.",),
+            unknown=("These are selected stored records, not a fresh investigation or a complete account of past activity.",),
+            next_steps=("Review each record's date, source and current use before relying on it. Use its Memory ID for a specific correction or removal.",))
+            + "\n\n---\n\n" + "\n\n---\n\n".join(rendered),
         speech_text=f"{len(items)} matching memories are available in the transcript.",
     )

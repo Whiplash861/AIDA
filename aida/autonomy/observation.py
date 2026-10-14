@@ -168,16 +168,17 @@ def _evidence_lines(observation: SecurityObservation) -> tuple[str, ...]:
         f"Provider active: {_bool_text(observation.provider_active)}",
         f"Provider healthy: {_bool_text(observation.provider_healthy)}",
         "Real-time protection: " + _bool_text(observation.real_time_protection),
-        "Signatures current: " + _bool_text(observation.signatures_current),
+        "Antivirus threat definitions up to date: " + _bool_text(observation.signatures_current),
         (
             f"Active scan: {observation.active_scan_description}"
             if observation.active_scan_description
-            else "Active scan: none detected"
+            else "No active scan was identified in the available scan information."
         ),
         f"Active Stand Down exceptions: {observation.active_stand_down_count}",
     ]
     unresolved = [item for item in observation.detections if item.unresolved]
-    lines.append(f"Unresolved provider detections: {len(unresolved)}")
+    lines.append(f"Unresolved antivirus findings: {len(unresolved)}" if observation.detections_available
+                 else "Antivirus findings could not be read; the number of unresolved findings is unknown.")
     if observation.threat_analysis_summaries:
         lines.append("Read-only threat-analysis snapshots:")
         lines.extend(
@@ -196,6 +197,8 @@ def _summary(
         base = "Observation could not read provider findings. The threat state remains unknown."
     elif unresolved:
         base = f"Observation found {unresolved} unresolved provider detection(s)."
+    elif observation.provider_healthy is None:
+        base = "Observation could not confirm antivirus health."
     elif not observation.provider_healthy:
         base = "Observation found degraded antivirus-provider health."
     else:
@@ -221,7 +224,7 @@ def _follow_up(
     operational: bool,
 ) -> str:
     if not operational:
-        return "Continue deterministic monitoring."
+        return "Review any new notices while automatic monitoring is enabled. Request a scan if you need a fresh antivirus check."
     if disposition is PolicyDisposition.REQUIRE_USER:
         return "Review and explicitly authorize any operational response."
     if disposition is PolicyDisposition.ALLOW:

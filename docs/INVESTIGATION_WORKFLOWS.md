@@ -2,6 +2,8 @@
 
 These additions build on the October reliability checkpoint. AIDA owns the conversation and coordinates explicitly selected read-only Engine checks. Evidence, inference, a proposed response, authorization, and verified results remain separate records.
 
+The [Engine reporting standard](ENGINE_REPORTING.md) applies this explanation style across AIDA: what was found, what remains unknown, and what to do next. It covers desktop, mobile, spoken summaries, saved records, and proposed responses while preserving each Engine's authority boundaries.
+
 ## Desktop investigation commands
 
 - `investigate: my computer slowed down after installing a program` starts a local case, retrieves relevant eligible Memory, and collects Aegis provider status and Technomancer machine-health evidence through the Engine coordinator. The objective labels the case; it cannot generate executable commands.

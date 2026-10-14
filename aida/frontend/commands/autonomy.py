@@ -5,6 +5,7 @@ import getpass
 from enum import StrEnum
 
 from aida.autonomy.controller import AutonomyController
+from aida.reporting import render_report
 from aida.frontend.commands.base import (
     CommandCategory,
     CommandExecutor,
@@ -39,7 +40,7 @@ class AutonomyCommandExecutor(CommandExecutor):
     def start_message(self) -> str:
         return {
             AutonomyOperation.ENABLE: (
-                "Enabling Controlled Autonomy at Observation level."
+                "Enabling automatic monitoring within the saved permissions."
             ),
             AutonomyOperation.DISABLE: (
                 "Disabling autonomy and routing operational decisions to the user."
@@ -74,18 +75,18 @@ class AutonomyCommandExecutor(CommandExecutor):
                         "switch is engaged."
                     ),
                 )
+            level = settings.level.name.replace('_', ' ').title()
             text = (
-                "Controlled Autonomy is enabled at Observation level.\n\n"
-                "AIDA may monitor, report, and recover existing tasks. "
-                "Autonomous Surface Scans remain disabled until Limited Triage "
-                "is separately configured. Full Sweeps, cancellation, Stand Down, "
-                "repairs, resets, cache clearing, and process termination remain manual."
+                f"Automatic monitoring is enabled at the {level} permission level.\n\n"
+                "AIDA may observe and report within its saved permissions. "
+                "Enabling monitoring does not itself start a scan or authorize a security response. "
+                "Use 'autonomy status' to review the saved permissions."
             )
             return CommandResult(
                 transcript_text=text,
                 speech_text=(
-                    "Controlled Autonomy enabled at Observation level. "
-                    "Operational changes still require your authorization."
+                    f"Automatic monitoring enabled at the {level} permission level. "
+                    "No security response was authorized by this change."
                 ),
             )
 
@@ -94,9 +95,8 @@ class AutonomyCommandExecutor(CommandExecutor):
             return CommandResult(
                 transcript_text=(
                     "Autonomy is disabled.\n\n"
-                    "AIDA may continue observing and reporting, but every "
-                    "operational decision will be routed to the user first, "
-                    "regardless of severity."
+                    "Automatic background observation is disabled. You can still request checks manually. "
+                    "Disabling autonomy does not cancel an antivirus scan that is already running."
                 ),
                 speech_text=(
                     "Autonomy disabled. All operational decisions now require you."
@@ -105,19 +105,14 @@ class AutonomyCommandExecutor(CommandExecutor):
 
         settings = self.controller.settings
         return CommandResult(
-            transcript_text=(
-                "AUTONOMY STATUS\n\n"
-                f"Enabled: {'yes' if settings.enabled else 'no'}\n"
-                f"Level: {settings.level.name.replace('_', ' ').title()}\n"
-                + (
-                    "Kill switch: engaged\n"
-                    if settings.kill_switch_engaged
-                    else "Kill switch: not engaged\n"
-                )
-                + f"Autonomous Surface Scan permission: "
-                f"{'enabled' if settings.allow_autonomous_surface_scan else 'disabled'}\n"
-                "Full-System Sweeps and remediation: manual only"
-            ),
+            transcript_text=render_report("Automatic monitoring permissions",
+                found=(f"Automatic monitoring is {'enabled' if settings.enabled else 'disabled'}.",
+                       f"Permission level: {settings.level.name.replace('_', ' ').title()}.",
+                       f"Emergency stop is {'engaged' if settings.kill_switch_engaged else 'not engaged'}.",
+                       f"Permission for automatic Surface Scans: {'enabled' if settings.allow_autonomous_surface_scan else 'disabled'}.",
+                       "Full-System Sweeps and threat-removal actions still require your authorization."),
+                unknown=("These settings describe permission, not proof that each background check is running or that the computer is safe.",),
+                next_steps=("Request a security status check to see what AIDA can currently read. Use 'disable autonomy' to turn off automatic background observation.",)),
             speech_text=(
                 f"Autonomy is {'enabled' if settings.enabled else 'disabled'} "
                 f"at {settings.level.name.lower()} level."

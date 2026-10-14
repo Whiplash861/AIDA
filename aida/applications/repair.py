@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 from aida.applications.models import (
     ApplicationHealthAssessment,
     ApplicationHealthState,
@@ -196,28 +198,26 @@ class ApplicationRepairPlanner:
 
 
 def render_repair_plan(plan: RepairPlan) -> str:
-    lines = [
-        "APPLICATION RECOVERY PLAN",
-        "",
-        f"Application: {plan.application_name}",
-        f"Proposed action: {plan.action.value.replace('_', ' ').title()}",
-        f"Supported now: {'Yes' if plan.supported else 'No'}",
-        f"Requires confirmation: {'Yes' if plan.requires_confirmation else 'No'}",
-        f"Requires elevation: {'Yes' if plan.requires_elevation else 'No'}",
-        f"Potential data loss: {'Yes' if plan.destructive else 'No'}",
-        "",
-        plan.summary,
-        f"Impact: {plan.impact}",
-    ]
-    if plan.steps:
-        lines.extend(["", "Planned steps:"])
-        lines.extend(f"- {step}" for step in plan.steps)
-    if plan.verification:
-        lines.extend(["", "Verification:"])
-        lines.extend(f"- {step}" for step in plan.verification)
-    if plan.reason_unavailable:
-        lines.extend(["", f"Execution status: {plan.reason_unavailable}"])
-    return "\n".join(lines)
+    found = [f"Proposed action: {plan.action.value.replace('_', ' ')}.", plan.summary,
+             "This report describes a plan; it does not confirm that any repair has run.", f"Expected impact: {plan.impact}"]
+    unknown = ["Whether this action will resolve the problem remains unverified. Check the application again after any approved action."]
+    steps = []
+    if plan.destructive:
+        found.append("Potential data loss: this action may discard work or reset application data.")
+        steps.append("Save your work and review what may be lost before approving this action.")
+    if not plan.supported:
+        unknown.append(plan.reason_unavailable or "AIDA cannot perform this action through the available recovery tools.")
+        steps.append("Review the application's built-in recovery options or ask for help choosing a supported action.")
+    else:
+        steps.append("Review the proposed steps and expected impact before proceeding.")
+        if plan.requires_confirmation:
+            steps.append("Your confirmation is required before AIDA can carry out this action.")
+        if plan.requires_elevation:
+            steps.append("This action also requires Windows administrator permission.")
+    details = [*[f"Planned step: {item}" for item in plan.steps],
+               *[f"Verification after the action: {item}" for item in plan.verification],
+               *[f"Recovery option: {item}" for item in plan.rollback]]
+    return render_report(f"Application recovery plan: {plan.application_name}", found=found, unknown=unknown, next_steps=steps, details=details)
 
 
 def _default_action(

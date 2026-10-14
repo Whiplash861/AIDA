@@ -61,8 +61,8 @@ class PerceptionEvidence:
 
     def compact_summary(self) -> str:
         subject = self.local_path.name if self.local_path else self.kind.value
-        confidence_text = f"{self.confidence:.2f}"
+        source = self.source.value.replace("_", " ")
         return (
             f"{self.kind.value.upper()} evidence: {subject}; "
-            f"source={self.source.value}; capture confidence={confidence_text}"
+            f"supplied through {source}; capture alone does not establish a diagnosis"
         )

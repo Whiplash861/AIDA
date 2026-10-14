@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 from dataclasses import replace
 
 import threading
@@ -728,91 +730,56 @@ class AegisEngine:
 
 
 def render_intelligent_scan(result: IntelligentScanResult) -> str:
+    from types import SimpleNamespace
+    from aida.investigations.presentation import explain_event
+
     case = result.case
     strategy = case.scan_strategy.replace("_", " ").title()
-    lines = [
-        f"AEGIS {strategy.upper()} SECURITY SCAN",
-        "",
-        f"Mode: {strategy}",
-        f"Case: {case.case_id}",
-        f"Assessment: {case.status.value.replace('_', ' ').title()}",
-        "The following scores are heuristic indicators, not calibrated probabilities.",
-        f"Threat likelihood indicator: {round(case.risk.likelihood * 100)}%",
-        f"Potential impact: {round(case.risk.impact * 100)}%",
-        f"Current activity: {round(case.risk.activity * 100)}%",
-        f"Persistence concern: {round(case.risk.persistence * 100)}%",
-        f"Exposure concern: {round(case.risk.exposure * 100)}%",
-        f"Urgency: {round(case.risk.urgency * 100)}%",
-        f"Overall risk: {round(case.risk.overall * 100)}%",
-        f"Evidence coverage: {round(case.coverage.overall * 100)}%",
-        "",
-        "Adaptive learning:",
-        f"- Model version: {case.learning_model_version}",
-        f"- Trusted samples before this assessment: {case.learning_sample_count}",
-        f"- Learned anomaly: {round(case.learning_anomaly_score * 100)}%",
-        f"- Learning confidence: {round(case.learning_confidence * 100)}%",
-        f"- Model state: {'WARMING UP' if case.learning_warmup else 'ACTIVE'}",
-        f"- Current sample accepted for learning: {'yes' if result.learning_sample_accepted else 'no'}",
-        "",
-        case.summary,
-        "",
-        "Security-relevant change review:",
-        f"- New process images: {len(case.baseline_delta.new_process_paths)}",
-        f"- New persistence entries: {len(case.baseline_delta.new_persistence)}",
-        f"- New listening endpoints: {len(case.baseline_delta.new_listeners)}",
-        f"- Provider detections correlated: {case.provider_detection_count}",
-        f"- Files locally analyzed: {case.analyzed_file_count}",
-        f"- Evidence graph: {len(case.evidence_nodes)} node(s), {len(case.evidence_edges)} relationship(s)",
+    explanation = explain_event(SimpleNamespace(kind="aegis_assessment", data=case.to_record(),
+        summary=case.summary, source_reference=case.case_id), severity="info")
+    found = [
+        *explanation.observations,
+        "This Aegis review did not delete, quarantine, restore, exclude, or stop anything, and did not change antivirus protection.",
     ]
+    unknown = [
+        *explanation.limitations,
+        "Scores and suggested explanations help prioritize review; they do not prove that recorded activity is harmful.",
+    ]
+    next_steps = {
+        "full_sweep_recommended": ("Request a Full-System Sweep to check more of the computer. Aegis did not start it automatically.",),
+        "targeted_investigation_recommended": ("Review the named files and antivirus findings before approving any response.",),
+        "additional_evidence_recommended": ("Review the incomplete checks below and repeat the relevant check when it is available.",),
+    }.get(case.escalation, ("Review any unresolved antivirus findings. The available evidence did not call for a broader scan at this check.",))
+    next_steps = explanation.next_steps + next_steps
+    meaning = explanation.meaning
+    if explanation.title == "Security review needs context" and case.status in {AegisCaseStatus.ASSESSED, AegisCaseStatus.OBSERVED}:
+        meaning = ("The recorded file results do not identify a confirmed threat. Running programs, startup entries and network connections can be normal; their presence alone does not show that they are harmful.")
     if result.baseline_established:
-        lines.extend(
-            [
-                "",
-                "Aegis established the first machine security baseline from this low-risk, non-degraded assessment.",
-            ]
-        )
+        found.append("A saved comparison of this computer's programs and settings was established during this recorded assessment.")
     if result.baseline_candidate_id:
-        lines.extend(["", f"A baseline candidate is ready for review: {result.baseline_candidate_id}.",
-                      "Enter 'review Aegis baseline' to inspect the reference before deciding whether to accept it."])
-    if case.hypotheses:
-        lines.extend(["", "Competing hypotheses:"])
-        for item in case.hypotheses:
-            lines.append(
-                f"- {item.title}: {round(item.confidence * 100)}% ({item.category})"
-            )
-            for evidence in item.evidence_for[:3]:
-                lines.append(f"  Supports: {evidence}")
-            for evidence in item.evidence_against[:2]:
-                lines.append(f"  Counters: {evidence}")
-    lines.extend(["", "Escalation decision:"])
-    if case.escalation == "full_sweep_recommended":
-        lines.append(
-            "- Full-System Sweep recommended. Aegis did not start it automatically."
-        )
-    elif case.escalation == "targeted_investigation_recommended":
-        lines.append(
-            "- Additional targeted investigation recommended before any destructive response."
-        )
-    elif case.escalation == "additional_evidence_recommended":
-        lines.append(
-            "- Additional evidence is recommended because observable coverage was incomplete."
-        )
-    else:
-        lines.append(
-            "- No further scan escalation is currently justified by the correlated evidence."
-        )
-    if case.remaining_uncertainty:
-        lines.extend(["", "Remaining uncertainty:"])
-        lines.extend(f"- {item}" for item in case.remaining_uncertainty[:8])
-    lines.extend(
-        [
-            "",
-            "Aegis learned inference is advisory and did not override provider evidence or security policy.",
-            "Aegis did not delete, quarantine, restore, exclude, terminate, or weaken any security control.",
-            f"Aegis correlation phase elapsed: {result.elapsed_seconds:.2f}s",
-        ]
-    )
-    return "\n".join(lines)
+        found.append("A possible saved comparison is ready for your review; it has not been accepted automatically.")
+        next_steps += ("Enter 'review Aegis baseline' to inspect the proposed comparison before deciding whether to accept it.",)
+    details = [
+        f"Case: {case.case_id}; assessment state: {case.status.value}",
+        f"Recorded assessment summary: {case.summary}",
+        f"Strategy: {strategy}; provider verification recorded: {case.provider_verified}",
+        "The following scores are heuristic indicators, not calibrated probabilities.",
+        f"Threat likelihood indicator: {round(case.risk.likelihood * 100)}%; potential impact: {round(case.risk.impact * 100)}%",
+        f"Activity: {round(case.risk.activity * 100)}%; persistence concern: {round(case.risk.persistence * 100)}%; exposure concern: {round(case.risk.exposure * 100)}%",
+        f"Urgency: {round(case.risk.urgency * 100)}%; overall risk: {round(case.risk.overall * 100)}%; evidence coverage: {round(case.coverage.overall * 100)}%",
+        f"Learning model: {case.learning_model_version}; trusted samples: {case.learning_sample_count}; warmup: {case.learning_warmup}",
+        f"Learned anomaly: {round(case.learning_anomaly_score * 100)}%; learning confidence: {round(case.learning_confidence * 100)}%; sample accepted: {result.learning_sample_accepted}",
+        f"Evidence relationships: {len(case.evidence_nodes)} nodes, {len(case.evidence_edges)} links.",
+    ]
+    for item in case.hypotheses:
+        details.append(f"Possible explanation: {item.title}; score {round(item.confidence * 100)}%; category {item.category}.")
+        details.extend(f"Supporting observation: {evidence}" for evidence in item.evidence_for[:3])
+        details.extend(f"Counterpoint: {evidence}" for evidence in item.evidence_against[:2])
+    details.append(f"Aegis review elapsed: {result.elapsed_seconds:.2f}s")
+    urgent = case.status is AegisCaseStatus.THREAT_CONFIRMED or case.risk.urgency >= 0.82
+    priority = "Urgent review: " if urgent else "Review needed: " if case.status is AegisCaseStatus.ACTION_PENDING else ""
+    return render_report(priority + f"Aegis {strategy} security review",
+                         found=found, unknown=unknown, next_steps=next_steps, interpretation=meaning, details=details)
 
 
 def _matching_detection(

@@ -110,9 +110,9 @@ def test_status_executor_reports_provider_health() -> None:
     result = SecurityStatusExecutor(
         discovery_function=lambda: discovery(provider)
     ).execute()
-    assert "Selected adapter: Fake AV" in result.transcript_text
-    assert "Active: yes" in result.transcript_text
-    assert "Healthy: yes" in result.transcript_text
+    assert "Antivirus checked: Fake AV" in result.transcript_text
+    assert "Antivirus running: yes" in result.transcript_text
+    assert "Antivirus reports itself healthy: yes" in result.transcript_text
 
 
 def test_surface_scan_polls_until_provider_completion() -> None:
@@ -190,10 +190,10 @@ def test_detection_details_are_rendered_for_local_transcript() -> None:
     ).execute()
 
     assert (
-        "New or reactivated detections in this scan window: 1"
+        "New or reactivated antivirus findings during this scan window: 1"
         in result.transcript_text
     )
-    assert "DETECTION DETAILS" in result.transcript_text
+    assert "Individual antivirus findings" in result.transcript_text
     assert "Test.Threat" in result.transcript_text
     assert "C:\\bad.exe" in result.transcript_text
 

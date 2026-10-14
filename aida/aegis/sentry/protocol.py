@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 import os
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -295,66 +297,62 @@ class SentryAttackService:
 
 
 def render_sentry_plan(plan: SentryAttackPlan) -> str:
-    lines = [
-        "SENTRY ATTACK PROTOCOL",
-        "",
-        f"Plan: {plan.plan_id}",
-        f"Remote Desktop sessions targeted: {len(plan.session_targets)}",
-        f"Exact process targets: {len(plan.process_targets)}",
-        "",
-        "Containment scope:",
-        "- Revalidate and log off exact active RDP sessions captured in this plan.",
-        "- Revalidate and terminate exact recognized remote-control process lineage captured in this plan.",
-        "- Verify that targeted sessions/processes are no longer active.",
-        "",
-        "Sentry will NOT:",
-        "- disable a network adapter",
-        "- create firewall block rules",
-        "- delete files",
-        "- remove persistence",
-        "- disable or reconfigure antivirus",
+    targets = [
+        *(f"Remote Desktop session {target.session_id}: {target.domain}\\{target.username}; client {target.client_address}; logon identity {target.logon_time}" for target in plan.session_targets),
+        *(f"Process {target.pid}: {target.name}; {target.executable}; created {target.create_time}; parent {target.parent_pid}; {target.reason}" for target in plan.process_targets),
     ]
-    lines.extend(["", "Exact targets requiring approval:"])
-    for target in plan.session_targets:
-        lines.append(f"- RDP {target.session_id}: {target.domain}\\{target.username}; client {target.client_address}; logon identity {target.logon_time}")
-    for target in plan.process_targets:
-        lines.append(f"- Process {target.pid}: {target.name}; {target.executable}; created {target.create_time}; parent {target.parent_pid}; {target.reason}")
-    lines.append("Plan validity: two minutes from preparation; single use.")
-    if plan.limitations:
-        lines.extend(["", "Limitations:"])
-        lines.extend(f"- {item}" for item in plan.limitations)
-    lines.extend(
-        [
-            "",
-            "This is an active containment action and requires a fresh exact confirmation.",
-            f"Type exactly: {plan.required_phrase}",
-        ]
+    return render_report(
+        "Review before stopping remote access",
+        found=(
+            f"Sentry prepared a plan for {len(plan.session_targets)} Remote Desktop session(s) and {len(plan.process_targets)} exact program process(es).",
+            "No containment action has been taken by preparing this plan.",
+            *targets,
+        ),
+        unknown=(
+            *plan.limitations,
+            "These targets may change before you approve. Sentry will check their identities again and will not act on a changed or unverified target.",
+            "Stopping these targets does not establish that the rest of the computer is safe.",
+        ),
+        next_steps=(
+            "Review every target above. Approval will log off the listed sessions and stop the listed programs; work in those sessions or programs may be interrupted.",
+            f"If you want this exact action, type exactly: {plan.required_phrase}",
+            "The plan is valid for two minutes after preparation and can be used only once. If it expires, request a fresh plan.",
+        ),
+        details=(
+            f"Plan: {plan.plan_id}; prepared: {plan.created_at.isoformat()}",
+            "Scope: recheck target identities, log off listed sessions, stop listed processes, then verify their state.",
+            "Sentry does not disable a network adapter, create firewall rules, delete files, remove startup entries, or change antivirus settings.",
+        ),
     )
-    return "\n".join(lines)
 
 
 def render_sentry_result(result: SentryAttackResult) -> str:
-    lines = [
-        "SENTRY ATTACK PROTOCOL RESULT",
-        "",
-        f"Plan: {result.plan_id}",
-        f"State: {result.state.value.upper()}",
-        f"RDP session termination: {result.session_terminated}/{result.session_attempted}",
-        f"Process termination: {result.process_terminated}/{result.process_attempted}",
-        f"Remaining targeted sessions: {result.remaining_sessions}",
-        f"Remaining exact process targets: {result.remaining_process_targets}",
-        f"Verification complete: {'yes' if result.verification_complete else 'no; inspect visibility limitations'}",
+    found = [
+        f"Remote Desktop sessions reported ended: {result.session_terminated} of {result.session_attempted} attempted.",
+        f"Program processes reported stopped: {result.process_terminated} of {result.process_attempted} attempted.",
     ]
-    if result.details:
-        lines.extend(["", "Details:"])
-        lines.extend(f"- {item}" for item in result.details)
-    lines.extend(
-        [
-            "",
-            "Containment does not prove the machine is clean. Run an Aegis Adaptive Security Scan immediately after Sentry containment, and escalate to a Full-System Sweep if Aegis recommends it.",
-        ]
+    unknown = ["Stopping the listed targets does not prove the computer is clean or that every way to reconnect has been removed."]
+    if result.verification_complete:
+        found.extend((
+            "The follow-up check of the targeted sessions and programs completed.",
+            f"Targeted sessions still recorded: {result.remaining_sessions}; targeted processes still recorded: {result.remaining_process_targets}.",
+        ))
+    else:
+        unknown.append("The follow-up check could not verify every target. Remaining-target counts must not be treated as proof that all remote access ended.")
+    if result.state.value == "completed" and result.verification_complete:
+        conclusion = "The planned containment completed and its target check finished."
+    else:
+        conclusion = "Containment is not fully confirmed. Review the individual outcomes before assuming that remote access ended."
+    return render_report(
+        "Sentry containment result",
+        found=found, unknown=unknown,
+        next_steps=("Review any failed, remaining, or unverified targets below.",
+                    "Request an Aegis Adaptive Security Scan to check for other evidence. Run a Full-System Sweep if the follow-up review recommends it."),
+        interpretation=conclusion,
+        details=(f"Plan: {result.plan_id}; state: {result.state.value}",
+                 f"Remaining-target counts: sessions {result.remaining_sessions}; processes {result.remaining_process_targets}; verification complete: {result.verification_complete}",
+                 *result.details),
     )
-    return "\n".join(lines)
 
 
 def _session_matches(target: SentrySessionTarget, current: object) -> bool:

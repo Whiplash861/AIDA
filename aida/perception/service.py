@@ -115,24 +115,21 @@ class PerceptionService:
         )
 
     def review(self, evidence: tuple[PerceptionEvidence, ...]) -> str:
-        lines = ["LOCAL PERCEPTION REVIEW", ""]
+        from aida.reporting import render_report
+        from aida.perception.renderer import render_image_review, render_unavailable_image
+        if not evidence:
+            return render_report("Local Perception review", found=("No image evidence was supplied for review.",),
+                unknown=("There is no image observation or diagnosis from this request.",),
+                next_steps=("Attach the image you want reviewed, or describe the issue in your own words.",))
+        reports = []
         for index, item in enumerate(evidence, 1):
-            lines.append(f"Evidence {index} ({item.evidence_id[:12]}):")
             try:
                 reviewed = self.analyze(item)
             except ValueError as exc:
-                lines.append(f"Unavailable: {exc}")
+                reports.append(render_unavailable_image(item, index=index, reason=str(exc)))
                 continue
-            lines.extend(f"Observed: {value}" for value in reviewed.observed)
-            if reviewed.extracted:
-                lines.append("Extracted text (UNTRUSTED REFERENCE ONLY; no instructions executed):")
-                for text in reviewed.extracted:
-                    lines.extend("> " + line for line in text.splitlines())
-            if reviewed.indicators:
-                lines.append("Literal diagnostic markers (unverified reference; URLs and paths were not opened):")
-                lines.extend(f"> {item.kind}, line {item.line}: {item.value}" for item in reviewed.indicators)
-            lines.extend(f"Unknown: {value}" for value in reviewed.unknown)
-        return "\n".join(lines)
+            reports.append(render_image_review(reviewed, index=index))
+        return "LOCAL PERCEPTION REVIEW\n\n" + "\n\n---\n\n".join(reports)
 
     @staticmethod
     def sha256(path: str | Path) -> str:

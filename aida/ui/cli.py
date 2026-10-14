@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from aida.config import AidaConfig
 from aida.diagnostics.base import Finding
+from aida.diagnostics.renderer import render_findings, findings_speech, render_resource_comparison
 from aida.diagnostics.system_scan import run_file_scan, run_full_diagnostics, run_quickscan
 from aida.logging_utils import get_logger
 from aida.audio.voice import speak_text
@@ -404,7 +405,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
                         context_state["last_alert_time"] is None
                         or current_time - context_state["last_alert_time"] > 60
                     ):
-                        aida_say_text("Critical memory pressure detected.", config)
+                        aida_say_text("Memory use is high in this snapshot. That can happen during demanding work and does not establish a fault. Save your work, review running applications, and repeat the check if the slowdown continues.", config)
                         context_state["last_alert_time"] = current_time
 
             context_state["last_scan_time"] = current_time
@@ -474,7 +475,7 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
             except Exception as exc:
                 log.exception("Scan failed: %s", exc)
                 aida_say_text(
-                    "Scan failed. Manual diagnostic intake required.",
+                    "The scan could not finish, so its result remains unknown. Try again and describe what you were doing if the problem continues.",
                     config,
                 )
                 continue
@@ -492,156 +493,14 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
             else:
                 context_state["last_focus"] = "system"
 
-            if not findings:
-                if intent.name == "run_file_scan":
-                    aida_say_text(
-                        "The provider returned no verifiable scan result; security status remains unknown.",
-                        config,
-                    )
-                    aida_say_text("Security status requires verification. Standing by.", config)
-                else:
-                    aida_say_text(
-                        "Scan complete. No surface-level anomalies detected.",
-                        config,
-                    )
-                    aida_say_text("Diagnostic Prototype on standby.", config)
-                continue
-
+            title = {"run_perf_scan": "Performance scan report", "run_quickscan": "Quickscan report",
+                     "run_file_scan": "Security provider report"}[intent.name]
+            print(render_findings(findings, title=title))
             if intent.name == "run_perf_scan":
-                filtered = [
-                    line for line in _summarize_findings(findings)
-                    if any(
-                        k in line.lower()
-                        for k in ["memory", "ram", "process", "cpu", "usage", "performance", "optimize", "bottleneck"]
-                    )
-                ]
-                summary_lines = filtered if filtered else _summarize_findings(findings)
-            else:
-                summary_lines = _summarize_findings(findings)
-
-            summary_text = "\n".join(summary_lines)
-
-            memory_percent = None
-            cpu_percent = None
-            previous_memory_percent = None
-            previous_cpu_percent = None
-
-            memory_delta = None
-            cpu_delta = None
-
-            memory_delta_text = None
-            cpu_delta_text = None
-
-            memory_interpretation = None
-            cpu_interpretation = None
-
-            if intent.name == "run_perf_scan":
-                # Extract current and previous metrics once.
-                memory_percent = extract_memory_percent(context_state["last_findings"])
-                cpu_percent = extract_cpu_percent(context_state["last_findings"])
-
-                previous_memory_percent = extract_memory_percent(context_state["previous_findings"])
-                previous_cpu_percent = extract_cpu_percent(context_state["previous_findings"])
-
-                # Interpret current memory state.
-                for line in summary_lines:
-                    memory_interpretation = interpret_memory(line)
-                    if memory_interpretation:
-                        break
-
-                # Interpret current CPU state.
-                if cpu_percent is not None:
-                    cpu_interpretation = interpret_cpu(cpu_percent)
-
-                # Compare memory against previous scan.
-                if memory_percent is not None and previous_memory_percent is not None:
-                    memory_delta = round(memory_percent - previous_memory_percent, 1)
-
-                    if abs(memory_delta) >= 1:
-                        if memory_delta > 0:
-                            memory_delta_text = f"Memory usage increased by {memory_delta}% since last scan."
-                        else:
-                            memory_delta_text = f"Memory usage decreased by {abs(memory_delta)}% since last scan."
-
-                # Compare CPU against previous scan.
-                if cpu_percent is not None and previous_cpu_percent is not None:
-                    cpu_delta = round(cpu_percent - previous_cpu_percent, 1)
-
-                    if abs(cpu_delta) >= 2:
-                        if cpu_delta > 0:
-                            cpu_delta_text = f"CPU usage increased by {cpu_delta}% since last scan."
-                        else:
-                            cpu_delta_text = f"CPU usage decreased by {abs(cpu_delta)}% since last scan."
-
-            if intent.name == "run_file_scan":
-                aida_say_text(summary_text, config)
-                aida_say_text("Security status requires verification. Standing by.", config)
-
-            elif intent.name == "run_perf_scan":
-                aida_say_text(
-                    f"Performance scan complete. Findings detected: {len(findings)}.",
-                    config,
-                )
-
-                if memory_interpretation:
-                    aida_say_text(memory_interpretation, config)
-
-                if cpu_interpretation:
-                    aida_say_text(cpu_interpretation, config)
-
-                if memory_delta_text:
-                    aida_say_text(memory_delta_text, config)
-
-                if cpu_delta_text:
-                    aida_say_text(cpu_delta_text, config)
-
-                # 🔥 SYSTEM VERDICT
-                system_verdict = generate_system_verdict(
-                    memory_percent,
-                    cpu_percent,
-                    memory_delta,
-                    cpu_delta,
-                )
-
-                if system_verdict:
-                    aida_say_text(system_verdict, config)
-
-                # 🔥 REPAIR RECOMMENDATION
-                repair_recommendation = recommend_repair(
-                    memory_percent,
-                    cpu_percent,
-                    memory_delta,
-                    cpu_delta,
-                )
-
-                if repair_recommendation:
-                    aida_say_text(repair_recommendation, config)
-
-# Speak summarized findings (limited to avoid overload)
-                if summary_lines:
-                    aida_say_text("Top findings:", config)
-
-                seen = set()
-
-                aida_say_text(f"Top findings out of {len(findings)} detected:", config)
-
-                for line in summary_lines:
-                    if line not in seen:
-                        aida_say_text(line, config)
-                        seen.add(line)
-                    if len(seen) >= 3:
-                        break
-
-                print(summary_text)
-                aida_say_text("Diagnostic Prototype on standby.", config)
-
-            else:
-                aida_say_text(
-                    f"Quickscan complete. Findings detected: {len(findings)}. {summary_text}",
-                    config,
-                )
-                aida_say_text("Diagnostic Prototype on standby.", config)
-
+                comparison = render_resource_comparison(context_state["previous_findings"], findings)
+                if comparison:
+                    print(comparison)
+            aida_say_text(findings_speech(findings, title=title), config)
             continue
 
         if intent and intent.name == "open_settings":
@@ -739,21 +598,9 @@ def start_cli_loop(config: AidaConfig, initial_findings: List[Finding], brain: A
             else:
                 time_text = "recently"
 
-            if context_state["last_scan_type"] == "run_perf_scan":
-                aida_say_text(
-                    f"Last performance scan ran {time_text}. " + " ".join(_summarize_findings(context_state["last_findings"])),
-                    config,
-                )
-            elif context_state["last_scan_type"] == "run_quickscan":
-                aida_say_text(
-                    f"Last quickscan ran {time_text} and reported general system status.",
-                    config,
-                )
-            elif context_state["last_scan_type"] == "run_file_scan":
-                aida_say_text(
-                    f"Last security scan was requested {time_text}. " + " ".join(_summarize_findings(context_state["last_findings"])),
-                    config,
-                )
+            aida_say_text(f"This is the saved scan from {time_text}; it has not been repeated.", config)
+            print(render_findings(context_state["last_findings"], title="Saved scan report"))
+            aida_say_text("Review what remains unknown and the next steps in the report. Run a new check if conditions have changed.", config)
             continue
 
         context: List[str] = []

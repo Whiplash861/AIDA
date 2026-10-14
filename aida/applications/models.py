@@ -40,8 +40,8 @@ class ApplicationProcessObservation:
     name: str
     executable: Path | None
     responding: bool | None
-    cpu_percent: float
-    memory_bytes: int
+    cpu_percent: float | None
+    memory_bytes: int | None
     thread_count: int
     handle_count: int | None
     read_bytes: int | None

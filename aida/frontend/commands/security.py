@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 import getpass
 import re
 import time
@@ -97,9 +99,11 @@ class SecurityStatusExecutor(CommandExecutor):
                 exc,
             )
 
-        lines = ["Antivirus status complete.", ""]
+        found = []
+        details = []
+        unknown = ["This is a protection-status check, not a malware scan. It does not establish whether the computer is free of threats."]
         if discovery.products:
-            lines.append("Registered products:")
+            found.append("Antivirus products registered with Windows: " + ", ".join(product.display_name for product in discovery.products) + ".")
             for product in discovery.products:
                 state = (
                     product.state.name
@@ -107,38 +111,42 @@ class SecurityStatusExecutor(CommandExecutor):
                     else "UNKNOWN"
                 )
                 signatures = _yes_no_unknown(product.signatures_current)
-                lines.append(
+                details.append(
                     f"- {product.display_name}: "
                     f"state={state}, signatures current={signatures}"
                 )
         else:
-            lines.append(
+            found.append(
                 "Windows Security Center reported no registered antivirus products."
             )
 
-        lines.extend(
+        found.extend(
             [
-                "",
-                f"Selected adapter: {discovery.provider.display_name}",
-                f"Active: {_yes_no_unknown(status.active)}",
-                f"Healthy: {_yes_no_unknown(status.healthy)}",
+                f"Antivirus checked: {discovery.provider.display_name}",
+                f"Antivirus running: {_yes_no_unknown(status.active)}",
+                f"Antivirus reports itself healthy: {_yes_no_unknown(status.healthy)}",
                 (
                     "Real-time protection: "
                     f"{_yes_no_unknown(status.real_time_protection)}"
                 ),
                 (
-                    "Signatures current: "
+                    "Threat definitions up to date: "
                     f"{_yes_no_unknown(status.signatures_current)}"
                 ),
             ]
         )
         if discovery.detail:
-            lines.append(f"Discovery: {discovery.detail}")
+            details.append(f"Discovery: {discovery.detail}")
         if status.detail:
-            lines.append(f"Provider detail: {status.detail}")
+            details.append(f"Antivirus detail: {status.detail}")
+        if any(value is None for value in (status.active, status.healthy, status.real_time_protection, status.signatures_current)):
+            unknown.append("One or more protection settings could not be confirmed. Unknown is not the same as off or healthy.")
+        needs_review = any(value is not True for value in (status.active, status.healthy, status.real_time_protection, status.signatures_current))
 
         return CommandResult(
-            transcript_text="\n".join(lines),
+            transcript_text=render_report("Antivirus protection status", found=found, unknown=unknown,
+                next_steps=(("Open Windows Security to review any off, unhealthy, outdated, or unknown setting before relying on protection."
+                             if needs_review else "Request a security scan if you want the antivirus to check for threats."),), details=details),
             speech_text=(
                 f"{discovery.provider.display_name} status complete. "
                 f"Active {_spoken_bool(status.active)}. "
@@ -406,9 +414,11 @@ class SecurityScanExecutor(CommandExecutor):
             )
             if post_scan_snapshot is None and not outcome.detections_available:
                 result = CommandResult(
-                    transcript_text=(f"{self._scan_label()} completed.\n\n"
-                        "Provider findings are unavailable. A clean result cannot be established.\n"
-                        f"Detail: {outcome.detections_error or 'No findings interface was available.'}"),
+                    transcript_text=render_report(f"{self._scan_label()} completed; findings unavailable",
+                        found=("The antivirus reported that the scan finished.",),
+                        unknown=("AIDA could not read the scan findings. A clean result cannot be established.",),
+                        next_steps=("Open Windows Security to review the scan results. Repeat the findings check when it is available before deciding on a response.",),
+                        details=(f"Antivirus detail: {outcome.detections_error or 'No findings interface was available.'}",)),
                     speech_text=f"{self._scan_label()} completed, but its findings could not be read.",
                     security_outcome=outcome,
                 )
@@ -474,11 +484,11 @@ class SecurityScanExecutor(CommandExecutor):
             },
         )
         return CommandResult(
-            transcript_text=(
-                f"{self._scan_label()} did not complete.\n\n"
-                f"State: {outcome.status.state.name}\n"
-                f"Provider detail: {detail}"
-            ),
+            transcript_text=render_report(f"{self._scan_label()} did not complete",
+                found=(f"The antivirus reported the scan as {outcome.status.state.name.replace('_', ' ').lower()}.",),
+                unknown=("This scan did not produce a completed result. It cannot establish that the requested area is free of threats.",),
+                next_steps=("Review the antivirus details below and Windows Security. Request a new scan after resolving the reported problem if you still need the check.",),
+                details=(f"Provider detail: {detail}",)),
             speech_text=(
                 f"{self._scan_label()} did not complete. "
                 "Review the local transcript for provider details."
@@ -601,23 +611,30 @@ class SecurityScanExecutor(CommandExecutor):
         reconciliation: DetectionReconciliation,
         stand_down_results: dict[str, StandDownEvaluation],
     ) -> CommandResult:
-        lines = [
-            f"{self._scan_label()} complete.",
-            "",
-            f"Provider: {provider_name}",
-        ]
+        new_count = len(reconciliation.new_detections)
+        existing_count = len(reconciliation.unresolved_existing)
+        details = [f"Antivirus: {provider_name}"]
         if self._provider_started_at is not None:
-            lines.append(
+            details.append(
                 "Provider started: "
                 + self._provider_started_at.astimezone().strftime(
                     "%Y-%m-%d %H:%M:%S %Z"
                 )
             )
         if self._recovery_task_id is not None:
-            lines.append(
+            details.append(
                 "Monitoring continuity: recovered after AIDA restart"
             )
-        lines.extend(["", render_detection_reconciliation(reconciliation)])
+        lines = [render_report(f"{self._scan_label()} complete",
+            found=(f"{provider_name} reported that the requested scan finished.",
+                   f"New or reactivated antivirus findings during this scan window: {new_count}.",
+                   f"Earlier findings still unresolved: {existing_count}.",
+                   f"Findings the antivirus reports as resolved: {len(reconciliation.resolved)}."),
+            unknown=("This result covers the requested scan and the findings AIDA could read. It does not prove that every possible threat is absent.",
+                     "A finding first reported during the scan window is not necessarily caused or discovered by this scan."),
+            next_steps=(("Review the findings below before choosing a response. AIDA has not authorized a new remediation action through this report."
+                         if new_count or existing_count else "No new or earlier unresolved findings were reported in this comparison. Review any resolved findings below if you need to understand what the antivirus handled."),),
+            details=details)]
 
         reportable = [
             assessment
@@ -627,7 +644,7 @@ class SecurityScanExecutor(CommandExecutor):
             or assessment.disposition is DetectionDisposition.RESOLVED
         ]
         if reportable:
-            lines.extend(["", "DETECTION DETAILS", ""])
+            lines.extend(["", "Individual antivirus findings", ""])
             for index, assessment in enumerate(reportable, start=1):
                 lines.extend(_format_assessment(index, assessment))
                 stand_down = stand_down_results.get(
@@ -798,7 +815,11 @@ class SecurityScanExecutor(CommandExecutor):
         if self._ledger is not None and self._ledger_task_id is not None:
             self._ledger.update(self._ledger_task_id,
                 tracking_state=TrackingState.TRACKING_INTERRUPTED, detail=detail, provider_check_succeeded=False)
-        return CommandResult(transcript_text=detail, speech_text="Local scan monitoring stopped.", partial=True)
+        return CommandResult(transcript_text=render_report("Local scan monitoring stopped",
+            found=(reason, "AIDA did not cancel the antivirus scan."),
+            unknown=("An existing antivirus scan may still be running. Its final result has not been confirmed here.",),
+            next_steps=("Check the scan in Windows Security. AIDA can try to reconnect to a saved running scan when it restarts.",),
+            details=(detail,)), speech_text="Local scan monitoring stopped.", partial=True)
 
     def _mark_ledger_failure(self, detail: str) -> None:
         if self._ledger is None or self._ledger_task_id is None:
@@ -1004,7 +1025,11 @@ def _failure_result(
 ) -> CommandResult:
     detail = str(exc).strip() or type(exc).__name__
     return CommandResult(
-        transcript_text=f"{heading}\n\nReason: {detail}",
+        transcript_text=render_report(heading,
+            found=("AIDA could not finish the requested security check.",),
+            unknown=("The requested result is unavailable. This error does not establish whether a threat is present or absent.",),
+            next_steps=("Review the error below and check Windows Security. Retry the requested check once the reported problem is resolved.",),
+            details=(f"Reason: {detail}",)),
         speech_text=f"{heading} Review the local transcript for details.",
         partial=True,
     )

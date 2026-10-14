@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from aida.config import AidaConfig
 from aida.diagnostics.base import Finding
+from aida.diagnostics.renderer import render_findings, findings_speech
 from aida.diagnostics.system_scan import run_full_diagnostics
 from aida.frontend.commands.base import (
     CommandCategory,
@@ -38,10 +39,7 @@ class QuickscanExecutor(CommandExecutor):
 
         transcript_text = self._format_findings(findings)
 
-        speech_text = (
-            "Quickscan complete. "
-            f"{len(findings)} findings returned."
-        )
+        speech_text = findings_speech(findings, title="Quickscan report")
 
         return CommandResult(
             transcript_text=transcript_text,
@@ -49,44 +47,5 @@ class QuickscanExecutor(CommandExecutor):
         )
 
     @staticmethod
-    def _format_findings(
-        findings: Iterable[Finding],
-    ) -> str:
-        finding_list = list(findings)
-
-        if not finding_list:
-            return (
-                "Quickscan complete.\n\n"
-                "No findings were returned."
-            )
-
-        lines = [
-            "Quickscan complete.",
-            "",
-        ]
-
-        for finding in finding_list:
-            lines.append(finding.title)
-            lines.append(
-                f"Severity: {finding.severity.upper()}"
-            )
-
-            if finding.detail:
-                lines.append(
-                    f"Finding: {finding.detail}"
-                )
-
-            if finding.evidence:
-                lines.append(
-                    f"Evidence: {finding.evidence}"
-                )
-
-            if finding.recommended_next:
-                lines.append(
-                    "Recommended next action: "
-                    f"{finding.recommended_next}"
-                )
-
-            lines.append("")
-
-        return "\n".join(lines).strip()
+    def _format_findings(findings: Iterable[Finding]) -> str:
+        return render_findings(findings, title="Quickscan report")

@@ -19,8 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from aida.artificer.engine import ArtificerEngine
-from aida.artificer.models import ArtificerFinding, ArtificerSnapshot, UpgradeProposal
+from aida.artificer.models import ArtificerSnapshot
 from aida.artificer.source_review import render_annotation, MAX_REPLACEMENT_BYTES
+from aida.artificer.renderer import (render_overview, render_findings, render_compatibility,
+    render_proposals, render_governance, render_staged_candidate)
+from aida.reporting import render_report
 from aida.technomancer.self_resources import render_self_resources
 from aida.frontend.review_palette import apply_review_palette
 
@@ -142,8 +145,8 @@ class ArtificerCenterDialog(QDialog):
             return
         self._snapshot = snapshot
         self.status_label.setText(
-            "Artificer Engine is connected. Operational telemetry remains local "
-            "by default, and automatic maintenance remains disabled for Early Alpha."
+            ("Artificer is turned off; saved reviews remain available. " if snapshot.status == "disabled" else
+             "Artificer Engine is connected. ") + "Operational telemetry remains local by default, and automatic maintenance remains disabled for Early Alpha."
         )
         self.overview_text.setPlainText(self._render_overview(snapshot))
         self.findings_text.setPlainText(self._render_findings(snapshot.open_findings))
@@ -182,7 +185,10 @@ class ArtificerCenterDialog(QDialog):
         annotation = self._review_records.get(review_id)
         self._selected_review_state = "not_rechecked"
         if annotation is None:
-            self.source_review_text.setPlainText("No source annotations are available. Run Review to capture exact source locations and proposed improvements.")
+            self.source_review_text.setPlainText(render_report("Source code reviews",
+                found=("No captured source reviews are available.",),
+                unknown=("No exact code location or proposed source change can be reviewed from this list yet.",),
+                next_steps=("Run Review to capture source locations, the proposed changes, their reasons and required tests.",)))
         else:
             self.source_review_text.setPlainText(render_annotation(annotation))
             if self.task_manager is not None and not self._source_busy:
@@ -272,7 +278,10 @@ class ArtificerCenterDialog(QDialog):
 
     def _show_candidate_result(self, manifest) -> None:
         self.show_export_result(manifest["manifest_path"])
-        self.show_operation_message(f"Candidate staged locally: {manifest['status']}. Behavioral tests remain required. No source was changed.\n{manifest['manifest_path']}")
+        self.source_review_text.setPlainText(render_staged_candidate(manifest))
+        checks = {"static_checks_passed": "Static checks passed", "static_checks_failed": "Static checks failed"}.get(
+            manifest.get("status"), "Static check results are unavailable")
+        self.show_operation_message(f"Candidate exported locally. {checks}; behavioral tests are still required. Live source was not changed.\n{manifest['manifest_path']}")
 
     @Slot()
     def _create_source_proposal(self) -> None:
@@ -364,147 +373,9 @@ class ArtificerCenterDialog(QDialog):
                     f"Folder error: {folder_error}"
                 )
 
-    @staticmethod
-    def _render_overview(snapshot: ArtificerSnapshot) -> str:
-        return "\n".join(
-            (
-                "ARTIFICER ENGINE",
-                "=================",
-                "",
-                f"Engine state: {snapshot.status.upper()}",
-                f"Platform: {snapshot.platform_summary}",
-                f"Last review: {snapshot.last_review_utc or 'Not yet completed'}",
-                f"Open findings: {len(snapshot.open_findings)}",
-                f"Pending proposals: {len(snapshot.pending_proposals)}",
-                f"Source annotations: {len(snapshot.source_reviews)}",
-                f"Dispatch queue: {snapshot.dispatch_queue_depth}",
-                f"Telemetry: {snapshot.telemetry_level.upper()}",
-                "Automatic maintenance: DISABLED",
-                "",
-                "Operational role",
-                "----------------",
-                "The Artificer records privacy-minimized operational events, "
-                "profiles the current platform, performs deterministic source "
-                "inspection, correlates recurring failures, and develops "
-                "evidence-backed recommendations.",
-                "",
-                "A finding is not authorization. Source modification remains "
-                "subject to Warden policy, validation, rollback, and owner approval.",
-            )
-        )
-
-    @staticmethod
-    def _render_findings(findings: tuple[ArtificerFinding, ...]) -> str:
-        if not findings:
-            return (
-                "No open Artificer findings are currently recorded.\n\n"
-                "Run an Artificer review to inspect platform compatibility, "
-                "source health, and accumulated operational telemetry."
-            )
-        sections: list[str] = []
-        for finding in findings:
-            sections.append(
-                "\n".join(
-                    (
-                        finding.title,
-                        "-" * len(finding.title),
-                        f"Finding ID: {finding.finding_id}",
-                        f"Category: {finding.category}",
-                        f"Severity: {finding.severity}",
-                        f"Status: {finding.status}",
-                        f"Confidence: {finding.confidence:.2f}",
-                        f"Evidence quality: {finding.evidence_quality:.2f}",
-                        f"Implementation risk: {finding.implementation_risk:.2f}",
-                        f"Required authority: {finding.authority_required}",
-                        f"Observed: {finding.observation_count} time(s)",
-                        f"Affected: {', '.join(finding.affected_components) or 'Unspecified'}",
-                        "",
-                        f"Finding: {finding.finding}",
-                        f"Evidence: {finding.evidence_summary}",
-                        f"Reasoning summary: {finding.reasoning_summary}",
-                        f"Recommended change: {finding.recommended_change}",
-                        "Expected outcomes: "
-                        + (", ".join(finding.expected_outcomes) or "Not specified"),
-                    )
-                )
-            )
-        return "\n\n".join(sections)
-
-    @staticmethod
-    def _render_compatibility(snapshot: ArtificerSnapshot) -> str:
-        lines = [
-            "PLATFORM CONCORDANCE",
-            "====================",
-            "",
-            f"Current platform: {snapshot.platform_summary}",
-            "",
-        ]
-        if not snapshot.compatibility_summary:
-            lines.append("No capability results are available yet.")
-        else:
-            for capability, status in sorted(snapshot.compatibility_summary.items()):
-                lines.append(f"{capability}: {status}")
-        lines.extend(
-            (
-                "",
-                "The Liaison reports verified capability state rather than "
-                "assuming that an operating-system label guarantees support.",
-            )
-        )
-        return "\n".join(lines)
-
-    @staticmethod
-    def _render_proposals(proposals: tuple[UpgradeProposal, ...]) -> str:
-        if not proposals:
-            return (
-                "No pending Artificer proposals are currently recorded.\n\n"
-                "Proposals are generated from mature findings and remain "
-                "reviewable, versioned, reversible, and approval-gated."
-            )
-        sections: list[str] = []
-        for proposal in proposals:
-            sections.append(
-                "\n".join(
-                    (
-                        proposal.title,
-                        "-" * len(proposal.title),
-                        f"Proposal ID: {proposal.proposal_id}",
-                        "Source reviews: " + (", ".join(proposal.source_review_ids) or "No source anchor; operational proposal"),
-                        f"Subsystem: {proposal.affected_subsystem}",
-                        f"Version: {proposal.current_version} -> {proposal.proposed_version}",
-                        f"Status: {proposal.status}",
-                        f"Authority: {proposal.authority_required}",
-                        f"Implementation risk: {proposal.implementation_risk:.2f}",
-                        f"Regression risk: {proposal.regression_risk:.2f}",
-                        "",
-                        f"Rationale: {proposal.rationale}",
-                        "Required tests: "
-                        + (", ".join(proposal.required_tests) or "Not specified"),
-                        f"Rollback: {proposal.rollback_procedure}",
-                    )
-                )
-            )
-        return "\n\n".join(sections)
-
-    @staticmethod
-    def _render_governance(snapshot: ArtificerSnapshot) -> str:
-        return "\n".join(
-            (
-                "EARLY ALPHA GOVERNANCE",
-                "======================",
-                "",
-                f"Telemetry policy: {snapshot.telemetry_level.upper()}",
-                "Automatic maintenance: DISABLED",
-                "Remote dispatch: DISABLED unless explicitly configured",
-                "",
-                "Protected behavior",
-                "------------------",
-                "- Language-model output is never authorization.",
-                "- Governance, consent, recipient, sanitizer, and Ledger code is protected.",
-                "- Perception telemetry excludes image contents and personal paths.",
-                "- Voice telemetry excludes recordings and transcript text.",
-                "- Autonomy remains governed by the existing Autonomy subsystem.",
-                "- Every permitted modification requires validation and rollback.",
-                "- Major upgrades and security-policy changes require owner approval.",
-            )
-        )
+    # Automatic maintenance: DISABLED. These views describe recorded evidence only.
+    _render_overview = staticmethod(render_overview)
+    _render_findings = staticmethod(render_findings)
+    _render_compatibility = staticmethod(render_compatibility)
+    _render_proposals = staticmethod(render_proposals)
+    _render_governance = staticmethod(render_governance)

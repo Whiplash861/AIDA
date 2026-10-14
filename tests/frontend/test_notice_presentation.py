@@ -26,7 +26,7 @@ def test_unavailable_history_is_not_presented_as_a_detection_or_an_all_clear():
     assert text.startswith("Check incomplete")
     assert "could not read Windows sign-in and security history" in text
     assert "not a malware detection" in text
-    assert "What you can do" in text
+    assert "What to do next" in text
     assert "channel_access_unavailable" not in text and "WARNING" not in text
     assert "channel_access_unavailable" in render_alert(alert, context, technical=True)
     assert alert.severity == "warning"  # Display labels never rewrite stored priority.

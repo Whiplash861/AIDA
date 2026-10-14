@@ -74,6 +74,9 @@ class TechnomancerCommandExecutor(CommandExecutor):
             (line.strip() for line in text.splitlines() if line.strip()),
             "Technomancer operation complete.",
         )
+        if self.mode in {"health", "upgrades", "inventory", "advisories"}:
+            priority = " An observation needs prompt review." if "\n• Review promptly:" in text else ""
+            first_line += priority + " The report explains the observations, what remains unknown, and the next steps."
         return CommandResult(
             transcript_text=text,
             speech_text=first_line,

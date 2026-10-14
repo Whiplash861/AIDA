@@ -295,34 +295,39 @@ class EvidenceNavigationService:
 
 
 def render_location_result(result: EvidenceLocateResult) -> str:
-    lines = [
-        "EVIDENCE LOCATION RESULT",
-        "",
-        f"Requested path: {result.requested_path}",
-        f"Files examined: {result.files_examined}",
-        f"Elapsed: {result.elapsed_seconds:.2f} seconds",
-        f"Search truncated: {'yes' if result.truncated else 'no'}",
-        "",
-    ]
-    if not result.matches:
-        lines.append("No matching or probable file was located within the permitted search scope.")
-        return "\n".join(lines)
+    from aida.reporting import render_report
+    found = [f"AIDA examined {result.files_examined} file(s) and recorded {len(result.matches)} candidate location(s)."]
+    unknown = ["Finding a file does not determine whether it is harmful. This search covers permitted locations and readable files, not every possible location."]
+    details = [f"Requested path: {result.requested_path}", f"Elapsed: {result.elapsed_seconds:.2f} seconds",
+               f"Search truncated: {'yes' if result.truncated else 'no'}"]
+    if result.truncated:
+        unknown.append("The search reached a time or file limit before it could finish; more candidates may remain.")
     for index, match in enumerate(result.matches, start=1):
-        label = (
-            "EXACT IDENTITY MATCH"
-            if match.match_type
-            in {EvidenceMatchType.EXACT_PATH, EvidenceMatchType.EXACT_HASH}
-            else "POSSIBLE MATCH — USER VERIFICATION REQUIRED"
-        )
-        lines.extend(
-            [
-                f"{index}. {label}",
-                f"   Path: {match.path}",
-                f"   Basis: {match.reason}",
-                f"   Confidence: {round(match.confidence * 100)} percent",
-            ]
-        )
-    return "\n".join(lines)
+        if match.match_type in {EvidenceMatchType.EXACT_HASH, EvidenceMatchType.EXACT_PATH} and match.sha256:
+            label = "Content fingerprint matches the recorded file"
+        elif match.match_type == EvidenceMatchType.EXACT_PATH:
+            label = "File found at the requested path; its content fingerprint was not verified"
+        elif match.match_type == EvidenceMatchType.EXACT_IDENTITY:
+            label = "Name, size and modification time match; content still needs verification"
+        elif match.match_type == EvidenceMatchType.EXACT_HASH:
+            label = "A content match was reported, but its fingerprint is unavailable in this result"
+        else:
+            label = "Possible filename match; review required"
+        found.append(f"{index}. {label}: {match.path}")
+        if not match.sha256 or match.match_type == EvidenceMatchType.POSSIBLE_FILENAME:
+            unknown.append("A matching path, name, size or date alone does not prove that a candidate has the same contents as the original file.")
+        details.extend((f"Candidate {index} match type: {match.match_type.value}", "Recorded basis: " + match.reason,
+                        f"Recorded matching score: {round(match.confidence * 100)} percent; not a safety assessment."))
+        if match.sha256:
+            details.append("Candidate SHA-256: " + match.sha256)
+    if not result.matches:
+        found.append("No matching or probable file was located within the permitted search scope.")
+        unknown.append("This does not prove that the file is absent; it may be outside the checked locations, unreadable, renamed, or already moved.")
+        next_steps = ("Confirm the original path and any recorded content fingerprint, then choose a relevant folder to search. Review antivirus history if you suspect the file was quarantined.",)
+    else:
+        next_steps = ("Review the candidate path and matching evidence. For a possible match, verify the content fingerprint before treating it as the original file.",
+                      "Use a fresh file analysis if you need to assess safety. Recheck the exact target before authorizing any change.")
+    return render_report("Evidence location result", found=found, unknown=unknown, next_steps=next_steps, details=details)
 
 
 def _search_roots(

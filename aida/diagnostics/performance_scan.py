@@ -38,15 +38,8 @@ def _scan_cpu() -> list[Finding]:
         interval=1.0
     )
 
-    physical_cores = (
-        psutil.cpu_count(logical=False)
-        or 0
-    )
-
-    logical_cores = (
-        psutil.cpu_count(logical=True)
-        or 0
-    )
+    physical_cores = psutil.cpu_count(logical=False)
+    logical_cores = psutil.cpu_count(logical=True)
 
     severity = _usage_severity(
         cpu_percent,
@@ -66,8 +59,8 @@ def _scan_cpu() -> list[Finding]:
     )
 
     evidence = (
-        f"{physical_cores} physical cores, "
-        f"{logical_cores} logical cores"
+        f"Physical cores: {physical_cores if physical_cores is not None else 'unavailable'}, "
+        f"logical cores: {logical_cores if logical_cores is not None else 'unavailable'}"
     )
 
     recommended_next = ""
@@ -238,8 +231,8 @@ def _scan_top_memory_processes() -> list[Finding]:
             title="Top memory processes",
             severity="info",
             detail=(
-                "Five processes currently using "
-                "the most physical memory."
+                "The observed applications using the most physical memory. "
+                "Some applications may not be accessible to this check."
             ),
             evidence="\n".join(
                 evidence_lines
@@ -351,8 +344,8 @@ def _scan_nvidia_gpu() -> list[Finding]:
         )
 
         detail = (
-            f"{utilization:.1f}% utilization"
-            f" | {temperature_c:.1f}°C"
+            f"GPU use: {str(utilization) + '%' if utilization is not None else 'unavailable'}"
+            f" | Temperature: {str(temperature_c) + '°C' if temperature_c is not None else 'unavailable'}"
         )
 
         evidence = (

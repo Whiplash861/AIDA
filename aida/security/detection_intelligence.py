@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -124,23 +126,24 @@ def render_detection_reconciliation(
     new_count = len(reconciliation.new_detections)
     unresolved_count = len(reconciliation.unresolved_existing)
     resolved_count = len(reconciliation.resolved)
-    lines = [
-        "DETECTION RECONCILIATION",
-        "",
+    found = [
         f"New or reactivated detections in this scan window: {new_count}",
         f"Pre-existing unresolved detections still reported: {unresolved_count}",
         f"Detections with provider-confirmed resolution: {resolved_count}",
     ]
     if not new_count:
-        lines.append(
+        found.append(
             "Result: No new provider detection was attributed to this scan window."
         )
     if unresolved_count:
-        lines.append(
+        found.append(
             "Existing unresolved findings are listed separately and were not "
             "misreported as new scan detections."
         )
-    return "\n".join(lines)
+    return render_report("Antivirus findings compared with earlier results", found=found,
+        unknown=("Findings reported in this time window are not proof that this scan discovered each one. The comparison also does not rule out threats the antivirus did not detect.",),
+        next_steps=(("Review new and unresolved findings before choosing a response." if new_count or unresolved_count
+                     else "Review any resolved findings if you need to understand what the antivirus handled."),))
 
 
 def _assessment(

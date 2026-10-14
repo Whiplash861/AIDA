@@ -66,7 +66,7 @@ def test_command_workflow_never_executes_a_response(tmp_path):
     registry = SimpleNamespace(investigations=service)
     executor = InvestigationCommandExecutor(registry, "response", {"case_id": case.case_id})
     result = executor.execute()
-    assert "No action has run" in result.transcript_text
+    assert "Preparing or viewing this workflow does not execute an action" in result.transcript_text
     assert all(entry.kind != "action_result" for entry in service.timeline(case.case_id))
 
 

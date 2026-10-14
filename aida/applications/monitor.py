@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from pathlib import Path
 from typing import Any, Iterable
+
+from aida.reporting import render_report
 
 from aida.applications.models import (
     ApplicationHealthAssessment,
@@ -44,8 +47,9 @@ class ApplicationHealthMonitor:
 
         evidence: list[str] = []
         recommendations: list[str] = []
-        total_memory = sum(item.memory_bytes for item in observations)
-        total_cpu = sum(item.cpu_percent for item in observations)
+        total_memory = sum(item.memory_bytes for item in observations if item.memory_bytes is not None)
+        total_cpu = sum(item.cpu_percent for item in observations if item.cpu_percent is not None)
+        resources_complete = all(item.memory_bytes is not None and item.cpu_percent is not None for item in observations)
         any_unresponsive = any(item.responding is False for item in observations)
 
         if any_unresponsive:
@@ -77,15 +81,18 @@ class ApplicationHealthMonitor:
                 "Compare sustained usage with the application's local baseline."
             )
         else:
-            state = ApplicationHealthState.HEALTHY if all(item.responding is True for item in observations) else ApplicationHealthState.UNKNOWN
+            state = ApplicationHealthState.HEALTHY if resources_complete and all(item.responding is True for item in observations) else ApplicationHealthState.UNKNOWN
             confidence = 0.75 if state is ApplicationHealthState.HEALTHY else 0.4
             evidence.append(
-                "No extreme resource condition was observed; process scheduling state alone does not establish application responsiveness."
+                "No extreme resource condition was observed in the available measurements; process scheduling state alone does not establish application responsiveness."
             )
             recommendations.append(
                 "Continue observing if the user reports intermittent failures."
             )
 
+        if not resources_complete:
+            confidence = min(confidence, 0.5)
+            evidence.append("Processor or memory measurements were unavailable for some matching processes; missing values were not treated as zero use.")
         if self._last_errors:
             confidence = min(confidence, 0.5)
             evidence.append("Some process observations were inaccessible or incomplete.")
@@ -132,10 +139,8 @@ class ApplicationHealthMonitor:
                     name=name or Path(executable).name or application_name,
                     executable=Path(executable) if executable else None,
                     responding=responding,
-                    cpu_percent=float(info.get("cpu_percent") or 0.0),
-                    memory_bytes=int(
-                        getattr(memory_info, "rss", 0) if memory_info else 0
-                    ),
+                    cpu_percent=_resource_value(info.get("cpu_percent")),
+                    memory_bytes=_resource_value(getattr(memory_info, "rss", None), integer=True),
                     thread_count=int(info.get("num_threads") or 0),
                     handle_count=_optional_call(process, "num_handles"),
                     read_bytes=(
@@ -155,30 +160,28 @@ class ApplicationHealthMonitor:
                 continue
 
 
-def render_application_health(
-    assessment: ApplicationHealthAssessment,
-) -> str:
-    lines = [
-        "APPLICATION HEALTH REPORT",
-        "",
-        f"Application: {assessment.application_name}",
-        f"State: {assessment.state.value.replace('_', ' ').title()}",
-        f"Confidence: {round(assessment.confidence * 100)} percent",
-        f"Summary: {assessment.summary}",
-    ]
-    if assessment.evidence:
-        lines.extend(["", "Observed evidence:"])
-        lines.extend(f"- {item}" for item in assessment.evidence)
-    if assessment.recommendations:
-        lines.extend(["", "Recommended next steps:"])
-        lines.extend(f"- {item}" for item in assessment.recommendations)
-    lines.extend(
-        [
-            "",
-            "A high resource value alone is not treated as proof that the application is damaged.",
-        ]
+def render_application_health(assessment: ApplicationHealthAssessment) -> str:
+    unknown = ["This process snapshot does not test every application feature or establish the cause of a crash. High resource use alone is not proof of damage."]
+    if not assessment.observations:
+        unknown.append("There are no matching process observations to assess. The application may be closed, named differently, or unavailable to this check.")
+    elif any(item.responding is None for item in assessment.observations):
+        unknown.append("Window responsiveness was not checked for every matching process; a running process can still have a frozen window.")
+    if any(getattr(item, "cpu_percent", None) is None or getattr(item, "memory_bytes", None) is None for item in assessment.observations):
+        unknown.append("Processor or memory use is unknown for some matching processes. Missing measurements do not establish low usage.")
+    if not assessment.baseline_comparison:
+        unknown.append("No comparison with this application's normal behavior was supplied.")
+    return render_report(
+        f"Application health: {assessment.application_name}",
+        found=[assessment.summary, *assessment.evidence], unknown=unknown,
+        next_steps=assessment.recommendations or ("Repeat the health check while the problem is occurring.",),
+        details=[f"Recorded state: {assessment.state.value}; internal confidence estimate: {assessment.confidence:.0%}. This is not a measured probability of damage."],
     )
-    return "\n".join(lines)
+
+
+def _resource_value(value, *, integer=False):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return int(value) if integer else float(value)
 
 
 def _summary(name: str, state: ApplicationHealthState) -> str:

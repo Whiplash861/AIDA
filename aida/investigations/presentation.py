@@ -189,11 +189,11 @@ def alert_explanation(alert, context=None) -> Explanation:
 
 
 def render_explanation(explanation: Explanation) -> str:
-    lines = [explanation.title, "", "What AIDA observed", *["• " + item for item in explanation.observations],
-             "", "What this means", explanation.meaning, "", "What you can do", *["• " + item for item in explanation.next_steps]]
-    if explanation.limitations:
-        lines.extend(["", "What AIDA could not verify", *["• " + item for item in explanation.limitations]])
-    return "\n".join(lines)
+    from aida.reporting import render_report
+    return render_report(explanation.title, found=explanation.observations,
+        interpretation=explanation.meaning,
+        unknown=explanation.limitations or ("This saved observation does not establish the computer's current condition.",),
+        next_steps=explanation.next_steps)
 
 
 def render_alert(alert, context=None, *, technical: bool = False) -> str:

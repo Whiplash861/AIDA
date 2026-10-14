@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 import getpass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -190,15 +192,13 @@ class SecurityControlExecutor(CommandExecutor):
             promote=False,
         )
         return CommandResult(
-            transcript_text=(
-                f"A Microsoft Defender {scan.mode.value.title()} Scan is active.\n\n"
-                f"Provider Scan ID: {scan.scan_id}\n"
-                f"Provider started: {scan.started_at or 'unknown'}\n"
-                f"AIDA task record: {ledger_task.task_id if ledger_task else 'not yet linked'}\n\n"
-                "Canceling will stop the scan before completion. "
-                'Say "confirm scan cancellation" within two minutes to proceed.\n\n'
-                f"Confirmation ID: {request.confirmation_id}"
-            ),
+            transcript_text=render_report("Review scan cancellation",
+                found=(f"A Microsoft Defender {scan.mode.value.title()} Scan is active.",
+                       f"Exact scan: {scan.scan_id}; started: {scan.started_at or 'unknown'}.",
+                       "Cancellation has not been sent."),
+                unknown=("A scan stopped before completion cannot provide a completed result for its requested scope.",),
+                next_steps=('To request stopping this exact scan, say "confirm scan cancellation" within two minutes.',),
+                details=(f"AIDA task record: {ledger_task.task_id if ledger_task else 'not yet linked'}", f"Confirmation ID: {request.confirmation_id}")),
             speech_text=(
                 f"A Defender {scan.mode.value} scan is active. "
                 "Say confirm scan cancellation to stop it before completion."
@@ -276,20 +276,15 @@ class SecurityControlExecutor(CommandExecutor):
             exit_code=result.exit_code,
         )
         return CommandResult(
-            transcript_text=(
-                "SCAN CANCELLATION RESULT\n\n"
-                f"Requesting user: {_user()}\n"
-                f"Confirmation ID: {consumed.confirmation_id}\n"
-                f"Provider Scan ID: {current.scan_id}\n"
-                f"Requested: {'yes' if result.requested else 'no'}\n"
-                f"Provider-confirmed cancellation: {'yes' if result.confirmed else 'no'}\n"
-                f"Detail: {result.detail}\n\n"
-                + (
-                    "The durable scan record was closed as cancelled."
-                    if result.confirmed
-                    else "AIDA will continue monitoring because provider cancellation was not confirmed."
-                )
-            ),
+            transcript_text=render_report("Scan cancellation result",
+                found=("A cancellation request was sent." if result.requested else "A cancellation request was not sent.",
+                       "Microsoft Defender confirmed that the scan was cancelled." if result.confirmed else "Microsoft Defender did not confirm cancellation."),
+                unknown=("A cancelled scan does not provide a completed scan result." if result.confirmed
+                         else "The scan may still be running. A request is not proof that it stopped.",),
+                next_steps=("Request a new scan when you want the check completed." if result.confirmed
+                            else "AIDA will continue monitoring. Check Windows Security and the scan's status before assuming it has stopped.",),
+                details=(f"Requesting user: {_user()}", f"Confirmation ID: {consumed.confirmation_id}",
+                         f"Provider Scan ID: {current.scan_id}", result.detail)),
             speech_text=(
                 "Microsoft Defender confirmed the scan was cancelled."
                 if result.confirmed
@@ -358,15 +353,14 @@ class SecurityControlExecutor(CommandExecutor):
             ttl_seconds=120,
         )
         return CommandResult(
-            transcript_text=(
-                "STAND DOWN — USER TRUST EXCEPTION\n\n"
-                f"Target: {self.target_path}\n\n"
-                "This will suppress repeated AIDA recommendations only while the exact "
-                "file identity remains unchanged. It will not create a Defender exclusion, "
-                "allow the item in Windows Security, or certify it as harmless.\n\n"
-                'Say "confirm stand down" within two minutes to proceed.\n'
-                f"Confirmation ID: {request.confirmation_id}"
-            ),
+            transcript_text=render_report("Review Stand Down: pause repeated recommendations",
+                found=(f"File selected: {self.target_path}",
+                       "AIDA prepared a local trust exception; it has not been applied."),
+                unknown=("Choosing to trust the file does not establish that it is harmless.",),
+                next_steps=("Stand Down pauses repeated AIDA recommendations only for the unchanged file and the covered finding. New evidence, an explicit scan, or an identity change can resume assessment.",
+                            'To apply this exception, say "confirm stand down" within two minutes.'),
+                details=(f"Prepared file identity: {request.scope}", f"Confirmation ID: {request.confirmation_id}",
+                         "Stand Down does not create a Defender exclusion or allow the item in Windows Security.")),
             speech_text=(
                 "Stand Down is ready. Say confirm stand down to create the local trust exception."
             ),
@@ -397,16 +391,13 @@ class SecurityControlExecutor(CommandExecutor):
             expected_identity=consumed.scope,
         )
         return CommandResult(
-            transcript_text=(
-                "Stand Down exception recorded.\n\n"
-                f"File: {record.path}\n"
-                f"Exception ID: {record.exception_id}\n"
-                f"SHA-256: {record.sha256}\n"
-                "Status: User-trusted; not verified safe\n"
-                f"Expires: {record.expires_at or 'no automatic expiration'}\n\n"
-                "AIDA will resume assessment if the file identity changes, a new alarm "
-                "appears, the exception expires, or the user explicitly scans the item."
-            ),
+            transcript_text=render_report("Stand Down exception recorded",
+                found=(f"File: {record.path}", "You chose to trust this file for AIDA's repeated recommendations.",
+                       f"Expires: {record.expires_at or 'no automatic expiration'}.", "Microsoft Defender settings were not changed."),
+                unknown=("Status: User-trusted; not verified safe. This exception is not a safety assessment.",),
+                next_steps=("AIDA resumes assessment if the file changes, a new alarm appears, the exception expires, or you explicitly scan the item.",
+                            "Revoke Stand Down for this file if you want normal recommendations restored."),
+                details=(f"Exception ID: {record.exception_id}", f"SHA-256: {record.sha256}")),
             speech_text=(
                 "Stand Down recorded. The item is user trusted, not verified safe."
             ),
@@ -442,16 +433,12 @@ class SecurityControlExecutor(CommandExecutor):
             ttl_seconds=120,
         )
         return CommandResult(
-            transcript_text=(
-                "STAND DOWN REVOCATION\n\n"
-                f"File: {record.path}\n"
-                f"Exception ID: {record.exception_id}\n"
-                f"SHA-256: {record.sha256}\n\n"
-                "Revocation restores normal AIDA recommendations. It does not change "
-                "Microsoft Defender settings.\n\n"
-                'Say "confirm stand down revocation" within two minutes to proceed.\n'
-                f"Confirmation ID: {request.confirmation_id}"
-            ),
+            transcript_text=render_report("Review removal of a Stand Down exception",
+                found=(f"File: {record.path}", "An active local trust exception was found. It has not been removed."),
+                unknown=("Removing this exception does not determine whether the file is safe or harmful.",),
+                next_steps=('Say "confirm stand down revocation" within two minutes to restore normal AIDA recommendations for this file.',),
+                details=(f"Exception ID: {record.exception_id}", f"SHA-256: {record.sha256}",
+                         f"Confirmation ID: {request.confirmation_id}", "Microsoft Defender settings will not change.")),
             speech_text=(
                 "Stand Down revocation is ready. Say confirm stand down revocation to proceed."
             ),
@@ -532,7 +519,11 @@ class SecurityControlExecutor(CommandExecutor):
                 ]
             )
         return CommandResult(
-            transcript_text="\n".join(lines),
+            transcript_text=render_report("Active Stand Down exceptions",
+                found=(f"{len(records)} local trust exception(s) are active.",),
+                unknown=("These are files you chose to trust, not files AIDA has verified as safe. The list is not a scan result.",),
+                next_steps=("Review each file below. Request Stand Down revocation for an exact file if it should receive normal recommendations again.",),
+                details=lines[2:]),
             speech_text=f"{len(records)} Stand Down exceptions are active.",
         )
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aida.reporting import render_report
+
 from collections.abc import Callable
 from datetime import datetime
 from threading import Event
@@ -106,7 +108,10 @@ class AegisSecurityScanExecutor(CommandExecutor):
             )
         except (OSError, RuntimeError, ValueError):
             return CommandResult(
-                transcript_text=provider_result.transcript_text + "\n\nAegis correlation is unavailable. No clean assessment or learning result was established.",
+                transcript_text=provider_result.transcript_text + "\n\n" + render_report("Aegis additional review could not finish",
+                    found=("The antivirus scan completed, but Aegis could not finish combining its findings with the local checks.",),
+                    unknown=("No completed Aegis assessment or learning result was established by this request.",),
+                    next_steps=("Review the antivirus results above. Retry the Aegis review if you need the additional local evidence.",)),
                 speech_text="The provider scan completed. Aegis could not finish its additional investigation.",
                 security_outcome=outcome,
                 partial=True,
@@ -119,19 +124,19 @@ class AegisSecurityScanExecutor(CommandExecutor):
         case = intelligent.case
         if case.status.value == "threat_confirmed":
             speech = (
-                f"Aegis {self.strategy.label} complete. An active provider-confirmed threat requires review."
+                f"Aegis {self.strategy.label} complete. An antivirus finding requires review. Check its current status before choosing a response."
             )
         elif case.escalation == "full_sweep_recommended":
             speech = (
-                f"Aegis {self.strategy.label} complete. The correlated evidence supports a Full-System Sweep recommendation."
+                f"Aegis {self.strategy.label} complete. A broader Full-System Sweep is recommended. It has not been started automatically."
             )
         elif case.escalation == "targeted_investigation_recommended":
             speech = (
-                f"Aegis {self.strategy.label} complete. Additional targeted investigation is recommended."
+                f"Aegis {self.strategy.label} complete. Review the listed files and observations before choosing a response."
             )
         else:
             speech = (
-                f"Aegis {self.strategy.label} complete. No further scan escalation is currently justified by the correlated evidence."
+                f"Aegis {self.strategy.label} complete. This check did not recommend a broader scan. Review any incomplete checks in the report."
             )
         return CommandResult(transcript_text=transcript, speech_text=speech, security_outcome=outcome)
 
@@ -182,20 +187,17 @@ class AegisSecurityStatusExecutor(CommandExecutor):
     def execute(self) -> CommandResult:
         provider = self.status_factory().execute()
         snapshot = self.engine.snapshot()
-        transcript = "\n".join(
-            [
-                provider.transcript_text,
-                "",
-                "AEGIS",
-                f"State: {snapshot.state.value.upper()}",
-                f"Machine baseline available: {'yes' if snapshot.baseline_available else 'no'}",
-                f"Open security cases: {snapshot.open_case_count}",
-                f"Learning model version: {snapshot.learning_model_version}",
-                f"Trusted learning samples: {snapshot.learning_sample_count}",
-                f"Learning state: {'ACTIVE' if snapshot.learning_ready else 'WARMING UP'}",
-                f"Visibility degradation count: {len(snapshot.degraded_reasons)}",
-            ]
-        )
+        from aida.aegis.explanations import explain_sensor_limitations
+        transcript = provider.transcript_text + "\n\n" + render_report("Aegis monitoring status",
+            found=(f"Background monitoring is {'running' if snapshot.running else 'not running'}.",
+                   f"Open security cases: {snapshot.open_case_count}.",
+                   "A saved comparison of this computer's programs and settings (a baseline) is available." if snapshot.baseline_available else "No approved saved comparison of this computer's programs and settings (a baseline) is available.",
+                   "Behavior comparison has enough training history." if snapshot.learning_ready else "Behavior comparison is still collecting training history."),
+            unknown=(*explain_sensor_limitations(snapshot.degraded_reasons),
+                     "Monitoring status is not a fresh scan result or proof that every security check completed."),
+            next_steps=("Review open cases and incomplete checks. Request a scan for a fresh antivirus assessment.",),
+            details=(f"Engine state: {snapshot.state.value}; learning model: {snapshot.learning_model_version}; trusted samples: {snapshot.learning_sample_count}",
+                     *snapshot.degraded_reasons))
         return CommandResult(
             transcript_text=transcript,
             speech_text=(
