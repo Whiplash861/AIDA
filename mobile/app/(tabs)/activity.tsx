@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { GlassPanel } from '@/src/components/glass-panel';
 import { PageShell } from '@/src/components/page-shell';
+import { activityCategory } from '@/src/core/reporting';
 import {
   getRuntimeActivity,
   RuntimeActivityItem,
@@ -101,7 +102,7 @@ function ActivityCard({ item }: { item: RuntimeActivityItem }) {
               { color: palette.foreground },
             ]}
           >
-            {item.category}
+            {activityCategory(item.category)}
           </Text>
         </View>
 
@@ -109,7 +110,7 @@ function ActivityCard({ item }: { item: RuntimeActivityItem }) {
       </View>
 
       <Text style={styles.message}>{item.message}</Text>
-      <Text style={styles.source}>SOURCE • {item.source.toUpperCase()}</Text>
+      <Text style={styles.source}>Recorded by {item.source}</Text>
     </GlassPanel>
   );
 }
@@ -117,7 +118,7 @@ function ActivityCard({ item }: { item: RuntimeActivityItem }) {
 function formatTimestamp(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return 'TIME UNKNOWN';
+    return 'Time unavailable';
   }
 
   const today = new Date();

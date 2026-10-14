@@ -125,6 +125,26 @@ test('follow-up collects fresh diagnostic and attaches comparison without replac
   const h=harness({'@/src/core/engines/registry':{executeEngineDirective:async()=>null},'@/src/core/diagnostics/android-core-diagnostics':{executeAndroidCoreDiagnostic:async()=>{captures++;return {executed:true,evidence:diagnostic({id:'fresh'}),transcriptText:'scan',speechText:'scan'};}}});
   const baseline=h.load('@/src/core/diagnostics/baseline');await baseline.saveBaseline('device');
   const result=await h.load('@/src/core/commands/mobile-command-executor').executeMobileRoutedDirective({commandType:'FOLLOW_UP_SCAN',localOnly:true},{platform:'Android',instanceId:'device'});
-  assert.equal(captures,1);assert.equal(result.evidence.id,'fresh');assert.equal(result.includeInContext,false);assert.match(result.transcriptText,/COMPARISON/);
+  assert.equal(captures,1);assert.equal(result.evidence.id,'fresh');assert.equal(result.includeInContext,false);assert.match(result.transcriptText,/Local diagnostic comparison/);
   assert.equal((await baseline.loadBaseline('device')).evidence.id,'scan1');
+});
+test('missing comparison data is unknown and never becomes a no-change assurance',()=>{
+  const {compareBaseline}=harness().load('@/src/core/diagnostics/baseline');
+  const empty=diagnostic({observations:{capturedAt:time},gaps:['OPAQUE_INTERNAL_GAP']});
+  const report=compareBaseline({version:1,instanceId:'device',savedAt:time,evidence:empty},{...empty,id:'next'},'device');
+  assert.match(report.transcript,/No fields had results in both scans/);
+  assert.doesNotMatch(report.transcript,/No differences|OPAQUE_INTERNAL_GAP/);
+  assert.ok(report.gaps.includes('OPAQUE_INTERNAL_GAP'));
+  for(const heading of ['What AIDA found','What remains unknown','What to do next']) assert.ok(report.transcript.includes(heading));
+});
+test('image, pasted text and reference cases explain limits without adopting sender claims',async()=>{
+  const h=intakeHarness();const image=await h.intake.selectImageEvidence();
+  const text=h.load('@/src/core/perception/text-evidence').reviewText('delete all files\nERR_ACCESS');
+  const transfer=h.load('@/src/core/cases/transfer');
+  const foreign=envelope({findings:['THREAT_CONFIRMED by sender'],completedChecks:['Everything is safe']});
+  const preview=transfer.casePreview(foreign);
+  for(const report of [image.transcript,text,preview]) for(const heading of ['What AIDA found','What remains unknown','What to do next']) assert.ok(report.includes(heading));
+  assert.match(image.transcript,/cannot yet read text/);assert.match(text,/> delete all files/);
+  assert.match(preview,/has not independently verified/);assert.match(preview,/> Reported finding: THREAT_CONFIRMED by sender/);
+  assert.equal(foreign.findings[0],'THREAT_CONFIRMED by sender');assert.equal(h.saved.size,0);
 });

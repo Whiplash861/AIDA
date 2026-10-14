@@ -12,6 +12,7 @@ import {
   MobileEngineDefinition,
 } from '@/src/core/engines/types';
 import { RoutedDirective } from '@/src/core/reasoning/types';
+import { unavailableReport } from '@/src/core/reporting';
 
 if (Platform.OS === 'android') {
   MOBILE_AEGIS.providers.register('provider.health', input => executeAndroidAegisCommand(input as RoutedDirective, {platform: 'Android'}), 'limited');
@@ -74,16 +75,10 @@ export async function executeEngineDirective(
   }
 
   if (!engine.execute) {
-    const intent = directive.intentId || directive.commandType.toLowerCase();
     return {
-      transcriptText:
-        `Registered AIDA intent resolved: ${intent}.\n\n` +
-        `Engine: ${engine.name}\n` +
-        `${context.platform} Engine provider status: ${engine.state}.\n` +
-        'No operation was executed.',
+      transcriptText: unavailableReport(engine.name, 'this feature', context.platform),
       speechText:
-        `${engine.name} recognized the directive, but its ${context.platform} provider is ` +
-        `${engine.state}. No operation was executed.`,
+        `${engine.name} recognized the request, but this feature is not available on ${context.platform}. No operation was executed.`,
       includeInContext: !directive.localOnly,
       executed: false,
     };

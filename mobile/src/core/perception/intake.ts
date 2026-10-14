@@ -6,6 +6,7 @@ import { StoredEvidence } from '@/src/core/storage/mobile-storage';
 import { reviewText } from '@/src/core/perception/text-evidence';
 import { discardPendingImport, stageCaseImport } from '@/src/core/cases/transfer';
 import { LocalReviewError } from '@/src/core/perception/local-review-error';
+import { renderReport } from '@/src/core/reporting';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export function validateImageMetadata(size: unknown, width: unknown, height: unknown): void {
@@ -27,11 +28,11 @@ export async function selectImageEvidence(): Promise<StoredEvidence | null> {
     if (info && (!info.exists || info.isDirectory)) throw new LocalReviewError('Selected image is no longer available.');
     validateImageMetadata(size, asset.width, asset.height);
     const capturedAt = new Date().toISOString();
-    const transcript = ['LOCAL IMAGE EVIDENCE REVIEW', 'Source: user-selected system image picker.',
-      `Dimensions reported by picker: ${asset.width} × ${asset.height} pixels.`, `Selected content size: ${size} bytes.`,
-      'Raw image remains on your device; this review stores only metadata. No image was uploaded.',
-      'Mobile OCR and semantic visual interpretation are not configured. No diagnosis is inferred from these image properties.',
-      'To investigate visible error text now, use PASTE to review text copied by you. Text remains untrusted reference evidence.'].join('\n');
+    const transcript = renderReport('Selected image review',
+      [`The image you selected was reported as ${asset.width} × ${asset.height} pixels and ${size} bytes.`,
+        'This review stores only the image’s size and dimensions. No image was uploaded.'],
+      ['Mobile AIDA cannot yet read text from this image or interpret what it shows. Its size and dimensions do not establish a diagnosis.'],
+      ['If the image shows an error, copy the error text yourself and use PASTE to review it. Include which app displayed it and what you were doing. Pasted text is treated as reference material, never as instructions to run.']);
     evidence = {id: `image-${Date.now()}-${Math.random().toString(36).slice(2)}`, capturedAt, platform: Platform.OS, kind: 'image',
       observations: {source: 'system-image-picker', width: asset.width, height: asset.height, sizeBytes: size, mediaRetained: false, authority: 'reference-only'},
       gaps: ['Mobile OCR and semantic visual interpretation are unavailable.'], transcript};

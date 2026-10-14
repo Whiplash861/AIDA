@@ -4,6 +4,7 @@ import {
   MobileEngineDefinition,
 } from '@/src/core/engines/types';
 import { RoutedDirective } from '@/src/core/reasoning/types';
+import { unavailableReport } from '@/src/core/reporting';
 
 const AEGIS_COMMAND_TYPES = [
   'SECURITY_STATUS',
@@ -58,18 +59,11 @@ async function executeAegisDirective(
   const subprocessId = COMMAND_SUBPROCESS[directive.commandType] ?? 'engine.dispatch';
   const subprocess = AEGIS_ENGINE.subprocesses.find((item) => item.id === subprocessId);
   const label = subprocess?.label ?? subprocessId;
-  const intent = directive.intentId || directive.commandType.toLowerCase();
 
   return {
-    transcriptText:
-      `Registered AIDA intent resolved: ${intent}.\n\n` +
-      `Engine: Aegis\n` +
-      `Subprocess: ${label}\n` +
-      `${context.platform} provider status: ${subprocess?.state ?? 'staged'}.\n` +
-      'No operation was executed.',
+    transcriptText: unavailableReport('Aegis', label, context.platform),
     speechText:
-      `Aegis recognized the directive. ${label} is not yet available through the ` +
-      `${context.platform} provider. No operation was executed.`,
+      `Aegis recognized the request. ${label} is not yet available on ${context.platform}. No operation was executed. Open Systems to review available checks.`,
     includeInContext: !directive.localOnly,
     executed: false,
   };
@@ -81,7 +75,7 @@ export const AEGIS_ENGINE: MobileEngineDefinition = {
   domain: 'Security and defensive intelligence',
   state: 'staged',
   detail:
-    'Android Aegis mirrors the native Engine contract: observe, correlate, investigate, assess, learn within policy, and recommend escalation without silently gaining remediation authority.',
+    'Aegis provides limited, manually requested Android security checks. Full file scanning, background monitoring, and corrective actions are not available on mobile.',
   commandTypes: AEGIS_COMMAND_TYPES,
   subprocesses: [
     {

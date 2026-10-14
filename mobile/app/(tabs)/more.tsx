@@ -3,6 +3,7 @@ import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-nat
 
 import { GlassPanel } from '@/src/components/glass-panel';
 import { PageShell } from '@/src/components/page-shell';
+import { displayStatus } from '@/src/core/reporting';
 import {
   engineSubprocessTotals,
   MOBILE_ENGINE_CATALOG,
@@ -40,9 +41,9 @@ const ENGINE_ROWS: OperationRow[] = MOBILE_ENGINE_CATALOG.map((engine) => {
   return {
     title: engine.name,
     detail:
-      `${engine.detail} ${totals.supported}/${totals.total} subprocesses supported ` +
-      `(${totals.limited} limited, ${totals.staged} staged).`,
-    badge: engine.state.toUpperCase(),
+      `${engine.detail} Of ${totals.total} listed features, ${totals.supported} are available, ` +
+      `${totals.limited} offer limited checks, and ${totals.staged} are not available yet.`,
+    badge: displayStatus(engine.state),
     tone: engine.state === 'active' ? 'ready' : 'staged',
   };
 });
@@ -53,15 +54,15 @@ const GROUPS: { title: string; items: OperationRow[] }[] = [
     items: [
       { title: 'Android Device', detail: 'Local platform identity and capability discovery.', badge: 'READY', tone: 'ready' },
       { title: 'Local Storage', detail: 'Persistent instance identity and device-local runtime history.', badge: 'READY', tone: 'ready' },
-      { title: 'Notifications', detail: 'Local and autonomous mobile alerts.', badge: 'STAGED', tone: 'staged' },
+      { title: 'Notifications', detail: 'Automatic mobile alerts are not available yet.', badge: 'STAGED', tone: 'staged' },
     ],
   },
   {
     title: 'AIDA',
     items: [
-      { title: 'Memory', detail: 'Persistent storage foundation is active; semantic memory parity remains staged.', badge: 'FOUNDATION', tone: 'ready' },
-      { title: 'Threats', detail: 'Device-local findings, evidence, and response plans are owned by Aegis where applicable.', badge: 'STAGED', tone: 'staged' },
-      { title: 'Tasks', detail: 'Durable background assistance and progress.', badge: 'STAGED', tone: 'staged' },
+      { title: 'Memory', detail: 'Local history and settings can be saved. Learning and recall across conversations are not available yet.', badge: 'FOUNDATION', tone: 'ready' },
+      { title: 'Threats', detail: 'A mobile investigation inbox and corrective actions are not available yet. Limited Aegis checks report their results in the conversation.', badge: 'STAGED', tone: 'staged' },
+      { title: 'Tasks', detail: 'Saved background tasks are not available yet.', badge: 'STAGED', tone: 'staged' },
     ],
   },
   {
@@ -165,17 +166,17 @@ export default function MoreScreen() {
           <View style={[styles.badge, gatewayReady ? styles.readyBadge : styles.stagedBadge]}>
             <Text style={[styles.badgeText, gatewayReady ? styles.readyText : styles.stagedText]}>
               {developmentAuto && gatewayReady
-                ? 'DEVELOPMENT AUTO'
+                ? 'Development session'
                 : gatewayReady
-                  ? 'READY'
+                  ? 'Connected'
                   : gateway.source === 'none'
-                    ? 'NOT ENROLLED'
-                    : 'ATTENTION'}
+                    ? 'Not connected'
+                    : 'Needs review'}
             </Text>
           </View>
         </View>
         <Text style={styles.gatewayDetail}>
-          Native intent resolution, AIDABrain reasoning, configured AIDA ElevenLabs voice, and disposable voice transcription. Provider credentials remain outside the mobile application.
+          Connect language reasoning, AIDA voice, and voice transcription. Service-provider credentials stay outside the mobile app. Local checks can work without this connection.
         </Text>
 
         {developmentAuto ? (
@@ -257,7 +258,7 @@ export default function MoreScreen() {
             </View>
             <View style={[styles.badge, voiceReady ? styles.readyBadge : styles.stagedBadge]}>
               <Text style={[styles.badgeText, voiceReady ? styles.readyText : styles.stagedText]}>
-                {voiceReady ? 'READY' : 'STAGED'}
+                {voiceReady ? 'Ready' : 'Not available yet'}
               </Text>
             </View>
           </View>
@@ -312,7 +313,7 @@ export default function MoreScreen() {
                   <Text style={styles.rowDetail}>{item.detail}</Text>
                 </View>
                 <View style={[styles.badge, badgeStyle(item.tone)]}>
-                  <Text style={[styles.badgeText, badgeTextStyle(item.tone)]}>{item.badge}</Text>
+                  <Text style={[styles.badgeText, badgeTextStyle(item.tone)]}>{displayStatus(item.badge)}</Text>
                 </View>
               </View>
             ))}

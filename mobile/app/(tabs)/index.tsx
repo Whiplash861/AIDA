@@ -8,6 +8,7 @@ import {
 } from 'expo-audio';
 import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { displayStatus } from '@/src/core/reporting';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
@@ -406,7 +407,7 @@ export default function HomeScreen() {
                   ]}
                 />
                 <Text style={[styles.headerState, { color: tone.foreground }]}>
-                  {runtime.status}
+                  {displayStatus(runtime.status)}
                 </Text>
               </View>
             </View>

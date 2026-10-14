@@ -6,7 +6,7 @@ export const PERCEPTION_ENGINE: MobileEngineDefinition = {
   domain: 'Camera, screenshot, image, and visual evidence intake',
   state: 'limited',
   detail:
-    'Android Perception owns user-supplied visual evidence intake and analysis boundaries while preserving explicit permission and evidence provenance.',
+    'Perception reviews the size of a selected image and literal markers in pasted text. It cannot yet read or interpret image contents on mobile. No images or pasted text are uploaded by these reviews.',
   commandTypes: [],
   subprocesses: [
     {

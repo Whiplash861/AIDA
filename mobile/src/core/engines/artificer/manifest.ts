@@ -6,7 +6,7 @@ export const ARTIFICER_ENGINE: MobileEngineDefinition = {
   domain: 'Compatibility review, maintenance, and engineering governance',
   state: 'staged',
   detail:
-    'Android Artificer owns platform compatibility observation, bounded maintenance proposals, developer reporting, and cross-Engine engineering review without silently expanding its authority.',
+    'Artificer engineering review, compatibility monitoring, and maintenance are planned for mobile but are not available yet. No mobile maintenance actions run from this catalog.',
   commandTypes: [],
   subprocesses: [
     {

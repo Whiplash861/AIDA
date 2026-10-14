@@ -4,6 +4,7 @@ import {
   MobileEngineDefinition,
 } from '@/src/core/engines/types';
 import { RoutedDirective } from '@/src/core/reasoning/types';
+import { unavailableReport } from '@/src/core/reporting';
 
 const TECHNOMANCER_COMMAND_TYPES = [
   'TECHNOMANCER_HEALTH',
@@ -30,18 +31,11 @@ async function executeTechnomancerDirective(
   const subprocessId = COMMAND_SUBPROCESS[directive.commandType] ?? 'engine.dispatch';
   const subprocess = TECHNOMANCER_ENGINE.subprocesses.find((item) => item.id === subprocessId);
   const label = subprocess?.label ?? subprocessId;
-  const intent = directive.intentId || directive.commandType.toLowerCase();
 
   return {
-    transcriptText:
-      `Registered AIDA intent resolved: ${intent}.\n\n` +
-      `Engine: Technomancer\n` +
-      `Subprocess: ${label}\n` +
-      `${context.platform} provider status: ${subprocess?.state ?? 'staged'}.\n` +
-      'No operation was executed.',
+    transcriptText: unavailableReport('Technomancer', label, context.platform),
     speechText:
-      `Technomancer recognized the directive. ${label} is not yet available through the ` +
-      `${context.platform} provider. No operation was executed.`,
+      `Technomancer recognized the request. ${label} is not yet available on ${context.platform}. No operation was executed. Open Systems to review available checks.`,
     includeInContext: !directive.localOnly,
     executed: false,
   };
@@ -53,7 +47,7 @@ export const TECHNOMANCER_ENGINE: MobileEngineDefinition = {
   domain: 'Hardware, platform compatibility, and technical assistance',
   state: 'staged',
   detail:
-    'Android Technomancer owns device inventory, compatibility interpretation, upgrade/advisory reasoning, and bounded background technical observation.',
+    'Technomancer hardware advice and background technical checks are planned for mobile but are not available yet. Core quick and performance scans are separate, limited checks.',
   commandTypes: TECHNOMANCER_COMMAND_TYPES,
   subprocesses: [
     {

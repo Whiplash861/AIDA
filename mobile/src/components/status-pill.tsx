@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { StatusTone } from '@/src/core/runtime/aida-runtime';
+import { displayStatus } from '@/src/core/reporting';
 import {
   AIDA_COLORS,
   AIDA_FONTS,
@@ -61,7 +62,7 @@ export function StatusPill({ value, tone }: StatusPillProps) {
         },
       ]}
     >
-      <Text style={[styles.text, { color: palette.foreground }]}>{value}</Text>
+      <Text style={[styles.text, { color: palette.foreground }]}>{displayStatus(value)}</Text>
     </View>
   );
 }

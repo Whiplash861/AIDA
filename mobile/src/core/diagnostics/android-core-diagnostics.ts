@@ -5,6 +5,7 @@ import {
   storageUsedPercent,
 } from '@/src/core/platform/android/system-evidence';
 import { EngineCommandResult } from '@/src/core/engines/types';
+import { displayStatus } from '@/src/core/reporting';
 
 export async function executeAndroidCoreDiagnostic(
   commandType: string,
@@ -27,7 +28,9 @@ async function runAndroidQuickscan(includeInContext: boolean): Promise<EngineCom
 
   const lines = [
     'AIDA quickscan',
+    `Observations captured: ${evidence.capturedAt}`,
     '',
+    'What AIDA found',
     `Device: ${deviceLabel(evidence.manufacturer, evidence.modelName)}`,
     `Operating system: ${evidence.osName ?? 'Android'} ${evidence.osVersion ?? evidence.platformVersion}`,
     `Android API level: ${evidence.apiLevel ?? 'Unavailable'}`,
@@ -37,12 +40,13 @@ async function runAndroidQuickscan(includeInContext: boolean): Promise<EngineCom
     `Network: ${formatNetwork(evidence.networkType, evidence.networkConnected, evidence.internetReachable)}`,
     `Device uptime: ${formatDuration(evidence.uptimeMs)}`,
     '',
-    'What AIDA observed:',
     ...findings.map((item) => `- ${item.text}`),
+    '',
+    'What remains unknown',
+    '- This limited device check does not scan all files for malware or identify the cause of a slowdown. Missing results are not successful checks.',
   ];
 
   if (evidence.gaps.length > 0) {
-    lines.push('', 'Checks AIDA could not complete:');
     for (const gap of evidence.gaps) lines.push(`- ${explainAndroidCheckGap(gap.id)}`);
   }
 
@@ -50,7 +54,7 @@ async function runAndroidQuickscan(includeInContext: boolean): Promise<EngineCom
     ? (evidence.gaps.length ? 'Quickscan finished, but some checks could not complete. That means some results are missing, not that a threat was detected. The report explains what you can check yourself.' : 'Quickscan finished. Nothing to flag in the information AIDA could read. This quick check cannot confirm the device is free of problems.')
     : `Quickscan finished. ${warnings.length} item${warnings.length === 1 ? '' : 's'} to review. The report explains what was observed and what to do next.${evidence.gaps.length ? ' Some checks could not complete; those missing results are listed separately.' : ''}`;
 
-  lines.push('', 'Follow-through: type "save baseline" to retain these observations, "run follow-up scan" to compare fresh observations, or "export diagnostic case" to review a redacted transfer.');
+  lines.push('', 'What to do next', '- Follow the Settings suggestions beside any result you want to investigate. Type "save baseline" to save these observations for comparison, then "run follow-up scan" after your next check. Type "export diagnostic case" to review a summary before sharing it.');
 
   return {
     transcriptText: lines.join('\n'),
@@ -83,7 +87,9 @@ async function runAndroidPerformanceScan(includeInContext: boolean): Promise<Eng
 
   const lines = [
     'AIDA performance scan',
+    `Observations captured: ${evidence.capturedAt}`,
     '',
+    'What AIDA found',
     `Device: ${deviceLabel(evidence.manufacturer, evidence.modelName)}`,
     `Installed memory: ${formatBytes(evidence.totalMemoryBytes)}`,
     `Memory Android lets AIDA use: ${formatBytes(evidence.maxAppMemoryBytes)}`,
@@ -95,7 +101,6 @@ async function runAndroidPerformanceScan(includeInContext: boolean): Promise<Eng
     `Device uptime: ${formatDuration(evidence.uptimeMs)}`,
     `Device features Android reported: ${evidence.platformFeatureCount ?? 'Unavailable'}`,
     '',
-    'What AIDA observed:',
   ];
 
   if (warnings.length === 0) {
@@ -106,16 +111,15 @@ async function runAndroidPerformanceScan(includeInContext: boolean): Promise<Eng
 
   lines.push(
     '',
-    'What this check cannot tell you:',
+    'What remains unknown',
     '- This version of AIDA cannot see the device’s total processor load, unused memory, or how much memory other apps use.',
     '- Those limits do not mean something is wrong. They mean this report cannot identify which app is slowing the device down.',
-    '- If the slowdown continues, check Battery and Storage in Android Settings and note when the problem happens.',
   );
 
   if (evidence.gaps.length > 0) {
-    lines.push('', 'Checks AIDA could not complete:');
     for (const gap of evidence.gaps) lines.push(`- ${explainAndroidCheckGap(gap.id)}`);
   }
+  lines.push('', 'What to do next', '- Follow the suggestions beside any result that matches your concern. If the slowdown continues, check Battery and Storage in Android Settings and note when it happens. Save a baseline before making changes, then run a follow-up scan to compare observations. A comparison cannot by itself prove that a repair worked.');
 
   const speechText = warnings.length === 0
     ? (evidence.gaps.length ? 'Performance check finished, but some results are missing. The report explains which checks could not complete and what to check in Settings.' : 'Performance check finished. Nothing to flag in the storage, battery, and connection information AIDA could read. This check cannot identify which app is causing a slowdown.')
@@ -201,7 +205,7 @@ function formatBattery(level: number | null, state: string, lowPower: boolean | 
 function formatNetwork(type: string, connected: boolean | null, reachable: boolean | null): string {
   const connectedLabel = connected == null ? 'connection unknown' : connected ? 'connected' : 'disconnected';
   const reachableLabel = reachable == null ? 'internet unknown' : reachable ? 'internet reachable' : 'internet unreachable';
-  return `${type}, ${connectedLabel}, ${reachableLabel}`;
+  return `${displayStatus(type)}, ${connectedLabel}, ${reachableLabel}`;
 }
 
 function booleanLabel(value: boolean | null): string {

@@ -6,6 +6,7 @@ import {
 } from '@/src/core/platform/android/system-evidence';
 import { RoutedDirective } from '@/src/core/reasoning/types';
 import { explainAndroidCheckGap } from '@/src/core/diagnostics/android-core-diagnostics';
+import { displayStatus } from '@/src/core/reporting';
 
 export async function executeAndroidAegisCommand(
   directive: RoutedDirective,
@@ -29,29 +30,30 @@ async function runSecurityStatus(includeInContext: boolean): Promise<EngineComma
 
   const lines = [
     'Aegis security check',
+    `Observations captured: ${evidence.capturedAt}`,
     '',
+    'What AIDA found',
     `Platform: ${evidence.osName ?? 'Android'} ${evidence.osVersion ?? evidence.platformVersion}`,
     `Android API level: ${evidence.apiLevel ?? 'Unavailable'}`,
     `OS build: ${evidence.osBuildId ?? 'Unavailable'}`,
     `System access: ${rooted == null ? 'Check unavailable' : rooted ? 'Signs of unrestricted access (root); review below' : 'No root indicator reported by this check'}`,
     `System software: ${!evidence.osBuildFingerprint ? 'Signing check unavailable' : testKeys ? 'Test signing key reported; review below' : 'No test signing key reported'}`,
-    `Network: ${evidence.networkType}, ${connectivityLabel(evidence.networkConnected, evidence.internetReachable)}`,
+    `Network: ${displayStatus(evidence.networkType)}, ${connectivityLabel(evidence.networkConnected, evidence.internetReachable)}`,
     '',
-    'What this check means:',
     ...(rooted === true ? ['- Review system access: an experimental check found signs of unrestricted system access, also called root. This can be intentional and does not establish that malware is present. If unexpected, check the device’s software with its manufacturer or a trusted technician.'] : []),
     ...(testKeys ? ['- Review system software: the installed system reports a test signing key. This can be expected on development or custom systems. If unexpected, verify the installed system with the device manufacturer. This result alone does not establish that malware is present.'] : []),
     '- These limited checks cannot confirm that the device is secure.',
     '',
-    'Checks not available in this version:',
+    'What remains unknown',
     '- AIDA cannot read Play Protect’s results, so it cannot tell whether Play Protect found a problem. Check Play Protect in the Play Store, if available on your device.',
     ...(!evidence.osBuildFingerprint ? ['- System software signing could not be checked. This is missing information, not evidence that the software is unsafe. Check system details in Settings if needed.'] : []),
     ...(rooted == null ? [`- ${explainAndroidCheckGap('security.root-indicator')}`] : []),
   ];
 
   if (evidence.gaps.some(gap => gap.id !== 'security.root-indicator')) {
-    lines.push('', 'Other checks AIDA could not complete:');
     for (const gap of evidence.gaps) if (gap.id !== 'security.root-indicator') lines.push(`- ${explainAndroidCheckGap(gap.id)}`);
   }
+  lines.push('', 'What to do next', '- Check Play Protect in the Play Store if available. If the reported system access or software changes were unexpected, ask the device manufacturer or a trusted technician to verify them. Retry missing checks later; do not remove files based only on these limited results.');
 
   const warningCount = Number(rooted === true) + Number(testKeys);
   const speechText = warningCount > 0
@@ -101,7 +103,7 @@ async function runSurfaceSecurityScan(includeInContext: boolean): Promise<Engine
   } else {
     findings.push({ severity: 'INFO', unavailable: evidence.networkConnected == null, text: evidence.networkConnected == null
       ? 'Connection check incomplete: Android did not report whether the device is connected. Check Wi-Fi or mobile data in Settings if needed.'
-      : `Connection information: Android reports ${evidence.networkType.toLowerCase()}. This does not assess the network’s security.` });
+      : `Connection information: Android reports ${displayStatus(evidence.networkType)}. This does not assess the network’s security.` });
   }
 
   if (storagePercent != null && storagePercent >= 95) {
@@ -119,17 +121,18 @@ async function runSurfaceSecurityScan(includeInContext: boolean): Promise<Engine
 
   const lines = [
     'Aegis surface security check',
+    `Observations captured: ${evidence.capturedAt}`,
     '',
+    'What AIDA found',
     `Device: ${[evidence.manufacturer, evidence.modelName].filter(Boolean).join(' ') || 'Android device'}`,
     `OS: ${evidence.osName ?? 'Android'} ${evidence.osVersion ?? evidence.platformVersion} (API ${evidence.apiLevel ?? 'Unavailable'})`,
     `Installed memory: ${formatBytes(evidence.totalMemoryBytes)}`,
-    `Network: ${evidence.networkType}, ${connectivityLabel(evidence.networkConnected, evidence.internetReachable)}`,
+    `Network: ${displayStatus(evidence.networkType)}, ${connectivityLabel(evidence.networkConnected, evidence.internetReachable)}`,
     `Checks with results: ${coverage.available} of ${coverage.total} (${coverage.percent}%). This measures available information, not your risk level.`,
     '',
-    'What AIDA observed:',
     ...findings.filter((item) => !item.unavailable).map((item) => `- ${item.text}`),
     '',
-    'Checks AIDA could not complete:',
+    'What remains unknown',
     ...findings.filter((item) => item.unavailable).map((item) => `- ${item.text}`),
     ...(!evidence.osBuildFingerprint ? ['- System software signing: Android did not return the information needed for this check. This does not show that the software is unsafe. Check system details in Settings if needed.'] : []),
     '- Play Protect results: this version of AIDA cannot read them. Check Play Protect in the Play Store, if available on your device.',
@@ -139,6 +142,7 @@ async function runSurfaceSecurityScan(includeInContext: boolean): Promise<Engine
   ];
 
   for (const gap of evidence.gaps) if (gap.id !== 'security.root-indicator') lines.push(`- ${explainAndroidCheckGap(gap.id)}`);
+  lines.push('', 'What to do next', '- Follow the suggestions beside any result you want to investigate. Check Play Protect in the Play Store if available, and verify unexpected system modifications with the manufacturer or a trusted technician. Retry unavailable checks later. No files or settings were changed by this check.');
 
   let speechText: string;
   if (highCount > 0) {

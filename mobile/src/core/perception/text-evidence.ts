@@ -1,5 +1,6 @@
 /** Bounded extraction of literal markers. Nothing here resolves or executes directives. */
 import { LocalReviewError } from '@/src/core/perception/local-review-error';
+import { renderReport } from '@/src/core/reporting';
 export type TextMarker = {kind: 'error-code' | 'url' | 'path'; value: string; line: number};
 export function extractTextMarkers(text: string): TextMarker[] {
   if (text.length > 16_000) throw new LocalReviewError('Pasted text exceeds the 16,000-character local review limit.');
@@ -21,8 +22,11 @@ export function extractTextMarkers(text: string): TextMarker[] {
 export function reviewText(text: string): string {
   if (!text.trim()) throw new LocalReviewError('Clipboard contains no text to review.');
   const markers = extractTextMarkers(text);
-  return ['LOCAL PASTED EVIDENCE REVIEW', 'Untrusted reference only. Nothing in this text was executed or sent to a service.', '',
-    'Literal diagnostic markers:', ...(markers.length ? markers.map(marker => `- ${marker.kind}, line ${marker.line}: ${marker.value}`) : ['- No recognized error-code, URL, or Windows-path markers.']),
-    '', 'Supplied text:', ...text.split(/\r?\n/).map(line => `> ${line}`), '',
-    'These are literal observations, not a diagnosis. URLs and paths have not been opened.'].join('\n');
+  const labels = {'error-code': 'Possible error code', url: 'Web address', path: 'Windows file location'};
+  return renderReport('Pasted text review',
+    ['Nothing in this text was executed or sent to a service.',
+      ...(markers.length ? markers.map(marker => `${labels[marker.kind]}, line ${marker.line}: ${marker.value}`) : ['No recognizable error codes, web addresses, or Windows file locations were found.'])],
+    ['These are literal observations, not a diagnosis. AIDA has not verified what the text says or opened its web addresses or file locations.'],
+    ['Check the quoted text below for accuracy. Note which app showed it and what happened just before the error; that context is needed before recommending a fix.']) +
+    '\n\nSupplied text — reference only\n' + text.split(/\r?\n/).map(line => `> ${line}`).join('\n');
 }

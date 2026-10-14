@@ -6,6 +6,7 @@ import {
 } from '@/src/core/engines/types';
 import { loadEvidence } from '@/src/core/storage/mobile-storage';
 import { RoutedDirective } from '@/src/core/reasoning/types';
+import { renderReport, unavailableReport } from '@/src/core/reporting';
 
 export type MobileCommandResult = EngineCommandResult;
 export type MobileCommandExecutionContext = EngineCommandExecutionContext;
@@ -22,7 +23,7 @@ export async function executeMobileRoutedDirective(
   context: MobileCommandExecutionContext,
 ): Promise<MobileCommandResult> {
   if (directive.requiresConfirmation) {
-    const text = 'This directive requires confirmation and has no registered mobile confirmation workflow. No operation was executed.';
+    const text = 'This action needs approval, but mobile AIDA cannot request and apply that approval yet. No operation was executed. Open Systems to review available features.';
     return {transcriptText: text, speechText: text, includeInContext: false, executed: false};
   }
   const localResult = (text: string, executed = true): MobileCommandResult => ({transcriptText: text, speechText: 'Local review is displayed.', includeInContext: false, executed});
@@ -34,7 +35,7 @@ export async function executeMobileRoutedDirective(
     if (directive.commandType === 'SAVE_BASELINE') {
       checkpoint();
       const baseline = await saveBaseline(context.instanceId);
-      return localResult(`Baseline saved from ${baseline.evidence.capturedAt}. It records observations, not a claim that the device is healthy. Run a follow-up scan after your next check.`);
+      return localResult(renderReport('Saved comparison ready', [`Saved the diagnostic captured at ${baseline.evidence.capturedAt} as this device’s baseline for future comparisons.`], ['This records observations, not a claim that the device is healthy. It does not show what caused any problem.'], ['Type "run follow-up scan" after your next check or when the symptom occurs. AIDA will compare the new observations with this saved scan.']));
     }
     const baseline = await loadBaseline(context.instanceId);
     checkpoint();
@@ -76,13 +77,13 @@ export async function executeMobileRoutedDirective(
   }
   if (directive.commandType === 'DIAGNOSTIC_LAST') {
     const evidence = (await loadEvidence()).find(item => item.kind === 'diagnostic' || item.kind === 'aegis');
-    const text = evidence ? 'Saved diagnostic from ' + evidence.capturedAt + '\n\n' + evidence.transcript : 'No saved local diagnostic is available.';
+    const text = evidence ? renderReport('Saved diagnostic', [`Found a report captured at ${evidence.capturedAt}. No fresh check ran.`], ['This report describes the earlier check, not the device’s current condition. Older reports may use older labels.'], ['Review the original report below. Run a new local scan if you need current observations.']) + '\n\nOriginal saved report\n' + evidence.transcript : 'No saved local diagnostic is available. Run a quick scan to collect one.';
     return {transcriptText: text, speechText: evidence ? 'The latest saved diagnostic is displayed.' : text, includeInContext: false, executed: true};
   }
   if (directive.commandType === 'INTENT_CLARIFICATION') {
     const clarification =
       directive.clarificationText ||
-      'Analysis incomplete. Additional clarification is required.';
+      'AIDA needs more detail. Describe what you want checked and which device or app is involved.';
     return {
       transcriptText: clarification,
       speechText: clarification,
@@ -104,12 +105,7 @@ export async function executeMobileRoutedDirective(
     return coreDiagnostic;
   }
 
-  const intent = directive.intentId || directive.commandType.toLowerCase();
-  const transcriptText =
-    `Registered AIDA intent resolved: ${intent}.\n\n` +
-    `AIDA Core\n` +
-    `${context.platform} provider status: unavailable for ${directive.commandType}.\n` +
-    'No operation was executed.';
+  const transcriptText = unavailableReport('AIDA Core', 'this check', context.platform);
   const speechText =
     `${context.platform} core provider unavailable for the resolved command. ` +
     'No operation was executed.';

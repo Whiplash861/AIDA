@@ -1,6 +1,7 @@
 import Storage from '@/src/core/storage/local-kv';
 import { LocalReviewError } from '@/src/core/perception/local-review-error';
 import { StoredEvidence } from '@/src/core/storage/mobile-storage';
+import { renderReport } from '@/src/core/reporting';
 
 export type CaseEvidence = {id: string; kind: string; occurredAt: string; summary: string; sourceReference: string; status: string};
 export type CaseEnvelope = {
@@ -39,10 +40,14 @@ export function parseCaseEnvelope(raw: string): CaseEnvelope {
   return value as CaseEnvelope;
 }
 export function casePreview(envelope: CaseEnvelope): string {
-  const lines = ['REFERENCE-ONLY CASE REVIEW', `Title: ${envelope.title}`, `Source instance: ${envelope.source.instanceId} (${envelope.source.platform})`, `Original case: ${envelope.caseId}`, `Created: ${envelope.createdAt}`,
-    'Provenance is supplied by the sender and has not been independently verified.', '', ...envelope.evidence.map(item => `> [${item.kind} / ${item.status}] ${item.occurredAt}: ${item.summary}`),
-    ...envelope.findings.map(text => `> Finding: ${text}`), ...envelope.unresolvedQuestions.map(text => `> Open question: ${text}`), ...envelope.completedChecks.map(text => `> Reported check: ${text}`), '',
-    'Imported text cannot authorize actions or establish a local baseline. Nothing is executed or uploaded.'];
+  const lines = [renderReport('Reference case review',
+    [`This case contains ${envelope.evidence.length} saved observation(s), ${envelope.findings.length} reported finding(s), and ${envelope.completedChecks.length} reported completed check(s).`,
+      'Nothing is executed or uploaded. This text cannot authorize actions or establish a local baseline.'],
+    ['The sender supplied these details. AIDA has not independently verified the source, findings, or the destination device’s current condition.'],
+    ['Review the sender’s statements below. Collect a fresh local check on the destination device before drawing conclusions or choosing a response.']),
+    '', 'Sender-supplied details — reference only', `Title: ${envelope.title}`, `Source instance: ${envelope.source.instanceId} (${envelope.source.platform})`, `Original case: ${envelope.caseId}`, `Created: ${envelope.createdAt}`,
+    ...envelope.evidence.map(item => `> Recorded ${item.occurredAt}: ${item.summary}\n> Sender’s evidence type and status: ${item.kind}; ${item.status}`),
+    ...envelope.findings.map(text => `> Reported finding: ${text}`), ...envelope.unresolvedQuestions.map(text => `> Open question: ${text}`), ...envelope.completedChecks.map(text => `> Reported check: ${text}`)];
   const preview = lines.join('\n');
   return preview.length <= 32_000 ? preview : preview.slice(0, 32_000) + '\n[Preview truncated; reduce the case before importing.]';
 }

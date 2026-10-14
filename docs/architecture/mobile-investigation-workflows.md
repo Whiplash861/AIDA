@@ -126,3 +126,45 @@ that malware is present. Low battery is described as a charging reminder;
 connectivity failures explain how to check Wi-Fi or mobile data. The percentage
 of checks with results describes how much information was available, not a device
 risk score. A limited scan cannot certify that the device is secure.
+
+## Consistent mobile reporting (October 14, 2026)
+
+Substantive reports now use **What AIDA found**, **What remains unknown**, and
+**What to do next**. `mobile/src/core/reporting.ts` supplies shared rendering and
+display labels. The labels are presentation only: routing, engine states,
+severity, coverage calculations, permissions, evidence objects, and the case
+transfer protocol still use their original values. Brief acknowledgements,
+progress messages, and actionable errors remain short.
+
+Reachable surface inventory:
+
+| Surface | Current presentation |
+| --- | --- |
+| Core quick scan and performance scan | Timestamped observations, separate missing checks and scope limits, Settings/follow-up suggestions. |
+| Aegis security status and surface scan | Available evidence and unavailable security checks are separate; root/test signing remain concerns to review without being called malware. |
+| Aegis deep/full/response requests; Technomancer requests | Explain that the requested mobile feature is unavailable and that no operation ran. Routing and availability are unchanged. |
+| Artificer, Technomancer, Aegis and Perception in Control | Descriptions state implemented versus planned capability; feature counts use plain labels. Artificer still has no executable mobile commands. |
+| Offline identity, status and capability replies | Explain what this local session can report and what requires reasoning services; instance identity does not claim verified persistent storage. |
+| Save baseline, compare baseline, follow-up scan | Explain the saved comparison, differences, missing fields and practical next checks. Entirely missing comparable fields never become “no differences.” |
+| IMAGE and PASTE | Explain metadata or literal text observations, unavailable image interpretation, and how to provide useful context. Pasted instructions remain quoted, untrusted reference material. |
+| Case export/import/show | Three-section review followed by attributed sender statements. Sender statuses and JSON remain original reference data, never new local verdicts. |
+| Show last diagnostic | Explicitly identifies an earlier saved report and says no fresh check ran; the original saved report is preserved. |
+| Activity, Systems and Control status labels | Sentence-case descriptions distinguish unavailable features, missing checks, and work in progress. Internal values and severity colors are unchanged. |
+
+Saved historical transcripts and imported quotations are not rewritten as new
+assessments. Provider-generated reasoning replies continue through the existing
+reasoning service; mobile does not reinterpret their text as a local verdict.
+No new mobile hardware access, background observation, image OCR, threat inbox,
+maintenance, or corrective action capability is implied by the wording.
+
+Verification for this wording update: all **52** mobile behavior tests passed
+(`node --test mobile/tests/*.test.cjs`). Full TypeScript validation passed with
+`tsc --noEmit --incremental false` against a refreshed isolated source copy and
+an identical package lock with the existing dependencies; no install or build
+scripts were run for this update. Tests cover the three report sections,
+missing-versus-negative evidence, staged execution/context flags, imported
+claims, and unchanged privacy/lifecycle behavior. The StyleSheet declarations in
+all four touched UI files match the pre-change version exactly; theme and orb
+files are unchanged. Physical-device line wrapping, screen-reader behavior and
+native controls still need device acceptance; no native build, microphone,
+provider request, or deployment was performed.

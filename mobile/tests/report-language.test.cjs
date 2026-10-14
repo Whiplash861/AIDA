@@ -29,9 +29,9 @@ function harness(evidence) {
 test('unavailable root check is a missing result, not a spoken security warning',async()=>{
   const evidence=observation({rootedIndicator:null,gaps:[{id:'security.root-indicator',detail:'OPAQUE INTERNAL ROOT POSTURE'}]});
   const h=harness(evidence), report=await h.security('SECURITY_SURFACE_SCAN');
-  assert.match(report.transcriptText,/Checks AIDA could not complete:/);
+  assert.match(report.transcriptText,/What remains unknown/);
   assert.match(report.transcriptText,/missing result, not a detected threat/);
-  assert.ok(report.transcriptText.indexOf('System access check unavailable:')>report.transcriptText.indexOf('Checks AIDA could not complete:'));
+  assert.ok(report.transcriptText.indexOf('System access check unavailable:')>report.transcriptText.indexOf('What remains unknown'));
   assert.doesNotMatch(report.speechText,/\b1 (?:condition|item)|high-risk|threat.*detected/i);
   assert.doesNotMatch(report.transcriptText,/\[(?:WARNING|HIGH|INFO)\]|OPAQUE INTERNAL/);
   assert.equal(h.findings()[0].severity,'WARNING');
@@ -98,4 +98,47 @@ test('security status explains unavailable Play Protect results without assuming
   assert.match(report.transcriptText,/Check Play Protect in the Play Store/);
   assert.match(report.transcriptText,/missing information, not evidence that the software is unsafe/);
   assert.doesNotMatch(report.transcriptText,/\bDETECTED\b|TEST-KEYS REPORTED|Play Protect is disabled/);
+});
+
+function assertReport(text) {
+  const headings=['What AIDA found','What remains unknown','What to do next'];
+  const positions=headings.map(heading=>text.indexOf('\n'+heading+'\n'));
+  assert.ok(positions.every(position=>position>=0),text);
+  assert.ok(positions[0]<positions[1] && positions[1]<positions[2]);
+}
+test('every available diagnostic report has observations, unknowns and actionable follow-up',async()=>{
+  const h=harness(observation());
+  for(const report of [await h.core.executeAndroidCoreDiagnostic('QUICKSCAN',false),await h.core.executeAndroidCoreDiagnostic('PERFORMANCE_SCAN',false),await h.security('SECURITY_STATUS'),await h.security('SECURITY_SURFACE_SCAN')]) {
+    assertReport(report.transcriptText);
+    assert.equal(report.evidence.transcript,report.transcriptText);
+    assert.equal(report.executed,true); assert.equal(report.includeInContext,false);
+  }
+});
+test('staged Aegis and Technomancer requests explain no execution and preserve context flags',async()=>{
+  const load=loader();
+  const engines=[load('@/src/core/engines/aegis/manifest').AEGIS_ENGINE,load('@/src/core/engines/technomancer/manifest').TECHNOMANCER_ENGINE];
+  for(const engine of engines) for(const localOnly of [true,false]) {
+    const result=await engine.execute({commandType:engine.commandTypes[2],localOnly},{platform:'Android'});
+    assertReport(result.transcriptText);
+    assert.equal(result.executed,false);assert.equal(result.includeInContext,!localOnly);
+    assert.match(result.transcriptText,/No operation was executed/);
+    assert.match(result.transcriptText,/not available/);
+    assert.doesNotMatch(result.transcriptText,/Registered AIDA intent|provider status|Subprocess:/);
+  }
+});
+test('local fallback reports do not imply a device assessment or verified persistent storage',async()=>{
+  const Provider=loader()('@/src/core/reasoning/local-provider').LocalRuntimeReasoningProvider;
+  const provider=new Provider(),context={instanceId:'ephemeral_1',platform:'Android',platformVersion:'16',deviceModel:'Phone',supportedCapabilities:['Local AIDA runtime'],conversationContext:[]};
+  for(const input of ['who are you','status','device','instance id','what can you do']) {
+    const reply=await provider.respond(input,context);assertReport(reply.text);assert.equal(reply.mode,'local_fallback');
+    assert.doesNotMatch(reply.text,/Storage: secure|^- (?:The |Your )?device is healthy|all checks passed/m);
+  }
+  const short=await provider.respond('help with my unreadable error',context);
+  assert.match(short.text,/not connected/);assert.ok(short.text.length<450);
+});
+test('status labels preserve urgent meaning without changing internal values',()=>{
+  const {displayStatus}=loader()('@/src/core/reporting');
+  const states=['THREAT_CONFIRMED','DEGRADED','STAGED','WARNING','LIMITED'];
+  assert.deepEqual(states.map(displayStatus),['Threat confirmed','Some checks unavailable','Not available yet','Needs review','Some checks available']);
+  assert.equal(states[0],'THREAT_CONFIRMED');assert.equal(displayStatus('unrecognized-state'),'unrecognized-state');
 });
